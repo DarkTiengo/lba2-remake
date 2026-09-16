@@ -5388,8 +5388,9 @@ void AffScene(S32 flagflip) {
     char string[256];
 /*------------------------------------------------------------------------*/
 startaffscene:
-    /* Exterior scenery and the bodies placed in it share the GPU's real depth. */
-    GpuObj_SetSceneDepth(CubeMode == CUBE_EXTERIEUR);
+    /* The scenery (exterior terrain, interior bricks) and the bodies placed in
+       it share the GPU's real depth. */
+    GpuObj_SetSceneDepth(TRUE);
 
 #ifdef ENABLE_POLY_RECORDING
     // Polygon call recording (Alt+F9) — start recording before ANY rendering

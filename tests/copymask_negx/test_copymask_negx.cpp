@@ -33,6 +33,11 @@
 /* Globals normally provided by libsvg/libsys. Re-declared here so the
  * host test links without pulling in SDL3. */
 void *Log = 0;
+
+/* The GPU object layer's copy hook: nothing to shadow in this test. */
+void GpuObj_OnCopyMask(const void *, S32, S32, S32, S32) {
+}
+
 U32 ModeDesiredX = 640;
 U32 ModeDesiredY = 480;
 U32 TabOffLine[ADELINE_MAX_Y_RES];

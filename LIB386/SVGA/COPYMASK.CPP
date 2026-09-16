@@ -13,6 +13,8 @@
 
 #include <SVGA/COPYMASK.H>
 
+#include <SVGA/GPUOBJ.H>
+
 #include <string.h>
 
 #include <SYSTEM/ADELINE.H>
@@ -124,4 +126,6 @@ void CopyMask(S32 nummask, S32 x, S32 y, U8 *bankmask, void *src) {
         screen += lineOffset;
         source += lineOffset;
     }
+
+    GpuObj_OnCopyMask(src, xMin + marginLeft, yMin + marginTop, xMax - marginRight, yMax - marginBottom);
 }

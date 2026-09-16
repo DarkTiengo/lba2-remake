@@ -38,14 +38,26 @@ void main() {
     const float SCENE_BIT = 8388608.0;
     bool match = tag > 0.0 && (abs(tag - id) < 0.5 || (tag >= SCENE_BIT && id >= SCENE_BIT));
     if (match) {
+        vec4 nearest = texelFetch(u_objColor, p, 0);
+        if (nearest.a < 0.5) {
+            /* A surface whose colour is the software frame (interior bricks):
+               smooth it up from the frame's own pixels. */
+            vec2 texel = v_uv * vec2(tagSize) - 0.5;
+            vec2 f = fract(texel);
+            ivec2 i = clamp(ivec2(floor(texel)), ivec2(0), tagSize - ivec2(2));
+            vec4 a = mix(texelFetch(u_frame, i, 0), texelFetch(u_frame, i + ivec2(1, 0), 0), f.x);
+            vec4 b = mix(texelFetch(u_frame, i + ivec2(0, 1), 0), texelFetch(u_frame, i + ivec2(1, 1), 0), f.x);
+            o_color = mix(a, b, f.y) * v_color;
+            return;
+        }
         /* Colour is cleared to alpha 0 where no body is drawn, so a filtered
            read divided by its alpha averages only body texels at the edge. */
         vec3 gpu;
         if (supersample > 0.0) {
             vec4 c = textureLod(u_objColor, v_uv, 0.0);
-            gpu = c.a > 0.0 ? c.rgb / c.a : texelFetch(u_objColor, p, 0).rgb;
+            gpu = c.a > 0.0 ? c.rgb / c.a : nearest.rgb;
         } else {
-            gpu = texelFetch(u_objColor, p, 0).rgb;
+            gpu = nearest.rgb;
         }
         gpu = mix(gpu, vec3(0.0, 1.0, 0.0), min(debugTint, 1.0) * 0.5);
         o_color = vec4(gpu, frame.a);

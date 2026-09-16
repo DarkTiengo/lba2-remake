@@ -50,6 +50,7 @@ static SDL_GPUShader *s_objVert = NULL;
 static SDL_GPUShader *s_objFrag = NULL;
 static SDL_GPUShader *s_compositeFrag = NULL;
 static SDL_GPUGraphicsPipeline *s_pipeline = NULL;
+static SDL_GPUGraphicsPipeline *s_pipelinePainter = NULL; ///< depth write, no depth test
 static SDL_GPUSampler *s_nearest = NULL;
 static SDL_GPUSampler *s_linear = NULL;
 static bool s_supersample = false;
@@ -73,6 +74,7 @@ static SDL_GPURenderState *s_composite = NULL;
 static SDL_GPUTexture *s_palette = NULL;
 static SDL_GPUTexture *s_lut = NULL;
 static SDL_GPUTexture *s_pages = NULL;
+static SDL_GPUTexture *s_atlas = NULL;
 
 static SDL_GPUBuffer *s_vertexBuffer = NULL;
 static U32 s_vertexCapacity = 0;
@@ -298,7 +300,7 @@ static bool EnsureVertexBuffer(U32 size) {
 
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 3, 1);
+    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
     s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1);
     if (!s_objVert || !s_objFrag || !s_compositeFrag) {
@@ -362,7 +364,9 @@ static bool CreatePipeline(void) {
     info.target_info.has_depth_stencil_target = true;
 
     s_pipeline = SDL_CreateGPUGraphicsPipeline(s_device, &info);
-    if (s_pipeline == NULL) {
+    info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
+    s_pipelinePainter = SDL_CreateGPUGraphicsPipeline(s_device, &info);
+    if (s_pipeline == NULL || s_pipelinePainter == NULL) {
         Log_Warn("[GPU] Unable to create object pipeline: %s", SDL_GetError());
         return false;
     }
@@ -386,7 +390,11 @@ static bool CreatePipeline(void) {
     s_pages = CreateTexture(SDL_GPU_TEXTURETYPE_2D_ARRAY, SDL_GPU_TEXTUREFORMAT_R8_UNORM, sampled, 256, 256,
                             SDL_arraysize(s_pagePtrs));
 
-    return s_nearest && s_linear && s_palette && s_lut && s_pages;
+    s_atlas = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, sampled, GPUOBJ_ATLAS_SIZE,
+                            GPUOBJ_ATLAS_SIZE, 1);
+    GpuObjAtlasDirty = TRUE;
+
+    return s_nearest && s_linear && s_palette && s_lut && s_pages && s_atlas;
 }
 
 static void ReleasePipeline(void) {
@@ -397,6 +405,7 @@ static void ReleasePipeline(void) {
     ReleaseTexture(&s_palette);
     ReleaseTexture(&s_lut);
     ReleaseTexture(&s_pages);
+    ReleaseTexture(&s_atlas);
     if (s_vertexBuffer) {
         SDL_ReleaseGPUBuffer(s_device, s_vertexBuffer);
         s_vertexBuffer = NULL;
@@ -418,6 +427,10 @@ static void ReleasePipeline(void) {
     if (s_pipeline) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipeline);
         s_pipeline = NULL;
+    }
+    if (s_pipelinePainter) {
+        SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelinePainter);
+        s_pipelinePainter = NULL;
     }
     if (s_objVert) {
         SDL_ReleaseGPUShader(s_device, s_objVert);
@@ -586,21 +599,24 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     if (pass == NULL) {
         return;
     }
-    SDL_BindGPUGraphicsPipeline(pass, s_pipeline);
+    SDL_GPUGraphicsPipeline *bound = s_pipeline;
+    SDL_BindGPUGraphicsPipeline(pass, bound);
 
     SDL_GPUBufferBinding vbind;
     vbind.buffer = s_vertexBuffer;
     vbind.offset = 0;
     SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
 
-    SDL_GPUTextureSamplerBinding samplers[3];
+    SDL_GPUTextureSamplerBinding samplers[4];
     samplers[0].texture = s_palette;
     samplers[0].sampler = s_nearest;
     samplers[1].texture = s_lut;
     samplers[1].sampler = s_nearest;
     samplers[2].texture = s_pages;
     samplers[2].sampler = s_nearest;
-    SDL_BindGPUFragmentSamplers(pass, 0, samplers, 3);
+    samplers[3].texture = s_atlas;
+    samplers[3].sampler = s_nearest;
+    SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
 
     U32 first = 0;
     S32 slice = -1;
@@ -638,6 +654,13 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         scissor.w = (int)((S64)(x1 + 1) * s_targetW / s_frameW) - scissor.x;
         scissor.h = (int)((S64)(y1 + 1) * s_targetH / s_frameH) - scissor.y;
         if (scissor.w > 0 && scissor.h > 0) {
+            SDL_GPUGraphicsPipeline *wanted = draw->Painter ? s_pipelinePainter : s_pipeline;
+            if (wanted != bound) {
+                bound = wanted;
+                SDL_BindGPUGraphicsPipeline(pass, bound);
+                SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
+                SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
+            }
             SDL_SetGPUScissor(pass, &scissor);
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));
             SDL_PushGPUFragmentUniformData(cmd, 0, &uniforms[i], sizeof(T_DRAW_UNIFORMS));
@@ -745,6 +768,10 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     memcpy(s_tagBox, box, sizeof(s_tagBox));
     U32 tagBytes = upW * upH * sizeof(float);
     U32 need = (U32)SDL_arraysize(s_pagePtrs) * 65536;
+    const U32 atlasBytes = (U32)GPUOBJ_ATLAS_SIZE * GPUOBJ_ATLAS_SIZE * 2;
+    const bool atlasUpload = GpuObjAtlasDirty && GpuObjAtlas != NULL;
+    if (atlasUpload && atlasBytes > need)
+        need = atlasBytes;
     if (vertexBytes > need)
         need = vertexBytes;
     if (tagBytes > need)
@@ -774,6 +801,10 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     }
     for (U32 p = 0; p < s_nbPages; p++) {
         UploadTexture(copy, s_pages, p, 0, 0, 256, 256, s_pagePtrs[p], 65536);
+    }
+    if (atlasUpload) {
+        UploadTexture(copy, s_atlas, 0, 0, 0, GPUOBJ_ATLAS_SIZE, GPUOBJ_ATLAS_SIZE, GpuObjAtlas, atlasBytes);
+        GpuObjAtlasDirty = FALSE;
     }
     UploadVertices(copy, kept, count, vertexBytes);
     UploadTexture(copy, s_tags, 0, (U32)up[0], (U32)up[1], upW, upH, s_tagUpload, tagBytes);

@@ -16,6 +16,7 @@ layout(location = 1) flat out vec4 v_light;
 layout(location = 2) out vec4 v_vpos;
 layout(location = 3) flat out vec4 v_mat;
 layout(location = 4) out vec4 v_uv;
+layout(location = 5) flat out vec2 v_slice;
 
 layout(set = 1, binding = 0) uniform Draw {
     float sliceNear; // depth where this draw's slice starts
@@ -29,4 +30,5 @@ void main() {
     v_vpos = a_vpos;
     v_mat = a_mat;
     v_uv = a_uv;
+    v_slice = vec2(sliceNear, sliceSize);
 }

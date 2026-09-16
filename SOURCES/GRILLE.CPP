@@ -1,5 +1,6 @@
 #include "C_EXTERN.H"
 #include "DIRECTORIES.H"
+#include "GRILLE_GPU.H"
 
 #include <3D/PROJREC.H>
 #include <SVGA/SCREEN.H>
@@ -268,6 +269,8 @@ void InitGrille(U32 numcube) {
     ManageSystem(); // for streaming
 
     CreateMaskGph(BufferBrick, BufferMaskBrick);
+
+    GrilleGpu_Reset();
 
     ManageSystem(); // for streaming
 
@@ -881,6 +884,7 @@ void AffBrickBlock(S32 block, S32 brick, S16 x, S16 y, S16 z) {
         // start having visible content. See WIDESCREEN_HARDCODED_DIMS_AUDIT.md.
         if (XScreen >= -47 AND XScreen < (S32)ModeDesiredX AND YScreen >= -38 AND YScreen < (S32)ModeDesiredY) {
             AffGraph(numbrick - 1, XScreen, YScreen, BufferBrick);
+            GrilleGpu_Brick(numbrick - 1, x, y, z, XScreen, YScreen, BufferBrick);
 
             // ListBrickColon is indexed by `col = (XScreen+24)/24`, which goes
             // negative below -24 and would corrupt the array. Bricks in the
@@ -926,6 +930,10 @@ void AffGrille() {
 
     memset(NbBrickColon, 0, sizeof(S16) * NB_COLON);
 
+    /* The room is one GPU group: bricks here, actors later by depth. */
+    GpuObj_BeginGroup();
+    GrilleGpu_Begin();
+
     ptc = BufCube;
     for (z = 0; z < SIZE_CUBE_Z; z++) {
         for (x = 0; x < SIZE_CUBE_X; x++) {
@@ -939,6 +947,9 @@ void AffGrille() {
             }
         }
     }
+
+    GrilleGpu_End();
+    GpuObj_EndGroup();
 }
 
 /*══════════════════════════════════════════════════════════════════════════*

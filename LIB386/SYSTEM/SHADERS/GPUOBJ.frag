@@ -9,6 +9,7 @@ layout(location = 1) flat in vec4 v_light;
 layout(location = 2) in vec4 v_vpos;
 layout(location = 3) flat in vec4 v_mat;
 layout(location = 4) in vec4 v_uv;
+layout(location = 5) flat in vec2 v_slice;
 
 layout(location = 0) out vec4 o_color;
 layout(location = 1) out vec4 o_id;
@@ -16,6 +17,7 @@ layout(location = 1) out vec4 o_id;
 layout(set = 2, binding = 0) uniform sampler2D u_palette;    // 256x1 RGBA
 layout(set = 2, binding = 1) uniform sampler2D u_lut;        // 256xN R8: logical palettes, CLUT blocks
 layout(set = 2, binding = 2) uniform sampler2DArray u_pages; // 256x256xN R8 texture pages
+layout(set = 2, binding = 3) uniform sampler2D u_atlas;       // interior bricks: index, coverage
 
 layout(set = 3, binding = 0) uniform Draw {
     float drawId;
@@ -35,6 +37,10 @@ const int MODE_TEX = 3;
 const int MODE_TEXSHADED = 4;
 const int MODE_DISC = 5;
 const int MODE_CLUT = 6;
+const int MODE_BRICK = 7;
+
+/* Must match ISO_DEPTH_RANGE in AFF_GPU.CPP: bricks and iso bodies share depth. */
+const float ISO_DEPTH_RANGE = 524288.0;
 
 const int FLAG_CHROMAKEY = 1;
 const int FLAG_ISO = 2;
@@ -126,9 +132,50 @@ vec4 Textured(float shade, bool shaded) {
     return vec4(c.rgb / c.a, 1.0);
 }
 
+/* Brick coverage from the nearest texel, so neighbouring bricks meet exactly
+   where their sprites do. The colour itself is left to the software frame (the
+   composite reads it where a brick is the nearest surface): the sprites overlap
+   by design and the painter's result is already there, exact. */
+void BrickCoverage() {
+    if (texelFetch(u_atlas, ivec2(floor(v_uv.xy)), 0).g < 0.5) {
+        discard;
+    }
+}
+
+/* Depth of the brick surface under this pixel: the isometric view ray through
+   the frame position meets the brick's grid cell, and the visible surface is
+   where it leaves the cell toward the camera. Same depth formula as iso bodies. */
+float BrickDepth() {
+    const vec3 dir = vec3(1.0, 0.8, 1.0);
+    float a = (v_normal.x - v_mat.x) * 64.0 / 3.0;         // x - z
+    float b = (v_normal.y - v_mat.y - 1.0) * 256.0 / 6.0;  // x + z at y = 0
+    vec3 p0 = vec3((a + b) * 0.5, 0.0, (b - a) * 0.5);
+    vec3 bmin = v_vpos.xyz;
+    vec3 bmax = bmin + vec3(512.0, 256.0, 512.0);
+    vec3 t1 = (bmin - p0) / dir;
+    vec3 t2 = (bmax - p0) / dir;
+    vec3 tNear = min(t1, t2);
+    vec3 tFar = max(t1, t2);
+    float tEnter = max(max(tNear.x, tNear.y), tNear.z);
+    float tExit = min(min(tFar.x, tFar.y), tFar.z);
+    float t = tExit >= tEnter ? tExit : 0.5 * (tEnter + tExit);
+    vec3 p = p0 + t * dir;
+    float d = clamp(0.5 - (p.x + 0.8 * p.y + p.z) / ISO_DEPTH_RANGE, 0.0, 1.0);
+    return v_slice.x + d * 0.999 * v_slice.y;
+}
+
 void main() {
     int mode = int(v_light.w);
     float id = drawId;
+    gl_FragDepth = gl_FragCoord.z;
+
+    if (mode == MODE_BRICK) {
+        BrickCoverage();
+        o_color = vec4(0.0); /* alpha 0: show the software frame here */
+        o_id = vec4(id, 0.0, 0.0, 1.0);
+        gl_FragDepth = BrickDepth();
+        return;
+    }
 
     if (mode == MODE_PASS) {
         o_color = vec4(0.0);

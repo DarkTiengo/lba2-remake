@@ -41,6 +41,7 @@ extern "C" {
 #define GPUOBJ_MODE_TEXSHADED 4 ///< CLUT[shade][texel]
 #define GPUOBJ_MODE_DISC 5      ///< Sphere: palette[color] inside the unit disc
 #define GPUOBJ_MODE_CLUT 6      ///< CLUT[shade][color]: the terrain's Gouraud table fill
+#define GPUOBJ_MODE_BRICK 7     ///< interior brick sprite from the atlas, depth from its grid cell
 
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
@@ -63,6 +64,7 @@ typedef struct {
     S32 X0, Y0, X1, Y1; ///< inclusive scissor (the software clip window)
     S32 ZBuffer;        ///< drawn in z-buffer mode: shares depth with its neighbours
     S32 Scene;          ///< part of the perspective scene: depth-tests every other scene draw
+    S32 Painter;        ///< overwrites like the software painter (interior bricks) but still writes depth
     U8 *Page;           ///< texture page, NULL when untextured
     U8 *Clut;           ///< 16x256 Gouraud CLUT, NULL when unused
     S32 HasLogical;     ///< Logical holds the fog remap
@@ -77,6 +79,13 @@ extern S32 GpuObjEnabled;   ///< player choice (lba2.cfg GpuRenderer, gfx_gpu); 
 extern S32 GpuObjAvailable; ///< set by the presenter once its pipeline is live
 
 extern T_GPUOBJ_VERTEX *GpuObjVerts;
+
+/* Sprite atlas for interior bricks: GPUOBJ_ATLAS_SIZE square, two bytes a texel
+   (palette index, coverage). Written by the capture, uploaded by the presenter
+   when GpuObjAtlasDirty is set. */
+#define GPUOBJ_ATLAS_SIZE 2048
+extern U8 *GpuObjAtlas;
+extern S32 GpuObjAtlasDirty;
 
 /* Size the player chose (it can exceed both the software frame and the window).
    The GPU renders bodies at least this large and scales them down to the
@@ -108,12 +117,20 @@ void GpuObj_EndDraw(void);
 void GpuObj_BeginGroup(void);
 void GpuObj_EndGroup(void);
 
+/** Clears the atlas (the brick set changed with the room) and returns it, or
+ *  NULL when it cannot be allocated. */
+U8 *GpuObj_AtlasReset(void);
+
 /** Draws opened while set belong to the perspective scene (exterior scenery,
  *  actors, extras). The GPU renders all scene draws against one real depth
  *  buffer, and any pixel a scene draw tagged shows whichever scene surface is
  *  nearest there, at the GPU's resolution; other draws (menu and inventory
  *  models) stay in front of the scene in draw order and keep exact id matching. */
 void GpuObj_SetSceneDepth(S32 scene);
+
+/** A masked copy from src into Log over the box [x0,x1] x [y0,y1] (DrawOverBrick
+ *  re-blitting bricks over an actor): copied pixels take src's tags. */
+void GpuObj_OnCopyMask(const void *src, S32 x0, S32 y0, S32 x1, S32 y1);
 
 /** The pixels of the box were redrawn with the same geometry (animated water):
  *  keep their tags and take the new palette indices as what they show. */

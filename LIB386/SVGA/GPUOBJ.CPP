@@ -17,6 +17,8 @@ S32 GpuObjAvailable = FALSE;
 
 T_GPUOBJ_VERTEX *GpuObjVerts = NULL;
 U32 GpuObjTargetHintW = 0;
+U8 *GpuObjAtlas = NULL;
+S32 GpuObjAtlasDirty = FALSE;
 U32 GpuObjTargetHintH = 0;
 
 // --- Private state -----------------------------------------------------------
@@ -350,6 +352,52 @@ void GpuObj_EndDraw(void) {
         return;
     }
     Tag(id);
+}
+
+U8 *GpuObj_AtlasReset(void) {
+    size_t bytes = (size_t)GPUOBJ_ATLAS_SIZE * GPUOBJ_ATLAS_SIZE * 2;
+    if (GpuObjAtlas == NULL) {
+        GpuObjAtlas = (U8 *)malloc(bytes);
+        if (GpuObjAtlas == NULL) {
+            return NULL;
+        }
+    }
+    memset(GpuObjAtlas, 0, bytes);
+    GpuObjAtlasDirty = TRUE;
+    return GpuObjAtlas;
+}
+
+void GpuObj_OnCopyMask(const void *src, S32 x0, S32 y0, S32 x1, S32 y1) {
+    T_PLANE *sp = PlaneOf(src, FALSE);
+    if (sp == NULL || !sp->AnyTag || Log == NULL) {
+        return;
+    }
+    T_PLANE *dp = PlaneOf(Log, TRUE);
+    if (dp == NULL) {
+        return;
+    }
+    x1++;
+    y1++;
+    if (!ClipBoxToPlanes(&x0, &y0, &x1, &y1)) {
+        return;
+    }
+    const U8 *log = (const U8 *)Log;
+    const U8 *from = (const U8 *)src;
+    S32 any = FALSE;
+    for (S32 y = y0; y < y1; y++) {
+        size_t row = (size_t)y * s_planeW;
+        for (S32 x = x0; x < x1; x++) {
+            size_t i = row + (size_t)x;
+            if (log[i] == from[i] && sp->Tag[i] != 0) {
+                dp->Tag[i] = sp->Tag[i];
+                dp->Snap[i] = sp->Snap[i];
+                any = TRUE;
+            }
+        }
+    }
+    if (any) {
+        GrowBox(dp, x0, y0, x1, y1);
+    }
 }
 
 void GpuObj_SetSceneDepth(S32 scene) {
