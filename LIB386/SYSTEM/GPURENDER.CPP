@@ -208,10 +208,22 @@ static void TargetSize(U32 w, U32 h, U32 *outW, U32 *outH) {
     *outH = th;
 }
 
+/* Composite switches: the player's GPU effects can change at any present. */
+static void PushCompositeParams(void) {
+    static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
+    float params[4];
+    params[0] = (debug != NULL) ? (float)SDL_atoi(debug) : 0.0f;
+    params[1] = s_supersample ? 1.0f : 0.0f;
+    params[2] = (s_upscale && GpuObjPixelFilter) ? 1.0f : 0.0f;
+    params[3] = (s_upscale && GpuObjDeband) ? 1.0f : 0.0f;
+    SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params));
+}
+
 static bool EnsureFrameResources(U32 w, U32 h) {
     U32 tw, th;
     TargetSize(w, h, &tw, &th);
     if (s_composite != NULL && s_frameW == w && s_frameH == h && s_targetW == tw && s_targetH == th) {
+        PushCompositeParams();
         return true;
     }
     ReleaseFrameResources();
@@ -251,13 +263,7 @@ static bool EnsureFrameResources(U32 w, U32 h) {
         return false;
     }
 
-    const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[4];
-    params[0] = (debug != NULL) ? (float)SDL_atoi(debug) : 0.0f;
-    params[1] = s_supersample ? 1.0f : 0.0f;
-    params[2] = s_upscale ? 1.0f : 0.0f;
-    params[3] = 0.0f;
-    SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params));
+    PushCompositeParams();
 
     s_frameW = w;
     s_frameH = h;
@@ -531,7 +537,7 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
         u.FogStart = (float)draw->FogStart;
         u.FogEnd = (float)draw->FogEnd;
         u.FogColor = (float)(draw->FogColor & 0xFF);
-        u.Pad = 0.0f;
+        u.Pad = GpuObjSpecular ? 1.0f : 0.0f; /* specular strength */
         if (draw->HasLogical) {
             S32 row = LutRows(draw->Logical, 1);
             if (row < 0) {

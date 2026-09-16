@@ -8,7 +8,11 @@ An opt-in renderer that draws the game's 3D bodies (actors, decor objects, extra
 |---------|-------|--------|
 | Renderer: GPU / Classic | Options → Display menu | Switches renderer immediately, no restart. Saved to lba2.cfg as `GpuRenderer`. |
 | `gfx_gpu 0/1` | console | Same switch as the menu row. |
+| GPU effects | Options → Display menu (while the renderer is GPU) | Page of on/off selectors for the effects below, applied immediately. |
 | `gfx_lights 0/1` | console | Dynamic lights (magic ball glow, soft light following the hero in rooms). Saved as `GpuLights`, on by default. |
+| `gfx_pixelfilter 0/1` | console | xBR pixel-art filter on upscaled software pixels (bricks, sprites, UI). Saved as `GpuPixelFilter`, on by default. |
+| `gfx_deband 0/1` | console | In-between colours on the palette's ramps for upscaled software pixels. Saved as `GpuDeband`, on by default. |
+| `gfx_specular 0/1` | console | Specular highlights on 3D models. Saved as `GpuSpecular`, on by default. |
 | `LBA2_GPU=1` / `LBA2_GPU=0` | environment | Forces the choice for this run only, without changing the saved one. With `1` the window is created with the GPU renderer from the first frame. |
 | `LBA2_GPU_DEBUG=1` | environment | Tints every pixel the GPU supplies green, to check coverage. `2` shows the GPU image alone (magenta where it drew nothing), without the software frame. |
 | `LBA2_GPU_CAPTURE=<file.bmp>` | environment | Writes the last composited frame to disk. `--screenshot` saves the software frame, so this is how to capture the GPU look. |

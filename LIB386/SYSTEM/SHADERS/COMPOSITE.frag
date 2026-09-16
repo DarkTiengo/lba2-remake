@@ -19,8 +19,8 @@ layout(set = 2, binding = 4) uniform sampler2D u_objLight; // dynamic light, hal
 layout(set = 3, binding = 0) uniform Params {
     float debugTint;   // > 0: tint GPU pixels green (LBA2_GPU_DEBUG)
     float supersample; // > 0: the GPU targets are larger than the screen area
-    float upscale;     // > 0: the frame is shown larger than its pixels
-    float pad;
+    float pixelFilter; // > 0: upscaled software pixels go through xBR
+    float deband;      // > 0: upscaled software pixels are debanded
 };
 
 // --- Software frame -----------------------------------------------------------
@@ -172,10 +172,8 @@ vec3 Deband(vec2 uv, vec3 color) {
 }
 
 vec3 SoftwarePixel(vec2 uv) {
-    if (upscale <= 0.0) {
-        return texture(u_frame, uv).rgb;
-    }
-    return Deband(uv, XbrUpscale(uv));
+    vec3 c = pixelFilter > 0.0 ? XbrUpscale(uv) : texture(u_frame, uv).rgb;
+    return deband > 0.0 ? Deband(uv, c) : c;
 }
 
 // -----------------------------------------------------------------------------

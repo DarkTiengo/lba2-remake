@@ -28,7 +28,7 @@ layout(set = 3, binding = 0) uniform Draw {
     float fogStart; // view depth where distance fog begins
     float fogEnd;   // and where it is total; <= fogStart disables it
     float fogColor; // palette index fog fades to
-    float pad;
+    float specular; // specular strength, 0 turns highlights off
 };
 
 layout(set = 3, binding = 1) uniform Lights {
@@ -226,13 +226,13 @@ void main() {
     } else if (mode == MODE_SHADED) {
         float shade = ShadeValue(spec);
         color = Ramp(base, shade);
-        color += spec * 0.35 * Pal(Logical(base | 15));
+        color += spec * specular * 0.35 * Pal(Logical(base | 15));
     } else if (mode == MODE_TEX) {
         color = Textured(0.0, false).rgb;
     } else if (mode == MODE_TEXSHADED) {
         float shade = ShadeValue(spec);
         color = Textured(shade, true).rgb;
-        color += spec * 0.25 * color;
+        color += spec * specular * 0.25 * color;
     } else if (mode == MODE_CLUT) {
         /* Gouraud table fill: the CLUT row is the shade, the column the colour. */
         float shade = ShadeValue(spec);

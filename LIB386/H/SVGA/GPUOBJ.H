@@ -94,6 +94,11 @@ extern T_GPUOBJ_LIGHT GpuObjLights[GPUOBJ_MAX_LIGHTS];
 extern U32 GpuObjNbLights;
 extern S32 GpuObjLightsEnabled; ///< player toggle (gfx_lights)
 
+/* Player toggles for the GPU look (Display > GPU effects). */
+extern S32 GpuObjPixelFilter; ///< xBR pixel-art upscaler on software pixels (gfx_pixelfilter)
+extern S32 GpuObjDeband;      ///< in-between colours on the palette's ramps (gfx_deband)
+extern S32 GpuObjSpecular;    ///< specular highlights on models (gfx_specular)
+
 void GpuObj_ClearLights(void);
 void GpuObj_AddLight(float x, float y, float z, float radius, float r, float g, float b, float intensity);
 

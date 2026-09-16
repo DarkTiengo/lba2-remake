@@ -41,6 +41,11 @@ Main Menu
 │   │   ├── Resolution: < WxH >        [selector; Enter applies, "(Enter)" marks an unapplied choice]
 │   │   ├── Vsync: < On/Off >          [selector]
 │   │   ├── Renderer: < GPU/Classic >  [selector]
+│   │   ├── GPU effects [only while Renderer is GPU; the row appears/disappears as it is switched]
+│   │   │   ├── Dynamic lights: < On/Off > [selector, gfx_lights]
+│   │   │   ├── Pixel art filter: < On/Off > [selector, gfx_pixelfilter]
+│   │   │   ├── Smooth colours: < On/Off > [selector, gfx_deband]
+│   │   │   └── Specular highlights: < On/Off > [selector, gfx_specular]
 │   │   └── Display mode: < Fullscreen/Windowed > [selector, hidden on always-fullscreen devices]
 │   ├── Keyboard Config (14)
 └── Quit (75)

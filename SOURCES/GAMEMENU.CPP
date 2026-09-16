@@ -95,6 +95,14 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_RESOLUTION 2115
 #define MENU_ID_DISPLAY_VSYNC 2116
 #define MENU_ID_DISPLAY_GPU 2117
+#define MENU_ID_GPU_EFFECTS 2118
+#define MENU_ID_GPU_LIGHTS 2119
+#define MENU_ID_GPU_PIXEL_FILTER 2120
+#define MENU_ID_GPU_DEBAND 2121
+#define MENU_ID_GPU_SPECULAR 2122
+// Returned by DoGameMenu when a selector changed which rows its page has
+// (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
+#define MENU_ID_MENU_REBUILD 2123
 
 // Resolution sub-page rows occupy a reserved id range: row i carries id
 // MENU_ID_RESOLUTION_BASE + i, which BuildCustomMenuText and Resolution_MainCapture
@@ -152,11 +160,16 @@ U16 GameOptionMenu[] = {
 };
 
 // Display submenu: one page of selector rows (Resolution, Vsync, Renderer,
-// Display mode). Left/right change a row's value; toggles apply at once, the
-// resolution applies on Enter because a switch rebuilds every frame buffer.
-// Plain "Back" returns to Options. Display mode stays the last entry so the
-// always-fullscreen-device path in GereDisplayMenu can drop it by count.
-U16 DisplayMenu[] = {
+// GPU effects, Display mode). Left/right change a row's value; toggles apply at
+// once, the resolution applies on Enter because a switch rebuilds every frame
+// buffer. Plain "Back" returns to Options. Built by Display_BuildMenu: the GPU
+// effects button only exists while the GPU renderer is on, and Display mode is
+// dropped on always-fullscreen devices.
+U16 DisplayMenu[4 + 6 * 2];
+
+// GPU effects submenu, opened from the Display page while the GPU renderer is
+// on: one selector row per effect.
+U16 GpuEffectsMenu[] = {
     0,   // selected
     5,   // nb entries
     260, // y center
@@ -165,14 +178,18 @@ U16 DisplayMenu[] = {
     0,
     26, // menu precedent
     MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_RESOLUTION,
+    MENU_ID_GPU_LIGHTS,
     MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_DISPLAY_VSYNC,
+    MENU_ID_GPU_PIXEL_FILTER,
     MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_DISPLAY_GPU,
+    MENU_ID_GPU_DEBAND,
     MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_DISPLAY_FULLSCREEN,
+    MENU_ID_GPU_SPECULAR,
 };
+
+// Set when a selector changed the rows of its page; DoGameMenu then returns
+// MENU_ID_MENU_REBUILD.
+static S32 s_menuRebuild = FALSE;
 
 // Resolution sub-page, opened from the Display submenu's Resolution row.
 // Built at runtime from the shared catalog (like GameAskChoice builds
@@ -457,6 +474,23 @@ static void Display_CycleOption(S32 id, S32 dir) {
         /* The window swaps renderer on its next present. Scene bodies pick up
            the new look once they are drawn again, after the menu. */
         GpuObjEnabled ^= 1;
+        s_menuRebuild = TRUE; /* GPU effects row appears or goes */
+        break;
+
+    case MENU_ID_GPU_LIGHTS:
+        GpuObjLightsEnabled ^= 1;
+        break;
+
+    case MENU_ID_GPU_PIXEL_FILTER:
+        GpuObjPixelFilter ^= 1;
+        break;
+
+    case MENU_ID_GPU_DEBAND:
+        GpuObjDeband ^= 1;
+        break;
+
+    case MENU_ID_GPU_SPECULAR:
+        GpuObjSpecular ^= 1;
         break;
 
     case MENU_ID_DISPLAY_FULLSCREEN:
@@ -566,6 +600,30 @@ static void BuildCustomMenuText(S32 num, char *string) {
     case MENU_ID_DISPLAY_GPU:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_RENDERER),
                        GetLocalizedMenuLabel(GpuObjEnabled ? MENU_LABEL_VAL_GPU : MENU_LABEL_VAL_CLASSIC));
+        break;
+
+    case MENU_ID_GPU_EFFECTS:
+        CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(MENU_LABEL_GPU_EFFECTS));
+        break;
+
+    case MENU_ID_GPU_LIGHTS:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_LIGHTS),
+                       GetLocalizedMenuLabel(GpuObjLightsEnabled ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_PIXEL_FILTER:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_PIXEL_FILTER),
+                       GetLocalizedMenuLabel(GpuObjPixelFilter ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_DEBAND:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_DEBAND),
+                       GetLocalizedMenuLabel(GpuObjDeband ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_SPECULAR:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_SPECULAR),
+                       GetLocalizedMenuLabel(GpuObjSpecular ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
         break;
 
     case MENU_ID_FOLLOW_CAMERA:
@@ -3021,6 +3079,14 @@ S32 DoGameMenu(U16 *ptrmenu) {
                 GameMenuApplyMouseWheelDoGameMenu(ptrmenu, selected, wy, &timerkey, &flag);
         }
 
+        if (s_menuRebuild) {
+            /* A selector changed which rows this page has. */
+            s_menuRebuild = FALSE;
+            ptrmenu[0] = selected;
+            AsciiMode = FALSE;
+            return MENU_ID_MENU_REBUILD;
+        }
+
         if (flag == 1) {
             InitShakeChoice(); //     NEW
             TimerSample = 0;
@@ -3271,6 +3337,7 @@ S32 GereLanguageMenu(void) {
 /*──────────────────────────────────────────────────────────────────────────*/
 
 static void BuildResolutionMenu(void); /* defined below, near Resolution_MainCapture */
+static void Display_BuildMenu(void);   /* defined below, near GereDisplayMenu */
 
 // Harness one-shot capture of the Display submenu. Mirrors
 // Menu_MainCapture's pattern: do the minimal setup the regular
@@ -3291,8 +3358,26 @@ void Display_MainCapture(const char *path) {
     InitDial(0);
 
     Display_RebuildResolutionList();
+    Display_BuildMenu();
     Menu_RequestCapture(path);
     DoGameMenu(DisplayMenu);
+    Menu_RequestCapture(NULL); /* disarm if DoGameMenu somehow exited otherwise */
+}
+
+// Harness one-shot capture of the GPU effects submenu, same shape as
+// Display_MainCapture.
+void GpuEffects_MainCapture(const char *path) {
+    HQ_StopSample();
+    InitPlasmaMenu();
+
+    CopyScreen(Screen, Log);
+    BoxStaticFullflip();
+    PtrPal = PtrPalNormal;
+    PaletteSync(PtrPalNormal);
+    InitDial(0);
+
+    Menu_RequestCapture(path);
+    DoGameMenu(GpuEffectsMenu);
     Menu_RequestCapture(NULL); /* disarm if DoGameMenu somehow exited otherwise */
 }
 
@@ -3366,16 +3451,79 @@ static void BuildResolutionMenu(void) {
 // Picking a row applies it immediately (ApplyResolutionChoice). Mirrors
 // GereDisplayMenu's backdrop setup so the list draws over the shaded scene
 // (in-game) or the boot-menu image.
+// GPU effects submenu: selector rows for each effect of the GPU renderer.
+static S32 GereGpuEffectsMenu(void) {
+    S32 flag = 0;
+
+    CopyScreen(Screen, Log);
+    BoxStaticAdd(0, 0, ModeDesiredX - 1, ModeDesiredY - 1);
+
+    if (FlagShadeMenu) {
+        ShadeBoxBlk(0, 0, (S32)ModeDesiredX - 1, (S32)ModeDesiredY - 1, SCREEN_SHADE_LVL);
+    }
+
+    while (!flag) {
+        const S32 select = DoGameMenu(GpuEffectsMenu);
+
+        switch (select) {
+        case 26:
+        case 1000:
+            flag = 1;
+            break;
+
+        case MENU_ID_GPU_LIGHTS:
+        case MENU_ID_GPU_PIXEL_FILTER:
+        case MENU_ID_GPU_DEBAND:
+        case MENU_ID_GPU_SPECULAR:
+            Display_CycleOption(select, 1);
+            break;
+        }
+    }
+
+    CopyScreen(Screen, Log);
+    BoxStaticAdd(0, 0, ModeDesiredX - 1, ModeDesiredY - 1);
+
+    WaitNoInput();
+
+    return FALSE;
+}
+
+// Rows of the Display page for the current state: GPU effects only while the
+// GPU renderer is on, Display mode only where windowed mode exists (not on
+// Android phones/TVs). The cursor stays on the same row id when it moves.
+static void Display_BuildMenu(void) {
+    const S32 oldRow = DisplayMenu[1] > 0 ? DisplayMenu[0] : 0;
+    const U16 oldId = DisplayMenu[1] > 0 ? DisplayMenu[4 + 1 + oldRow * 2] : 26;
+    S32 n = 0;
+
+    MenuSetEntry(DisplayMenu, n++, 0, 26);
+    MenuSetEntry(DisplayMenu, n++, MENU_TYPE_DISPLAY_SELECTOR, MENU_ID_RESOLUTION);
+    MenuSetEntry(DisplayMenu, n++, MENU_TYPE_DISPLAY_SELECTOR, MENU_ID_DISPLAY_VSYNC);
+    MenuSetEntry(DisplayMenu, n++, MENU_TYPE_DISPLAY_SELECTOR, MENU_ID_DISPLAY_GPU);
+    if (GpuObjEnabled) {
+        MenuSetEntry(DisplayMenu, n++, 0, MENU_ID_GPU_EFFECTS);
+    }
+    if (Window_SupportsWindowedMode()) {
+        MenuSetEntry(DisplayMenu, n++, MENU_TYPE_DISPLAY_SELECTOR, MENU_ID_DISPLAY_FULLSCREEN);
+    }
+    DisplayMenu[0] = 0;
+    DisplayMenu[1] = (U16)n;
+    DisplayMenu[2] = 260;
+    DisplayMenu[3] = 0;
+    for (S32 i = 0; i < n; i++) {
+        if (DisplayMenu[4 + 1 + i * 2] == oldId) {
+            DisplayMenu[0] = (U16)i;
+        }
+    }
+}
+
 // Display submenu: a self-contained submenu of OptionsMenu, one page of
 // selector rows (see DisplayMenu and Display_CycleOption).
 S32 GereDisplayMenu(void) {
     S32 select;
     S32 flag = 0;
 
-    /* The Fullscreen toggle is the last entry; drop it on always-fullscreen
-       devices (Android phones/TVs) where windowed mode does not exist, leaving
-       Back + Resolution + Vsync + Renderer. nb_entries 5 = full menu, 4 = hide Display mode. */
-    DisplayMenu[1] = Window_SupportsWindowedMode() ? 5 : 4;
+    Display_BuildMenu();
     Display_RebuildResolutionList();
 
     CopyScreen(Screen, Log);
@@ -3407,6 +3555,26 @@ S32 GereDisplayMenu(void) {
         case MENU_ID_DISPLAY_VSYNC:
         case MENU_ID_DISPLAY_GPU:
             Display_CycleOption(select, 1);
+            break;
+
+        case MENU_ID_GPU_EFFECTS:
+            GereGpuEffectsMenu();
+            /* Back on the Display page's own backdrop. */
+            CopyScreen(Screen, Log);
+            BoxStaticAdd(0, 0, ModeDesiredX - 1, ModeDesiredY - 1);
+            if (FlagShadeMenu) {
+                ShadeBoxBlk(0, 0, (S32)ModeDesiredX - 1, (S32)ModeDesiredY - 1, SCREEN_SHADE_LVL);
+            }
+            break;
+
+        case MENU_ID_MENU_REBUILD:
+            /* Rows changed: redraw the page from its backdrop. */
+            Display_BuildMenu();
+            CopyScreen(Screen, Log);
+            BoxStaticAdd(0, 0, ModeDesiredX - 1, ModeDesiredY - 1);
+            if (FlagShadeMenu) {
+                ShadeBoxBlk(0, 0, (S32)ModeDesiredX - 1, (S32)ModeDesiredY - 1, SCREEN_SHADE_LVL);
+            }
             break;
         }
     }
