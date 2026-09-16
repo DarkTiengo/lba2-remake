@@ -24,6 +24,7 @@ S32 GpuObjLightsEnabled = TRUE;
 S32 GpuObjPixelFilter = TRUE;
 S32 GpuObjDeband = TRUE;
 S32 GpuObjSpecular = TRUE;
+S32 GpuObjUiScale = TRUE;
 S32 GpuObjAtlasDirty = FALSE;
 U32 GpuObjTargetHintH = 0;
 

@@ -18,6 +18,7 @@
 #endif
 
 #include <OBJECT/AFF_GPU.H>
+#include "GRILLE_GPU.H"
 #include <SVGA/SCREEN.H>
 #include <SVGA/VIDEO.H>
 #include <SYSTEM/HQFILE.H>
@@ -5837,11 +5838,14 @@ startaffscene:
 
     GpuObj_SetSceneDepth(FALSE);
 
-    /* Dynamic lights for the GPU scene: the magic ball glows, and in rooms a
-       soft warm light follows the hero so the actors stand out of the bricks. */
+    /* Dynamic lights for the GPU scene: the room's lamps, the magic ball, and in
+       rooms a soft warm light following the hero so actors stand out of the bricks. */
     if (MagicBall != -1 AND ListExtra[MagicBall].Sprite != -1) {
         AffGpu_AddWorldLight(ListExtra[MagicBall].PosX, ListExtra[MagicBall].PosY, ListExtra[MagicBall].PosZ, 2600.0f,
                              0.7f, 0.85f, 1.0f, 0.8f);
+    }
+    if (CubeMode == CUBE_INTERIEUR) {
+        GrilleGpu_AddRoomLights();
     }
     if (CubeMode == CUBE_INTERIEUR) {
         const T_OBJET *hero = &ListObjet[NUM_PERSO];

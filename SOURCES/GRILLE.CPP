@@ -195,6 +195,7 @@ S32 LoadUsedBrick() {
         if (*ptflag) {
             nbbrick++;              /*	One More*/
             *ptflag = (S16)nbbrick; /*	Brick+1, for BLL */
+            GrilleGpu_MapBrick(nbbrick - 1, (S32)i);
             offseek = *(ptseek + i);
             Seek(handle, offseek, SEEK_FROM_START);
             Read(handle, &header, sizeof(header));
@@ -932,7 +933,7 @@ void AffGrille() {
 
     /* The room is one GPU group: bricks here, actors later by depth. */
     GpuObj_BeginGroup();
-    GrilleGpu_Begin();
+    GrilleGpu_Begin(PtrPal);
 
     ptc = BufCube;
     for (z = 0; z < SIZE_CUBE_Z; z++) {

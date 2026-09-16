@@ -91,6 +91,15 @@ void Res_BaseDimensions(U32 *outW, U32 *outH) {
    N is 1 below 2160 lines, so every mode up to 1440p renders natively. */
 static S32 Res_FrameDivisor(U32 baseH) {
     S32 v = (S32)(baseH / 1080);
+    /* The GPU renderer draws 3D at the window's size whatever the frame is, so
+       with its 2D scale on the frame keeps the classic height (480 to 719
+       lines): menus, text, sprites and bricks keep their authored size on
+       screen and reach it through the GPU's pixel-art upscaler. */
+    if (GpuObjEnabled && GpuObjUiScale && !Control_IsHeadless()) {
+        const S32 ui = (S32)(baseH / 480);
+        if (ui > v)
+            v = ui;
+    }
     if (v < 1)
         v = 1;
     if (v > 4)

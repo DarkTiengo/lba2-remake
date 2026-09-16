@@ -125,6 +125,8 @@ static const T_SETTING BootSettings[] = {
      NULL, "GPU renderer: xBR pixel-art filter on upscaled 2D art"},
     {"GpuDeband", NULL, "gfx_deband", &GpuObjDeband, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: smooth the palette's colour steps on upscaled 2D art"},
+    {"GpuUiScale", NULL, "gfx_uiscale", &GpuObjUiScale, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
+     "GPU renderer: draw 2D (menus, text, sprites, rooms) at the classic size, upscaled"},
     {"GpuSpecular", NULL, "gfx_specular", &GpuObjSpecular, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: specular highlights on 3D models"},
     {"FixedTimestep", NULL, NULL, &FixedTimestep, SETTING_OR_DEFAULT, 16, 0, 100,

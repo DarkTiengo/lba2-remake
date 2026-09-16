@@ -28,6 +28,53 @@ static T_GPUOBJ_DRAW *s_draw = NULL;
 static U8 s_slotState[MAX_SLOTS]; ///< 0 unknown, 1 in atlas, 2 unusable
 static S32 s_atlasValid = FALSE;
 
+/* --- Lamps -------------------------------------------------------------------
+   The game data has no light sources, so the bricks that are lamps are listed
+   here by their number in BKG.HQR, found by looking at every room that uses
+   them. The light's colour comes from the lamp's own brightest pixels in the
+   room's palette. */
+typedef struct {
+    U16 Brick;
+    U8 Radius;    ///< in quarter cells (128 world units)
+    U8 Intensity; ///< in hundredths
+} T_LAMP_BRICK;
+
+static const T_LAMP_BRICK kLampBricks[] = {
+    {89, 16, 55},    /* wall sconce shade (Twinsen's house, Citadel) */
+    {90, 20, 70},    /* table lamp shade */
+    {337, 20, 70},   /* floor lamp shade */
+    {1816, 20, 70},  /* lamp shade */
+    {4342, 20, 70},  /* hanging brass lamp (tavern) */
+    {6903, 20, 70},  /* stacked globe lamp */
+    {6958, 20, 70},  /* hanging lamp */
+    {7100, 20, 70},  /* glowing ceiling fixture */
+    {7699, 20, 70},  /* stacked globe lamp */
+    {7747, 20, 70},  /* stacked globe lamp */
+    {9487, 24, 85},  /* crystal lamp */
+    {9490, 24, 85},  /* crystal lamp */
+    {12761, 20, 70}, /* globe lamp */
+    {13289, 20, 70}, /* globe lamp */
+    {13489, 16, 55}, /* wall globe */
+    {13496, 16, 55}, /* wall globe */
+    {14902, 20, 70}, /* glowing wall fixture */
+    {15901, 10, 40}, /* candle */
+};
+#define NB_LAMP_BRICKS ((S32)(sizeof(kLampBricks) / sizeof(kLampBricks[0])))
+
+static U8 s_lampOf[MAX_SLOTS]; ///< local sprite -> kLampBricks index + 1, 0 none
+
+typedef struct {
+    S32 X, Y, Z;
+    S32 Type;
+} T_LAMP;
+
+#define MAX_LAMPS 64
+static T_LAMP s_lamps[MAX_LAMPS];
+static S32 s_nbLamps = 0;
+static const U8 *s_palette = NULL;
+static float s_lampColor[MAX_SLOTS][3];
+static U8 s_lampColorValid[MAX_SLOTS];
+
 // --- Private functions -------------------------------------------------------
 /* Decodes sprite brick of bank (the GPH run format AffGraph reads) into its
    atlas cell as (palette index, coverage) pairs. */
@@ -81,17 +128,113 @@ static S32 DecodeBrick(S32 brick, const U8 *bank) {
     return TRUE;
 }
 
+/* The average of the lamp sprite's brightest pixels, scaled to full brightness. */
+static void LampColor(S32 brick, float *rgb) {
+    rgb[0] = 1.0f;
+    rgb[1] = 0.8f;
+    rgb[2] = 0.55f;
+    if (s_slotState[brick] != 1 || s_palette == NULL) {
+        return;
+    }
+    const U8 *atlas = GpuObjAtlas;
+    const S32 cellX = (brick % CELLS_X) * CELL_W;
+    const S32 cellY = (brick / CELLS_X) * CELL_H;
+    S32 histogram[256];
+    memset(histogram, 0, sizeof(histogram));
+    for (S32 y = 0; y < CELL_H; y++) {
+        const U8 *row = atlas + ((size_t)(cellY + y) * GPUOBJ_ATLAS_SIZE + (size_t)cellX) * 2;
+        for (S32 x = 0; x < CELL_W; x++) {
+            if (row[x * 2 + 1] != 0) {
+                const U8 *c = s_palette + row[x * 2] * 3;
+                histogram[(c[0] * 77 + c[1] * 150 + c[2] * 29) >> 8]++;
+            }
+        }
+    }
+    /* Luma threshold keeping the brightest fifth of the sprite. */
+    S32 total = 0;
+    for (S32 l = 0; l < 256; l++) {
+        total += histogram[l];
+    }
+    S32 threshold = 255;
+    for (S32 kept = 0; threshold > 0 && kept * 5 < total; threshold--) {
+        kept += histogram[threshold];
+    }
+    float sum[3] = {0.0f, 0.0f, 0.0f};
+    for (S32 y = 0; y < CELL_H; y++) {
+        const U8 *row = atlas + ((size_t)(cellY + y) * GPUOBJ_ATLAS_SIZE + (size_t)cellX) * 2;
+        for (S32 x = 0; x < CELL_W; x++) {
+            if (row[x * 2 + 1] != 0) {
+                const U8 *c = s_palette + row[x * 2] * 3;
+                if (((c[0] * 77 + c[1] * 150 + c[2] * 29) >> 8) > threshold) {
+                    sum[0] += c[0];
+                    sum[1] += c[1];
+                    sum[2] += c[2];
+                }
+            }
+        }
+    }
+    const float peak = sum[0] > sum[1] ? (sum[0] > sum[2] ? sum[0] : sum[2]) : (sum[1] > sum[2] ? sum[1] : sum[2]);
+    if (peak > 0.0f) {
+        /* Towards white: a lamp lights with its glow, not its lampshade's dye. */
+        for (S32 i = 0; i < 3; i++) {
+            rgb[i] = 0.35f + 0.65f * sum[i] / peak;
+        }
+    }
+}
+
+/* One lamp brick drawn in cell (x, y, z). Lamps are several bricks stacked or
+   side by side: one light per lamp. */
+static void AddLamp(S32 brick, S32 x, S32 y, S32 z) {
+    for (S32 k = 0; k < s_nbLamps; k++) {
+        T_LAMP *l = &s_lamps[k];
+        if (l->X - x <= 1 && x - l->X <= 1 && l->Z - z <= 1 && z - l->Z <= 1 && l->Y - y <= 2 && y - l->Y <= 2) {
+            return;
+        }
+    }
+    if (s_nbLamps >= MAX_LAMPS) {
+        return;
+    }
+    if (!s_lampColorValid[brick]) {
+        LampColor(brick, s_lampColor[brick]);
+        s_lampColorValid[brick] = TRUE;
+    }
+    s_lamps[s_nbLamps].X = x;
+    s_lamps[s_nbLamps].Y = y;
+    s_lamps[s_nbLamps].Z = z;
+    s_lamps[s_nbLamps].Type = brick;
+    s_nbLamps++;
+}
+
 // --- Interface ---------------------------------------------------------------
+void GrilleGpu_MapBrick(S32 local, S32 global) {
+    if (local == 0) {
+        memset(s_lampOf, 0, sizeof(s_lampOf));
+    }
+    if (local < 0 || local >= MAX_SLOTS) {
+        return;
+    }
+    for (S32 i = 0; i < NB_LAMP_BRICKS; i++) {
+        if (kLampBricks[i].Brick == global) {
+            s_lampOf[local] = (U8)(i + 1);
+            break;
+        }
+    }
+}
+
 void GrilleGpu_Reset(void) {
     memset(s_slotState, 0, sizeof(s_slotState));
+    memset(s_lampColorValid, 0, sizeof(s_lampColorValid));
+    s_nbLamps = 0;
     s_atlasValid = FALSE;
     if (GpuObj_Active()) {
         s_atlasValid = GpuObj_AtlasReset() != NULL;
     }
 }
 
-void GrilleGpu_Begin(void) {
+void GrilleGpu_Begin(const U8 *palette) {
     s_draw = NULL;
+    s_palette = palette;
+    s_nbLamps = 0;
     if (!GpuObj_Active() || TypeProj == TYPE_3D) {
         return;
     }
@@ -122,6 +265,9 @@ void GrilleGpu_Brick(S32 brick, S32 x, S32 y, S32 z, S32 xs, S32 ys, const U8 *b
     }
     if (s_slotState[brick] == 0) {
         s_slotState[brick] = DecodeBrick(brick, bank) ? 1 : 2;
+    }
+    if (s_lampOf[brick] != 0) {
+        AddLamp(brick, x, y, z);
     }
 
     const U8 *data = bank + ((const U32 *)bank)[brick];
@@ -169,6 +315,43 @@ void GrilleGpu_Brick(S32 brick, S32 x, S32 y, S32 z, S32 xs, S32 ys, const U8 *b
         v[i].mat[1] = (float)YCentre;
         v[i].uv[0] = atlasX + cornerX[k] * (float)w;
         v[i].uv[1] = atlasY + cornerY[k] * (float)h;
+    }
+}
+
+void GrilleGpu_AddRoomLights(void) {
+    if (!GpuObj_Active() || s_nbLamps == 0) {
+        return;
+    }
+    typedef struct {
+        float X, Y, Z, Dist;
+        S32 Lamp;
+    } T_NEAR;
+    T_NEAR nearList[MAX_LAMPS];
+    for (S32 k = 0; k < s_nbLamps; k++) {
+        /* Camera-relative cell centre: the space bricks and iso bodies use. */
+        nearList[k].X = ((float)s_lamps[k].X + 0.5f) * BRICK_XZ - (float)CameraX;
+        nearList[k].Y = ((float)s_lamps[k].Y + 0.5f) * BRICK_Y - (float)CameraY;
+        nearList[k].Z = ((float)s_lamps[k].Z + 0.5f) * BRICK_XZ - (float)CameraZ;
+        nearList[k].Dist = nearList[k].X * nearList[k].X + nearList[k].Z * nearList[k].Z;
+        nearList[k].Lamp = k;
+    }
+    /* Leave room for the lights that move (magic, the hero's). */
+    for (S32 n = 0; n < s_nbLamps && GpuObjNbLights < GPUOBJ_MAX_LIGHTS - 2; n++) {
+        S32 best = n;
+        for (S32 k = n + 1; k < s_nbLamps; k++) {
+            if (nearList[k].Dist < nearList[best].Dist) {
+                best = k;
+            }
+        }
+        const T_NEAR tmp = nearList[n];
+        nearList[n] = nearList[best];
+        nearList[best] = tmp;
+
+        const S32 brick = s_lamps[nearList[n].Lamp].Type;
+        const T_LAMP_BRICK *def = &kLampBricks[s_lampOf[brick] - 1];
+        const float *c = s_lampColor[brick];
+        GpuObj_AddLight(nearList[n].X, nearList[n].Y, nearList[n].Z, (float)def->Radius * 128.0f, c[0], c[1], c[2],
+                        (float)def->Intensity / 100.0f);
     }
 }
 

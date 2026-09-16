@@ -100,6 +100,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_PIXEL_FILTER 2120
 #define MENU_ID_GPU_DEBAND 2121
 #define MENU_ID_GPU_SPECULAR 2122
+#define MENU_ID_GPU_UI_SCALE 2124
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -171,12 +172,14 @@ U16 DisplayMenu[4 + 6 * 2];
 // on: one selector row per effect.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    5,   // nb entries
+    6,   // nb entries
     260, // y center
     0,   // .dia num
 
     0,
     26, // menu precedent
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_UI_SCALE,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_LIGHTS,
     MENU_TYPE_DISPLAY_SELECTOR,
@@ -493,6 +496,12 @@ static void Display_CycleOption(S32 id, S32 dir) {
         GpuObjSpecular ^= 1;
         break;
 
+    case MENU_ID_GPU_UI_SCALE:
+        /* Takes effect when the page is left (Display_ApplyRenderSize): the
+           switch rebuilds every frame buffer. */
+        GpuObjUiScale ^= 1;
+        break;
+
     case MENU_ID_DISPLAY_FULLSCREEN:
         DisplayFullScreen ^= 1;
         SetWindowFullscreen(DisplayFullScreen != FALSE);
@@ -626,6 +635,11 @@ static void BuildCustomMenuText(S32 num, char *string) {
                        GetLocalizedMenuLabel(GpuObjSpecular ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
         break;
 
+    case MENU_ID_GPU_UI_SCALE:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_UI_SCALE),
+                       GetLocalizedMenuLabel(GpuObjUiScale ? MENU_LABEL_VAL_UI_CLASSIC : MENU_LABEL_VAL_UI_NATIVE));
+        break;
+
     case MENU_ID_FOLLOW_CAMERA:
         CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(FollowCamera ? MENU_LABEL_AUTO_CAMERA : MENU_LABEL_CLASSIC_CAMERA));
         break;
@@ -668,6 +682,8 @@ static void CycleTextLanguage(S32 step) {
 // the open list is itself the escape hatch: the player can immediately pick
 // another mode or 640x480. The revert dialog also needs a live scene to repaint
 // over, which the boot main menu doesn't have. See GereDisplayMenu.
+static void RepaintMenuAfterResize(void);
+
 static void ApplyResolutionChoice(U32 w, U32 h) {
     /* Compare against the chosen base, not the live framebuffer: inside an
        interior the two differ, and picking the size the interior happens to be
@@ -681,42 +697,46 @@ static void ApplyResolutionChoice(U32 w, U32 h) {
         // Persist immediately so the next launch boots at the chosen
         // resolution. Mirrors the Phase 0 keep/revert "Keep" path.
         WriteConfigFile();
-
-        // Res_Switch tears down Log/Screen and the cube reload inside
-        // it may have clobbered SkySeaTexture (where the plasma fire
-        // bar lives), so the next DoGameMenu redraw would show the
-        // row on bare black with a stale plasma highlight.
-        //
-        // Two repaint shapes depending on context:
-        //   FlagShadeMenu TRUE  → in-game (player opened Options via
-        //     ESC). Repaint the live 3D scene the same way the
-        //     keep/revert dialog does (RES_SWITCH.CPP:472-482), then
-        //     shade so the menu items pop over the dimmed scene.
-        //   FlagShadeMenu FALSE → boot main menu (player is at the
-        //     Resume / New / Load screen). The right background is
-        //     the PCR_MENU stretched PCX image, not the default cube
-        //     AffScene would paint (which would be Twinsen's house —
-        //     wrong context for the boot menu). Reload the BG using
-        //     the same Image_LoadStretched MainGameMenu uses, no
-        //     shade — the boot menu doesn't darken its own backdrop.
-        BoxReset();
-        BoxStaticAdd(0, 0, (S32)ModeDesiredX - 1, (S32)ModeDesiredY - 1);
-        if (FlagShadeMenu) {
-            AffScene(AFF_ALL_FLIP);
-        } else {
-            char tmpFilePathScreen[ADELINE_MAX_PATH];
-            GetResPath(tmpFilePathScreen, ADELINE_MAX_PATH, SCREEN_HQR_NAME);
-            Image_LoadStretched(tmpFilePathScreen, Screen, PCR_MENU);
-            CopyScreen(Screen, Log);
-        }
-        BackupScreen(TRUE);
-        InitPlasmaMenu();
-        if (FlagShadeMenu) {
-            ShadeBoxBlk(0, 0, (S32)ModeDesiredX - 1,
-                        (S32)ModeDesiredY - 1, SCREEN_SHADE_LVL);
-        }
-        BoxStaticFullflip();
+        RepaintMenuAfterResize();
     }
+}
+
+// After the frame buffers were rebuilt under an open menu: repaint its backdrop.
+static void RepaintMenuAfterResize(void) {
+    // Res_Switch tears down Log/Screen and the cube reload inside
+    // it may have clobbered SkySeaTexture (where the plasma fire
+    // bar lives), so the next DoGameMenu redraw would show the
+    // row on bare black with a stale plasma highlight.
+    //
+    // Two repaint shapes depending on context:
+    //   FlagShadeMenu TRUE  → in-game (player opened Options via
+    //     ESC). Repaint the live 3D scene the same way the
+    //     keep/revert dialog does (RES_SWITCH.CPP:472-482), then
+    //     shade so the menu items pop over the dimmed scene.
+    //   FlagShadeMenu FALSE → boot main menu (player is at the
+    //     Resume / New / Load screen). The right background is
+    //     the PCR_MENU stretched PCX image, not the default cube
+    //     AffScene would paint (which would be Twinsen's house —
+    //     wrong context for the boot menu). Reload the BG using
+    //     the same Image_LoadStretched MainGameMenu uses, no
+    //     shade — the boot menu doesn't darken its own backdrop.
+    BoxReset();
+    BoxStaticAdd(0, 0, (S32)ModeDesiredX - 1, (S32)ModeDesiredY - 1);
+    if (FlagShadeMenu) {
+        AffScene(AFF_ALL_FLIP);
+    } else {
+        char tmpFilePathScreen[ADELINE_MAX_PATH];
+        GetResPath(tmpFilePathScreen, ADELINE_MAX_PATH, SCREEN_HQR_NAME);
+        Image_LoadStretched(tmpFilePathScreen, Screen, PCR_MENU);
+        CopyScreen(Screen, Log);
+    }
+    BackupScreen(TRUE);
+    InitPlasmaMenu();
+    if (FlagShadeMenu) {
+        ShadeBoxBlk(0, 0, (S32)ModeDesiredX - 1,
+                    (S32)ModeDesiredY - 1, SCREEN_SHADE_LVL);
+    }
+    BoxStaticFullflip();
 }
 
 #ifdef CDROM
@@ -3338,6 +3358,7 @@ S32 GereLanguageMenu(void) {
 
 static void BuildResolutionMenu(void); /* defined below, near Resolution_MainCapture */
 static void Display_BuildMenu(void);   /* defined below, near GereDisplayMenu */
+static void Display_ApplyRenderSize(void); /* defined below, near GereDisplayMenu */
 
 // Harness one-shot capture of the Display submenu. Mirrors
 // Menu_MainCapture's pattern: do the minimal setup the regular
@@ -3471,6 +3492,7 @@ static S32 GereGpuEffectsMenu(void) {
             flag = 1;
             break;
 
+        case MENU_ID_GPU_UI_SCALE:
         case MENU_ID_GPU_LIGHTS:
         case MENU_ID_GPU_PIXEL_FILTER:
         case MENU_ID_GPU_DEBAND:
@@ -3480,12 +3502,24 @@ static S32 GereGpuEffectsMenu(void) {
         }
     }
 
+    Display_ApplyRenderSize();
+
     CopyScreen(Screen, Log);
     BoxStaticAdd(0, 0, ModeDesiredX - 1, ModeDesiredY - 1);
 
     WaitNoInput();
 
     return FALSE;
+}
+
+// The renderer or its 2D scale changed: the frame follows (Res_FrameDivisor).
+static void Display_ApplyRenderSize(void) {
+    const U32 w = ModeDesiredX;
+    const U32 h = ModeDesiredY;
+    Res_ApplySceneRenderSize();
+    if (ModeDesiredX != w || ModeDesiredY != h) {
+        RepaintMenuAfterResize();
+    }
 }
 
 // Rows of the Display page for the current state: GPU effects only while the
@@ -3569,6 +3603,7 @@ S32 GereDisplayMenu(void) {
 
         case MENU_ID_MENU_REBUILD:
             /* Rows changed: redraw the page from its backdrop. */
+            Display_ApplyRenderSize();
             Display_BuildMenu();
             CopyScreen(Screen, Log);
             BoxStaticAdd(0, 0, ModeDesiredX - 1, ModeDesiredY - 1);
@@ -4145,6 +4180,11 @@ S32 MainGameMenu(S32 load, S32 resumeInGame) {
        stack buffer to Image_LoadStretched. Its sibling tmpFilePathSave is safe by accident
        rather than design, because the loop re-derives that one where it uses it. */
     GetResPath(tmpFilePathScreen, ADELINE_MAX_PATH, SCREEN_HQR_NAME);
+
+    /* The boot sizes the frame before the cfg says which renderer runs; the
+       menu takes the size that renderer wants. */
+    if (!resumeInGame)
+        Res_ApplySceneRenderSize();
 
     if (resumeInGame) {
         /* Enter the loop already in gameplay. Nothing below is done: it paints the menu

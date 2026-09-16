@@ -42,6 +42,7 @@ Main Menu
 │   │   ├── Vsync: < On/Off >          [selector]
 │   │   ├── Renderer: < GPU/Classic >  [selector]
 │   │   ├── GPU effects [only while Renderer is GPU; the row appears/disappears as it is switched]
+│   │   │   ├── 2D size: < Classic, upscaled/Native > [selector, gfx_uiscale; applied when the page is left]
 │   │   │   ├── Dynamic lights: < On/Off > [selector, gfx_lights]
 │   │   │   ├── Pixel art filter: < On/Off > [selector, gfx_pixelfilter]
 │   │   │   ├── Smooth colours: < On/Off > [selector, gfx_deband]
