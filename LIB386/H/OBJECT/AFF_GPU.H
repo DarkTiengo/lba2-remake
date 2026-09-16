@@ -32,6 +32,10 @@ void AffGpu_End(void);
  *  the caller. */
 void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth);
 
+/** A point light at world position (x, y, z), moved into the space the bodies
+ *  of the current projection are captured in (GpuObj_AddLight). */
+void AffGpu_AddWorldLight(S32 x, S32 y, S32 z, float radius, float r, float g, float b, float intensity);
+
 #ifdef __cplusplus
 }
 #endif

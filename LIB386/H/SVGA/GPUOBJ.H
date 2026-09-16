@@ -80,6 +80,23 @@ extern S32 GpuObjAvailable; ///< set by the presenter once its pipeline is live
 
 extern T_GPUOBJ_VERTEX *GpuObjVerts;
 
+/* Dynamic point lights for the scene, in the scene's own space (camera-relative
+   world units in isometric rooms, view space in perspective scenes, the spaces
+   the capture stores vertex positions in). Set once per scene frame. */
+#define GPUOBJ_MAX_LIGHTS 16
+
+typedef struct {
+    float Pos[4];   ///< xyz, radius
+    float Color[4]; ///< rgb, intensity
+} T_GPUOBJ_LIGHT;
+
+extern T_GPUOBJ_LIGHT GpuObjLights[GPUOBJ_MAX_LIGHTS];
+extern U32 GpuObjNbLights;
+extern S32 GpuObjLightsEnabled; ///< player toggle (gfx_lights)
+
+void GpuObj_ClearLights(void);
+void GpuObj_AddLight(float x, float y, float z, float radius, float r, float g, float b, float intensity);
+
 /* Sprite atlas for interior bricks: GPUOBJ_ATLAS_SIZE square, two bytes a texel
    (palette index, coverage). Written by the capture, uploaded by the presenter
    when GpuObjAtlasDirty is set. */

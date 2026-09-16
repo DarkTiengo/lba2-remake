@@ -1,6 +1,8 @@
 #include <OBJECT/AFF_GPU.H>
 
 #include <OBJECT/AFF_OBJ.H>
+#include <3D/LROT3D.H>
+#include <3D/CAMERA.H>
 #include <3D/CAMERA.H>
 #include <3D/DATAMAT.H>
 #include <3D/LIGHT.H>
@@ -290,6 +292,27 @@ void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth) {
     v->vpos[1] = y;
     v->vpos[2] = -depth;
     v->normal[2] = 1.0f;
+}
+
+void AffGpu_AddWorldLight(S32 x, S32 y, S32 z, float radius, float r, float g, float b, float intensity) {
+    if (!GpuObj_Active()) {
+        return;
+    }
+    /* Same placement as a body's origin in ObjectDisplay. */
+    if (TypeProj == TYPE_3D) {
+        /* The rotation's outputs are globals the game may still read. */
+        const S32 savedX = X0;
+        const S32 savedY = Y0;
+        const S32 savedZ = Z0;
+        LongRotatePoint(&MatriceWorld, x, y, z);
+        x = X0;
+        y = Y0;
+        z = Z0;
+        X0 = savedX;
+        Y0 = savedY;
+        Z0 = savedZ;
+    }
+    GpuObj_AddLight((float)(x - CameraXr), (float)(y - CameraYr), (float)(z - CameraZr), radius, r, g, b, intensity);
 }
 
 void AffGpu_SaveRotated(S32 nbPoints, S32 perGroup) {

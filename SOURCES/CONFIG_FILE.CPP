@@ -119,6 +119,8 @@ static const T_SETTING BootSettings[] = {
      "Texture filtering: 0 off, 1 horizontal, 2 bilinear"},
     {"GpuRenderer", NULL, "gfx_gpu", &GpuObjEnabled, SETTING_OR_DEFAULT, FALSE, 0, 1, &StoredGpuRenderer,
      ForcedGpuRenderer, NULL, &SourceGpuRenderer, "GPU renderer: per-pixel lit, true-colour 3D models"},
+    {"GpuLights", NULL, "gfx_lights", &GpuObjLightsEnabled, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
+     "GPU renderer: dynamic lights from lamps and magic"},
     {"FixedTimestep", NULL, NULL, &FixedTimestep, SETTING_OR_DEFAULT, 16, 0, 100,
      &StoredFixedTimestep, ForcedFixedTimestep, NULL, &SourceFixedTimestep},
 };

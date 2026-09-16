@@ -13,6 +13,7 @@ layout(location = 5) flat in vec2 v_slice;
 
 layout(location = 0) out vec4 o_color;
 layout(location = 1) out vec4 o_id;
+layout(location = 2) out vec4 o_light; // dynamic light at this surface, halved
 
 layout(set = 2, binding = 0) uniform sampler2D u_palette;    // 256x1 RGBA
 layout(set = 2, binding = 1) uniform sampler2D u_lut;        // 256xN R8: logical palettes, CLUT blocks
@@ -29,6 +30,35 @@ layout(set = 3, binding = 0) uniform Draw {
     float fogColor; // palette index fog fades to
     float pad;
 };
+
+layout(set = 3, binding = 1) uniform Lights {
+    vec4 lightPos[16];   // xyz in the scene's space, w radius
+    vec4 lightColor[16]; // rgb, w intensity
+    float lightCount;
+};
+
+/* Light reaching a point, soft quadratic falloff; normals shade bodies,
+   baked surfaces (terrain, bricks) take it omnidirectionally. */
+vec3 DynamicLight(vec3 pos, vec3 normal, bool useNormal) {
+    vec3 sum = vec3(0.0);
+    int count = int(lightCount);
+    for (int k = 0; k < count; k++) {
+        vec3 toLight = lightPos[k].xyz - pos;
+        float dist2 = dot(toLight, toLight);
+        float radius = lightPos[k].w;
+        float falloff = clamp(1.0 - dist2 / (radius * radius), 0.0, 1.0);
+        falloff *= falloff;
+        if (falloff <= 0.0) {
+            continue;
+        }
+        float facing = 1.0;
+        if (useNormal) {
+            facing = 0.35 + 0.65 * max(dot(normalize(normal), toLight * inversesqrt(max(dist2, 1.0))), 0.0);
+        }
+        sum += lightColor[k].rgb * lightColor[k].w * falloff * facing;
+    }
+    return sum;
+}
 
 const int MODE_PASS = 0;
 const int MODE_SOLID = 1;
@@ -145,7 +175,7 @@ void BrickCoverage() {
 /* Depth of the brick surface under this pixel: the isometric view ray through
    the frame position meets the brick's grid cell, and the visible surface is
    where it leaves the cell toward the camera. Same depth formula as iso bodies. */
-float BrickDepth() {
+float BrickDepth(out vec3 surface) {
     const vec3 dir = vec3(1.0, 0.8, 1.0);
     float a = (v_normal.x - v_mat.x) * 64.0 / 3.0;         // x - z
     float b = (v_normal.y - v_mat.y - 1.0) * 256.0 / 6.0;  // x + z at y = 0
@@ -160,6 +190,7 @@ float BrickDepth() {
     float tExit = min(min(tFar.x, tFar.y), tFar.z);
     float t = tExit >= tEnter ? tExit : 0.5 * (tEnter + tExit);
     vec3 p = p0 + t * dir;
+    surface = p;
     float d = clamp(0.5 - (p.x + 0.8 * p.y + p.z) / ISO_DEPTH_RANGE, 0.0, 1.0);
     return v_slice.x + d * 0.999 * v_slice.y;
 }
@@ -168,12 +199,15 @@ void main() {
     int mode = int(v_light.w);
     float id = drawId;
     gl_FragDepth = gl_FragCoord.z;
+    o_light = vec4(0.0);
 
     if (mode == MODE_BRICK) {
         BrickCoverage();
         o_color = vec4(0.0); /* alpha 0: show the software frame here */
         o_id = vec4(id, 0.0, 0.0, 1.0);
-        gl_FragDepth = BrickDepth();
+        vec3 surface;
+        gl_FragDepth = BrickDepth(surface);
+        o_light = vec4(min(DynamicLight(surface, vec3(0.0, 1.0, 0.0), false), vec3(2.0)) * 0.5, 1.0);
         return;
     }
 
@@ -219,5 +253,7 @@ void main() {
     }
 
     o_color = vec4(clamp(color, 0.0, 1.0), 1.0);
+    bool baked = (Flags() & FLAG_BAKED) != 0;
+    o_light = vec4(min(DynamicLight(v_vpos.xyz, v_normal.xyz, !baked), vec3(2.0)) * 0.5, 1.0);
     o_id = vec4(id, 0.0, 0.0, 1.0);
 }

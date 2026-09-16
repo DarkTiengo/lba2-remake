@@ -54,10 +54,13 @@ static SDL_GPUGraphicsPipeline *s_pipelinePainter = NULL; ///< depth write, no d
 static SDL_GPUSampler *s_nearest = NULL;
 static SDL_GPUSampler *s_linear = NULL;
 static bool s_supersample = false;
+static bool s_upscale = false;     ///< the frame is shown larger than its pixels
+static bool s_tagsCleared = false; ///< the tag texture holds known contents
 
 /* Frame-sized: follow Log. */
 static SDL_GPUTexture *s_objColor = NULL;
 static SDL_GPUTexture *s_objId = NULL;
+static SDL_GPUTexture *s_objLight = NULL; ///< dynamic light reaching each scene surface
 static SDL_GPUTexture *s_depth = NULL;
 static SDL_GPUTexture *s_tags = NULL;
 static U32 s_frameW = 0; ///< software frame (tags)
@@ -157,6 +160,7 @@ static void ReleaseFrameResources(void) {
     }
     ReleaseTexture(&s_objColor);
     ReleaseTexture(&s_objId);
+    ReleaseTexture(&s_objLight);
     ReleaseTexture(&s_depth);
     ReleaseTexture(&s_tags);
     free(s_tagScratch);
@@ -199,6 +203,7 @@ static void TargetSize(U32 w, U32 h, U32 *outW, U32 *outH) {
         th = h;
     }
     s_supersample = tw > onScreenW + 1 || th > onScreenH + 1;
+    s_upscale = onScreenW > w + 1 || onScreenH > h + 1;
     *outW = tw;
     *outH = th;
 }
@@ -214,27 +219,30 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     const SDL_GPUTextureUsageFlags targetUsage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
     s_objColor = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, tw, th, 1);
     s_objId = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, targetUsage, tw, th, 1);
+    s_objLight = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, tw, th, 1);
     s_depth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, s_depthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, tw, th, 1);
     s_tags = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER, w, h, 1);
     s_tagScratch = (float *)malloc((size_t)w * h * sizeof(float));
     s_tagUpload = (float *)malloc((size_t)w * h * sizeof(float));
-    if (!s_objColor || !s_objId || !s_depth || !s_tags || !s_tagScratch || !s_tagUpload) {
+    if (!s_objColor || !s_objId || !s_objLight || !s_depth || !s_tags || !s_tagScratch || !s_tagUpload) {
         ReleaseFrameResources();
         return false;
     }
 
-    SDL_GPUTextureSamplerBinding bindings[3];
+    SDL_GPUTextureSamplerBinding bindings[4];
     bindings[0].texture = s_objColor;
     bindings[0].sampler = s_linear;
     bindings[1].texture = s_objId;
     bindings[1].sampler = s_nearest;
     bindings[2].texture = s_tags;
     bindings[2].sampler = s_nearest;
+    bindings[3].texture = s_objLight;
+    bindings[3].sampler = s_nearest;
 
     SDL_GPURenderStateCreateInfo stateInfo;
     SDL_zero(stateInfo);
     stateInfo.fragment_shader = s_compositeFrag;
-    stateInfo.num_sampler_bindings = 3;
+    stateInfo.num_sampler_bindings = 4;
     stateInfo.sampler_bindings = bindings;
     s_composite = SDL_CreateGPURenderState(s_renderer, &stateInfo);
     if (s_composite == NULL) {
@@ -244,15 +252,18 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     }
 
     const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[2];
+    float params[4];
     params[0] = (debug != NULL) ? (float)SDL_atoi(debug) : 0.0f;
     params[1] = s_supersample ? 1.0f : 0.0f;
+    params[2] = s_upscale ? 1.0f : 0.0f;
+    params[3] = 0.0f;
     SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params));
 
     s_frameW = w;
     s_frameH = h;
     s_targetW = tw;
     s_targetH = th;
+    s_tagsCleared = false;
     return true;
 }
 
@@ -300,9 +311,9 @@ static bool EnsureVertexBuffer(U32 size) {
 
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1);
+    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 2);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
-    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1);
+    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 5, 1);
     if (!s_objVert || !s_objFrag || !s_compositeFrag) {
         return false;
     }
@@ -337,10 +348,11 @@ static bool CreatePipeline(void) {
         attributes[i].offset = i * sizeof(float) * 4;
     }
 
-    SDL_GPUColorTargetDescription targets[2];
+    SDL_GPUColorTargetDescription targets[3];
     SDL_zero(targets);
     targets[0].format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
     targets[1].format = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
+    targets[2].format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
     SDL_GPUGraphicsPipelineCreateInfo info;
     SDL_zero(info);
@@ -359,7 +371,7 @@ static bool CreatePipeline(void) {
     info.depth_stencil_state.enable_depth_test = true;
     info.depth_stencil_state.enable_depth_write = true;
     info.target_info.color_target_descriptions = targets;
-    info.target_info.num_color_targets = 2;
+    info.target_info.num_color_targets = 3;
     info.target_info.depth_stencil_format = s_depthFormat;
     info.target_info.has_depth_stencil_target = true;
 
@@ -575,11 +587,12 @@ static void UploadVertices(SDL_GPUCopyPass *pass, const T_GPUOBJ_DRAW *const *dr
 
 static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *draws, const T_DRAW_UNIFORMS *uniforms,
                         U32 count) {
-    SDL_GPUColorTargetInfo colors[2];
+    SDL_GPUColorTargetInfo colors[3];
     SDL_zero(colors);
     colors[0].texture = s_objColor;
     colors[1].texture = s_objId;
-    for (int i = 0; i < 2; i++) {
+    colors[2].texture = s_objLight;
+    for (int i = 0; i < 3; i++) {
         colors[i].load_op = SDL_GPU_LOADOP_CLEAR;
         colors[i].store_op = SDL_GPU_STOREOP_STORE;
         colors[i].cycle = true;
@@ -595,7 +608,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     depth.cycle = true;
 
-    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, colors, 2, &depth);
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, colors, 3, &depth);
     if (pass == NULL) {
         return;
     }
@@ -617,6 +630,17 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     samplers[3].texture = s_atlas;
     samplers[3].sampler = s_nearest;
     SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
+
+    /* std140: 16 position/radius vec4, 16 colour/intensity vec4, count. */
+    float lights[GPUOBJ_MAX_LIGHTS * 8 + 4];
+    SDL_zeroa(lights);
+    const U32 nbLights = GpuObjLightsEnabled ? GpuObjNbLights : 0;
+    for (U32 l = 0; l < nbLights; l++) {
+        memcpy(lights + l * 4, GpuObjLights[l].Pos, sizeof(float) * 4);
+        memcpy(lights + GPUOBJ_MAX_LIGHTS * 4 + l * 4, GpuObjLights[l].Color, sizeof(float) * 4);
+    }
+    lights[GPUOBJ_MAX_LIGHTS * 8] = (float)nbLights;
+    SDL_PushGPUFragmentUniformData(cmd, 1, lights, sizeof(lights));
 
     U32 first = 0;
     S32 slice = -1;
@@ -724,38 +748,47 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     S32 box[4];
     U32 liveCount = GpuObj_BuildPresent(s_tagScratch, &live, box);
     Uint64 t1 = SDL_GetPerformanceCounter();
-    if (liveCount == 0) {
-        return false;
-    }
 
     static const T_GPUOBJ_DRAW *kept[8192];
     static T_DRAW_UNIFORMS uniforms[8192];
     U32 vertexBytes = 0;
-    U32 count = ResolveDraws(live, liveCount, kept, uniforms, &vertexBytes);
-    if (count == 0 || vertexBytes == 0) {
+    U32 count = liveCount > 0 ? ResolveDraws(live, liveCount, kept, uniforms, &vertexBytes) : 0;
+    if (count == 0) {
+        vertexBytes = 0;
+        memset(box, 0, sizeof(box));
+    }
+
+    /* With nothing to draw the composite is still worth it when the frame is
+       upscaled: the pixel art filter runs there. */
+    const bool boxEmpty = box[2] <= box[0] || box[3] <= box[1];
+    const bool lastEmpty = s_tagBox[2] <= s_tagBox[0] || s_tagBox[3] <= s_tagBox[1];
+    if (count == 0 && !s_upscale && lastEmpty && s_tagsCleared) {
         return false;
     }
 
     /* Upload the union of this box and the last one, so ids left from the
-       previous present outside the new box are cleared. The texture starts
-       zeroed only by this rule: a fresh texture takes the whole frame. */
-    S32 up[4];
-    if (s_tagBox[2] <= s_tagBox[0] || s_tagBox[3] <= s_tagBox[1]) {
-        up[0] = 0;
-        up[1] = 0;
+       previous present outside the new box are cleared. A texture of unknown
+       contents takes the whole frame. */
+    S32 up[4] = {0, 0, 0, 0};
+    if (!s_tagsCleared) {
         up[2] = (S32)w;
         up[3] = (S32)h;
+    } else if (boxEmpty) {
+        memcpy(up, s_tagBox, sizeof(up));
+    } else if (lastEmpty) {
+        memcpy(up, box, sizeof(up));
     } else {
         up[0] = SDL_min(box[0], s_tagBox[0]);
         up[1] = SDL_min(box[1], s_tagBox[1]);
         up[2] = SDL_max(box[2], s_tagBox[2]);
         up[3] = SDL_max(box[3], s_tagBox[3]);
     }
+    s_tagsCleared = true;
     U32 upW = (U32)(up[2] - up[0]);
     U32 upH = (U32)(up[3] - up[1]);
     for (S32 y = up[1]; y < up[3]; y++) {
         float *dst = s_tagUpload + (size_t)(y - up[1]) * upW;
-        if (y < box[1] || y >= box[3]) {
+        if (boxEmpty || y < box[1] || y >= box[3]) {
             memset(dst, 0, upW * sizeof(float));
             continue;
         }
@@ -781,7 +814,7 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     if (cmd == NULL) {
         return false;
     }
-    if (!EnsureTransfer(need) || !EnsureVertexBuffer(vertexBytes)) {
+    if (!EnsureTransfer(need) || (vertexBytes > 0 && !EnsureVertexBuffer(vertexBytes))) {
         SDL_CancelGPUCommandBuffer(cmd);
         return false;
     }
@@ -806,12 +839,18 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         UploadTexture(copy, s_atlas, 0, 0, 0, GPUOBJ_ATLAS_SIZE, GPUOBJ_ATLAS_SIZE, GpuObjAtlas, atlasBytes);
         GpuObjAtlasDirty = FALSE;
     }
-    UploadVertices(copy, kept, count, vertexBytes);
-    UploadTexture(copy, s_tags, 0, (U32)up[0], (U32)up[1], upW, upH, s_tagUpload, tagBytes);
+    if (vertexBytes > 0) {
+        UploadVertices(copy, kept, count, vertexBytes);
+    }
+    if (upW > 0 && upH > 0) {
+        UploadTexture(copy, s_tags, 0, (U32)up[0], (U32)up[1], upW, upH, s_tagUpload, tagBytes);
+    }
     SDL_EndGPUCopyPass(copy);
 
     Uint64 t2 = SDL_GetPerformanceCounter();
-    RenderDraws(cmd, kept, uniforms, count);
+    if (count > 0) {
+        RenderDraws(cmd, kept, uniforms, count);
+    }
     SDL_SubmitGPUCommandBuffer(cmd);
     Uint64 t3 = SDL_GetPerformanceCounter();
 

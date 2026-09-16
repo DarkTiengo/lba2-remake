@@ -18,6 +18,9 @@ S32 GpuObjAvailable = FALSE;
 T_GPUOBJ_VERTEX *GpuObjVerts = NULL;
 U32 GpuObjTargetHintW = 0;
 U8 *GpuObjAtlas = NULL;
+T_GPUOBJ_LIGHT GpuObjLights[GPUOBJ_MAX_LIGHTS];
+U32 GpuObjNbLights = 0;
+S32 GpuObjLightsEnabled = TRUE;
 S32 GpuObjAtlasDirty = FALSE;
 U32 GpuObjTargetHintH = 0;
 
@@ -352,6 +355,25 @@ void GpuObj_EndDraw(void) {
         return;
     }
     Tag(id);
+}
+
+void GpuObj_ClearLights(void) {
+    GpuObjNbLights = 0;
+}
+
+void GpuObj_AddLight(float x, float y, float z, float radius, float r, float g, float b, float intensity) {
+    if (!GpuObjLightsEnabled || GpuObjNbLights >= GPUOBJ_MAX_LIGHTS || radius <= 0.0f || intensity <= 0.0f) {
+        return;
+    }
+    T_GPUOBJ_LIGHT *light = &GpuObjLights[GpuObjNbLights++];
+    light->Pos[0] = x;
+    light->Pos[1] = y;
+    light->Pos[2] = z;
+    light->Pos[3] = radius;
+    light->Color[0] = r;
+    light->Color[1] = g;
+    light->Color[2] = b;
+    light->Color[3] = intensity;
 }
 
 U8 *GpuObj_AtlasReset(void) {
