@@ -29,6 +29,11 @@ void main() {
     float tag = texelFetch(u_tags, tp, 0).r;
     float id = texelFetch(u_objId, p, 0).r;
 
+    /* LBA2_GPU_DEBUG=2: the GPU image alone, wherever it drew. */
+    if (debugTint > 1.5) {
+        o_color = id > 0.0 ? vec4(texelFetch(u_objColor, p, 0).rgb, 1.0) : vec4(1.0, 0.0, 1.0, 1.0);
+        return;
+    }
     if (tag > 0.0 && abs(tag - id) < 0.5) {
         /* Colour is cleared to alpha 0 where no body is drawn, so a filtered
            read divided by its alpha averages only body texels at the edge. */
@@ -39,7 +44,7 @@ void main() {
         } else {
             gpu = texelFetch(u_objColor, p, 0).rgb;
         }
-        gpu = mix(gpu, vec3(0.0, 1.0, 0.0), debugTint * 0.5);
+        gpu = mix(gpu, vec3(0.0, 1.0, 0.0), min(debugTint, 1.0) * 0.5);
         o_color = vec4(gpu, frame.a);
     } else {
         o_color = frame;

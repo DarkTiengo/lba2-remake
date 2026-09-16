@@ -49,6 +49,8 @@ static U32 s_nbDraws = 0;
 static U32 s_nbVerts = 0;
 static S32 s_drawOpen = FALSE;
 static U32 s_nextId = 1;
+static S32 s_groupOpen = FALSE;
+static U32 s_groupId = 0;
 
 // --- Private functions -------------------------------------------------------
 static void FreePlane(T_PLANE *plane) {
@@ -147,21 +149,30 @@ static S32 ClipBoxToPlanes(S32 *x0, S32 *y0, S32 *x1, S32 *y1) {
     return (*x1 > *x0) && (*y1 > *y0);
 }
 
+/* First draw carrying id (a group's draws share one), -1 if none. */
 static S32 FindDraw(U32 id) {
     S32 lo = 0;
     S32 hi = (S32)s_nbDraws - 1;
+    S32 found = -1;
     while (lo <= hi) {
         S32 mid = (lo + hi) / 2;
-        if (s_draws[mid].Id == id) {
-            return mid;
-        }
-        if (s_draws[mid].Id < id) {
-            lo = mid + 1;
-        } else {
+        if (s_draws[mid].Id >= id) {
+            if (s_draws[mid].Id == id) {
+                found = mid;
+            }
             hi = mid - 1;
+        } else {
+            lo = mid + 1;
         }
     }
-    return -1;
+    return found;
+}
+
+static void MarkDrawsLive(S32 first) {
+    const U32 id = s_draws[first].Id;
+    for (U32 i = (U32)first; i < s_nbDraws && s_draws[i].Id == id; i++) {
+        s_live[i] = 1;
+    }
 }
 
 /* Marks in s_live every draw a tag of the plane references. */
@@ -180,7 +191,7 @@ static void MarkLive(const T_PLANE *plane) {
             lastId = id;
             S32 index = FindDraw(id);
             if (index >= 0) {
-                s_live[index] = 1;
+                MarkDrawsLive(index);
             }
         }
     }
@@ -194,6 +205,13 @@ static void Compact(void) {
     }
     if (s_drawOpen && s_nbDraws > 0) {
         s_live[s_nbDraws - 1] = 1;
+    }
+    if (s_groupOpen) {
+        for (U32 i = 0; i < s_nbDraws; i++) {
+            if (s_draws[i].Id == s_groupId) {
+                s_live[i] = 1;
+            }
+        }
     }
 
     U32 keptDraws = 0;
@@ -235,6 +253,8 @@ S32 GpuObj_Active(void) {
     return GpuObjAvailable && GpuObjEnabled && Log != NULL;
 }
 
+static void Tag(U32 id);
+
 T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     if (s_drawOpen) {
         return NULL;
@@ -257,7 +277,7 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
 
     T_GPUOBJ_DRAW *draw = &s_draws[s_nbDraws++];
     memset(draw, 0, sizeof(*draw) - sizeof(draw->Logical));
-    draw->Id = s_nextId++;
+    draw->Id = s_groupOpen ? s_groupId : s_nextId++;
     draw->First = s_nbVerts;
     s_drawOpen = TRUE;
     return draw;
@@ -280,6 +300,9 @@ T_GPUOBJ_VERTEX *GpuObj_AllocVerts(U32 n) {
 }
 
 void GpuObj_SnapshotBegin(S32 x0, S32 y0, S32 x1, S32 y1) {
+    if (s_groupOpen) {
+        return; /* the group's own snapshot covers it */
+    }
     s_snapValid = FALSE;
     if (!EnsurePlanes()) {
         return;
@@ -321,9 +344,78 @@ void GpuObj_EndDraw(void) {
         }
     }
 
-    if (!s_snapValid) {
+    if (s_groupOpen || !s_snapValid) {
         return;
     }
+    Tag(id);
+}
+
+void GpuObj_BeginGroup(void) {
+    if (s_groupOpen || s_drawOpen) {
+        return;
+    }
+    if (s_nextId >= GPUOBJ_MAX_IDS) {
+        ResetAll();
+    }
+    GpuObj_SnapshotBegin(0, 0, (S32)ModeDesiredX, (S32)ModeDesiredY);
+    s_groupId = s_nextId++;
+    s_groupOpen = TRUE;
+
+    /* A group opens on a freshly cleared frame. The clear wrote Log directly,
+       so drop the tags it made stale: a pixel the group leaves at the clear
+       colour must not keep pointing at the previous frame's scenery. */
+    if (s_snapValid) {
+        T_PLANE *plane = PlaneOf(Log, FALSE);
+        if (plane != NULL && plane->AnyTag) {
+            for (S32 y = s_snapY0; y < s_snapY1; y++) {
+                memset(plane->Tag + (size_t)y * s_planeW + s_snapX0, 0, (size_t)(s_snapX1 - s_snapX0) * sizeof(U32));
+            }
+        }
+    }
+}
+
+void GpuObj_EndGroup(void) {
+    if (!s_groupOpen) {
+        return;
+    }
+    s_groupOpen = FALSE;
+
+    S32 any = FALSE;
+    for (U32 i = 0; i < s_nbDraws; i++) {
+        if (s_draws[i].Id == s_groupId) {
+            any = TRUE;
+            break;
+        }
+    }
+    if (s_snapValid) {
+        Tag(any ? s_groupId : 0);
+    }
+}
+
+void GpuObj_RefreshTags(S32 x0, S32 y0, S32 x1, S32 y1) {
+    T_PLANE *plane = PlaneOf(Log, FALSE);
+    if (plane == NULL || !plane->AnyTag) {
+        return;
+    }
+    x1++;
+    y1++;
+    if (!ClipBoxToPlanes(&x0, &y0, &x1, &y1)) {
+        return;
+    }
+    const U8 *log = (const U8 *)Log;
+    for (S32 y = y0; y < y1; y++) {
+        size_t row = (size_t)y * s_planeW;
+        for (S32 x = x0; x < x1; x++) {
+            if (plane->Tag[row + x] != 0) {
+                plane->Snap[row + x] = log[row + x];
+            }
+        }
+    }
+}
+
+/* Tags every pixel that changed since the snapshot with id, 0 for a body the
+   GPU could not take. */
+static void Tag(U32 id) {
     s_snapValid = FALSE;
 
     T_PLANE *plane = PlaneOf(Log, TRUE);
@@ -469,7 +561,7 @@ U32 GpuObj_BuildPresent(float *out, const T_GPUOBJ_DRAW *const **draws, S32 *box
                 lastId = id;
                 lastIndex = FindDraw(id);
                 if (lastIndex >= 0) {
-                    s_live[lastIndex] = 1;
+                    MarkDrawsLive(lastIndex);
                 }
             }
             dst[x] = lastIndex >= 0 ? (float)id : 0.0f;

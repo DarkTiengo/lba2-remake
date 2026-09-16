@@ -28,7 +28,7 @@ extern "C" {
 #endif
 
 // -----------------------------------------------------------------------------
-#define GPUOBJ_MAX_VERTS (1u << 18) ///< cached vertices across live draws (about 24 MB)
+#define GPUOBJ_MAX_VERTS (1u << 20) ///< cached vertices across live draws (about 96 MB)
 #define GPUOBJ_MAX_IDS (1u << 24)   ///< ids are exact in a float32 target
 #define GPUOBJ_SLICES 4096.0f       ///< depth slices ordering draws
 
@@ -39,9 +39,11 @@ extern "C" {
 #define GPUOBJ_MODE_TEX 3       ///< palette[texel]
 #define GPUOBJ_MODE_TEXSHADED 4 ///< CLUT[shade][texel]
 #define GPUOBJ_MODE_DISC 5      ///< Sphere: palette[color] inside the unit disc
+#define GPUOBJ_MODE_CLUT 6      ///< CLUT[shade][color]: the terrain's Gouraud table fill
 
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
+#define GPUOBJ_FLAG_BAKED 4     ///< shade comes from normal.w as authored, not from lighting
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
 typedef struct {
@@ -62,6 +64,9 @@ typedef struct {
     U8 *Page;           ///< texture page, NULL when untextured
     U8 *Clut;           ///< 16x256 Gouraud CLUT, NULL when unused
     S32 HasLogical;     ///< Logical holds the fog remap
+    S32 FogStart;       ///< distance fog in view depth; FogEnd <= FogStart disables it
+    S32 FogEnd;
+    S32 FogColor; ///< palette index the fog fades to
     U8 Logical[256];
 } T_GPUOBJ_DRAW;
 
@@ -93,6 +98,17 @@ T_GPUOBJ_VERTEX *GpuObj_AllocVerts(U32 n);
  *  draw and tag every pixel it changed. The box is clipped to the clip window. */
 void GpuObj_SnapshotBegin(S32 x0, S32 y0, S32 x1, S32 y1);
 void GpuObj_EndDraw(void);
+
+/** A group gathers every draw opened until EndGroup under one id and tags the
+ *  frame once at the end: the exterior scenery (terrain, sea, sky, decors) is
+ *  hundreds of fills that depth-test one another, far cheaper to diff once.
+ *  Draws inside a group take no snapshot of their own. */
+void GpuObj_BeginGroup(void);
+void GpuObj_EndGroup(void);
+
+/** The pixels of the box were redrawn with the same geometry (animated water):
+ *  keep their tags and take the new palette indices as what they show. */
+void GpuObj_RefreshTags(S32 x0, S32 y0, S32 x1, S32 y1);
 
 // --- Pixel copies between frame buffers --------------------------------------
 /** Box [x0,x1) x [y0,y1) copied from src to dst at the same place. */

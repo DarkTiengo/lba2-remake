@@ -19,9 +19,13 @@ layout(set = 2, binding = 2) uniform sampler2DArray u_pages; // 256x256xN R8 tex
 
 layout(set = 3, binding = 0) uniform Draw {
     float drawId;
-    float lutRow;  // fog remap row, -1 when none
-    float clutRow; // first row of the 16-row Gouraud CLUT
-    float page;    // texture page layer
+    float lutRow;   // fog remap row, -1 when none
+    float clutRow;  // first row of the 16-row Gouraud CLUT
+    float page;     // texture page layer
+    float fogStart; // view depth where distance fog begins
+    float fogEnd;   // and where it is total; <= fogStart disables it
+    float fogColor; // palette index fog fades to
+    float pad;
 };
 
 const int MODE_PASS = 0;
@@ -30,12 +34,20 @@ const int MODE_SHADED = 2;
 const int MODE_TEX = 3;
 const int MODE_TEXSHADED = 4;
 const int MODE_DISC = 5;
+const int MODE_CLUT = 6;
 
 const int FLAG_CHROMAKEY = 1;
 const int FLAG_ISO = 2;
+const int FLAG_BAKED = 4;
 
 vec3 Pal(int i) {
     return texelFetch(u_palette, ivec2(i & 255, 0), 0).rgb;
+}
+
+/* Flags ride in an interpolated attribute, so a constant 4 can arrive as
+   3.9999: round, never truncate. */
+int Flags() {
+    return int(floor(v_vpos.w + 0.5));
 }
 
 int Lut(int row, int i) {
@@ -55,12 +67,17 @@ int Texel(int u, int v) {
 }
 
 float ShadeValue(out float spec) {
+    if ((Flags() & FLAG_BAKED) != 0) {
+        /* Authored intensity, interpolated across the polygon. */
+        spec = 0.0;
+        return clamp(v_normal.w, 0.0, 15.0);
+    }
     vec3 n = normalize(v_normal.xyz);
     vec3 l = normalize(v_light.xyz);
     float ndl = dot(n, l);
 
     vec3 view;
-    if ((int(v_vpos.w) & FLAG_ISO) != 0) {
+    if ((Flags() & FLAG_ISO) != 0) {
         view = normalize(vec3(1.0, 0.8, 1.0));
     } else {
         view = normalize(-v_vpos.xyz);
@@ -81,7 +98,7 @@ vec3 Ramp(int base, float shade) {
 }
 
 vec4 TexColor(int texel, float shade, bool shaded, int clut) {
-    if ((int(v_vpos.w) & FLAG_CHROMAKEY) != 0 && texel == 0) {
+    if ((Flags() & FLAG_CHROMAKEY) != 0 && texel == 0) {
         return vec4(0.0);
     }
     if (!shaded) {
@@ -135,11 +152,23 @@ void main() {
         float shade = ShadeValue(spec);
         color = Textured(shade, true).rgb;
         color += spec * 0.25 * color;
+    } else if (mode == MODE_CLUT) {
+        /* Gouraud table fill: the CLUT row is the shade, the column the colour. */
+        float shade = ShadeValue(spec);
+        int row = int(floor(shade));
+        int rowA = int(clutRow) + min(row, 15);
+        int rowB = int(clutRow) + min(row + 1, 15);
+        color = mix(Pal(Lut(rowA, base)), Pal(Lut(rowB, base)), fract(shade));
     } else {
         if (dot(v_uv.zw, v_uv.zw) > 1.0) {
             discard;
         }
         color = Pal(Logical(base));
+    }
+
+    if (fogEnd > fogStart) {
+        float f = clamp((-v_vpos.z - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+        color = mix(color, Pal(int(fogColor)), f);
     }
 
     o_color = vec4(clamp(color, 0.0, 1.0), 1.0);

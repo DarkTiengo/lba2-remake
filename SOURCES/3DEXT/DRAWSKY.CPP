@@ -50,6 +50,8 @@ void DrawSky(S32 y) {
     src[3].V_MapU = 127 * 256 + 255;
     src[3].V_MapV = 0;
 
+    TerrainGpu_BeginPlane(SkySeaTexture, 128, 0x7F7F, StartZFog, ClipZFar, FogCoul);
+
     zz = -WORLD_SIZE;
     for (i = 0; i < NB_POLYS_COTE * 3; i++, zz += WORLD_SIZE / NB_POLYS_COTE) {
         xx = -WORLD_SIZE;
@@ -74,9 +76,12 @@ void DrawSky(S32 y) {
             src[3].V_Y0 = Y0 - CameraYr;
             src[3].V_Z0 = CameraZr - Z0;
 
+            TerrainGpu_Quad(src);
             Draw_Poly(&src[0], 24);
         }
     }
+
+    TerrainGpu_End();
 }
 
 void DrawOneSea(S32 y) // Si on souhaite que l'eau ne soit pas au niveau 0 :)
@@ -100,6 +105,8 @@ void DrawOneSea(S32 y) // Si on souhaite que l'eau ne soit pas au niveau 0 :)
     src[2].V_MapV = 127 * 256 + 255; // yt2
     src[3].V_MapU = 127 * 256 + 255; // xt3
     src[3].V_MapV = 0;               // yt3
+
+    TerrainGpu_BeginPlane(SkySeaTexture, 0, 0x7F7F, StartZFog, ClipZFar, FogCoul);
 
     zz = 0;
     for (i = 0; i < NB_POLYS_COTE; i++, zz += WORLD_SIZE / NB_POLYS_COTE) {
@@ -126,6 +133,7 @@ void DrawOneSea(S32 y) // Si on souhaite que l'eau ne soit pas au niveau 0 :)
                 src[3].V_Y0 = Y0 - CameraYr;
                 src[3].V_Z0 = CameraZr - Z0;
 
+                TerrainGpu_Quad(src);
                 Draw_Poly(src, 24);
             } else {
                 // poly noir ?
@@ -155,4 +163,6 @@ void DrawOneSea(S32 y) // Si on souhaite que l'eau ne soit pas au niveau 0 :)
             b++;
         }
     }
+
+    TerrainGpu_End();
 }

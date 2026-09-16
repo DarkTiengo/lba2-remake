@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SYSTEM/ADELINE_TYPES.H>
+#include <SVGA/GPUOBJ.H>
 
 /*
  * Capture of 3D bodies for the GPU object layer (SVGA/GPUOBJ.H), called from
@@ -24,6 +25,12 @@ void AffGpu_Entity(U32 type, void *poly);
 
 /** After the last entity: closes the draw and tags the pixels it wrote. */
 void AffGpu_End(void);
+
+/** A vertex of perspective scenery given in camera space (x right, y down,
+ *  depth forward, the units LongProjectPoint uses), for geometry drawn outside
+ *  the body display: terrain, sea, sky. Light, normal and material are left to
+ *  the caller. */
+void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth);
 
 #ifdef __cplusplus
 }

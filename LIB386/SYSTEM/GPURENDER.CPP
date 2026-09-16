@@ -91,6 +91,10 @@ typedef struct {
     float LutRow;
     float ClutRow;
     float Page;
+    float FogStart;
+    float FogEnd;
+    float FogColor;
+    float Pad;
 } T_DRAW_UNIFORMS;
 
 static U8 s_lutData[LUT_ROWS * 256];
@@ -239,7 +243,7 @@ static bool EnsureFrameResources(U32 w, U32 h) {
 
     const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
     float params[2];
-    params[0] = (debug != NULL && SDL_atoi(debug) != 0) ? 1.0f : 0.0f;
+    params[0] = (debug != NULL) ? (float)SDL_atoi(debug) : 0.0f;
     params[1] = s_supersample ? 1.0f : 0.0f;
     SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params));
 
@@ -499,6 +503,10 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
         u.LutRow = -1.0f;
         u.ClutRow = 0.0f;
         u.Page = 0.0f;
+        u.FogStart = (float)draw->FogStart;
+        u.FogEnd = (float)draw->FogEnd;
+        u.FogColor = (float)(draw->FogColor & 0xFF);
+        u.Pad = 0.0f;
         if (draw->HasLogical) {
             S32 row = LutRows(draw->Logical, 1);
             if (row < 0) {

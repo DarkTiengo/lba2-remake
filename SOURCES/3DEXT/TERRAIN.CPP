@@ -2,6 +2,8 @@
 #include "../PERSO.H"
 
 #include <SVGA/SCREEN.H>
+#include <SVGA/GPUOBJ.H> /* GpuObj_RefreshTags */
+#include "TERRAIN_GPU.H"
 
 #define LIMITE_LOIN (60 * 1024)
 #define COLOR_LIMITE 255
@@ -183,6 +185,11 @@ if (ptrh->Sens == 0) {
                     color += ((i0 + i1 + i2) * 21845) >> 24; // *21845 >> 16 EQU / 3
                 }
 
+                {
+                    static const U8 gpuCorners[3] = {0, 1, 2};
+                    const S32 gpuLights[3] = {i0, i1, i2};
+                    TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag], color, NULL);
+                }
                 Fill_Poly(ListTypePolygone[ptrh->PolyFlag],
                           color, 3,
                           Tab_Points);
@@ -206,6 +213,12 @@ if (ptrh->Sens == 0) {
 
                 type = (U8)ListTypePTexture[ptrh->TexFlag + (ptrh->PolyFlag << 2)];
 
+                {
+                    static const U8 gpuCorners[3] = {0, 1, 2};
+                    const S32 gpuLights[3] = {i0, i1, i2};
+                    const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
+                    TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv);
+                }
                 if (Fill_Poly(type, color, 3, Tab_Points)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
 
@@ -267,6 +280,11 @@ if (ptrh->Sens == 0) {
                 if (ptrh->PolyFlag == 1) {
                     color += ((i0 + i2 + i3) * 21845) >> 24; // *21845 >> 16 EQU / 3
                 }
+                {
+                    static const U8 gpuCorners[3] = {2, 3, 0};
+                    const S32 gpuLights[3] = {i2, i3, i0};
+                    TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag], color, NULL);
+                }
                 Fill_Poly(ListTypePolygone[ptrh->PolyFlag],
                           color, 3,
                           Tab_Points);
@@ -290,6 +308,12 @@ if (ptrh->Sens == 0) {
 
                 type = (U8)ListTypePTexture[ptrh->TexFlag + (ptrh->PolyFlag << 2)];
 
+                {
+                    static const U8 gpuCorners[3] = {2, 3, 0};
+                    const S32 gpuLights[3] = {i2, i3, i0};
+                    const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
+                    TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv);
+                }
                 if (Fill_Poly(type, color, 3, Tab_Points)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
                         if (NbAniPoly < MaxPolySea - 1) {
@@ -350,6 +374,11 @@ if (ptrh->Sens == 0) {
                 if (ptrh->PolyFlag == 1) {
                     color += ((i0 + i1 + i3) * 21845) >> 24; // *21845 >> 16 EQU / 3
                 }
+                {
+                    static const U8 gpuCorners[3] = {3, 0, 1};
+                    const S32 gpuLights[3] = {i3, i0, i1};
+                    TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag], color, NULL);
+                }
                 Fill_Poly(ListTypePolygone[ptrh->PolyFlag],
                           color, 3,
                           Tab_Points);
@@ -373,6 +402,12 @@ if (ptrh->Sens == 0) {
 
                 type = (U8)ListTypePTexture[ptrh->TexFlag + (ptrh->PolyFlag << 2)];
 
+                {
+                    static const U8 gpuCorners[3] = {3, 0, 1};
+                    const S32 gpuLights[3] = {i3, i0, i1};
+                    const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
+                    TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv);
+                }
                 if (Fill_Poly(type, color, 3, Tab_Points)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
                         if (NbAniPoly < MaxPolySea - 1) {
@@ -434,6 +469,11 @@ if (ptrh->Sens == 0) {
                     color += ((i1 + i2 + i3) * 21845) >> 24; // *21845 >> 16 EQU / 3
                 }
 
+                {
+                    static const U8 gpuCorners[3] = {1, 2, 3};
+                    const S32 gpuLights[3] = {i1, i2, i3};
+                    TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag], color, NULL);
+                }
                 Fill_Poly(ListTypePolygone[ptrh->PolyFlag],
                           color, 3,
                           Tab_Points);
@@ -457,6 +497,12 @@ if (ptrh->Sens == 0) {
 
                 type = (U8)ListTypePTexture[ptrh->TexFlag + (ptrh->PolyFlag << 2)];
 
+                {
+                    static const U8 gpuCorners[3] = {1, 2, 3};
+                    const S32 gpuLights[3] = {i1, i2, i3};
+                    const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
+                    TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv);
+                }
                 if (Fill_Poly(type, color, 3, Tab_Points)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
                         if (NbAniPoly < MaxPolySea - 1) {
@@ -844,6 +890,11 @@ void AffichageTerrainZBuf(void) {
     PtrMap = GroundTexture;
     RepMask = 0xFFFF;
 
+    /* The GPU draws the cube unfogged (its CLUT at the normal level) and fogs
+       by distance itself. */
+    TerrainGpu_BeginCube(MapSommetY, GroundTexture, PtrCLUTFog + ((PalLevel << 8) & 0xF000), StartZFog, ClipZFar,
+                         FogCoul);
+
     ptra = &SommetAffichable[0][0];
     ptrs = &SommetRot[0][0];
 
@@ -873,6 +924,8 @@ void AffichageTerrainZBuf(void) {
         ptra++;
         ptrs++;
     }
+
+    TerrainGpu_End();
 
     DrawOneSea(Y_SEA);
 
@@ -1081,6 +1134,10 @@ void DrawAnimatedPolys() {
             SetCLUT(ptr->Fog);
 
             Fill_Poly(ptr->Type, ptr->Color, 3, ptr->Tab_Points);
+
+            /* Same water triangle, next texture frame: the GPU reads the
+               animated page itself, so the pixels keep their tags. */
+            GpuObj_RefreshTags(ClipXMin, ClipYMin, ClipXMax, ClipYMax);
 
             BoxStaticAdd(ClipXMin, ClipYMin, ClipXMax, ClipYMax);
         }

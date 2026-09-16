@@ -339,6 +339,9 @@ void AffGrilleExt() {
 
     ClsTerrainZBuf();
 
+    /* Everything down to the copy into Screen is scenery: one GPU group. */
+    GpuObj_BeginGroup();
+
     ManageSystem(); // for streaming
 
 #ifdef LBA_EDITOR
@@ -363,6 +366,8 @@ void AffGrilleExt() {
     FiltreAnimatedPolys();
 
     Switch_Fillers(FILL_POLY_TEXTURES);
+
+    GpuObj_EndGroup();
 
     CopyScreen(Log, Screen);
 

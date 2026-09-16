@@ -27,7 +27,10 @@ extern "C" {
 #define SNAPSHOT_MARGIN 48
 
 /* Depth span of one body; beyond it depth only orders within the body. */
-#define PERSPECTIVE_DEPTH_RANGE 65536.0f
+/* Bodies and exterior scenery share one depth scale, since z-buffered decors
+   and terrain depth-test each other; the sky plane reaches about 70000 units. */
+#define PERSPECTIVE_DEPTH_RANGE 131072.0f
+#define SCENERY_DEPTH_RANGE PERSPECTIVE_DEPTH_RANGE
 #define ISO_DEPTH_RANGE 524288.0f
 
 typedef struct {
@@ -271,6 +274,24 @@ static void EnvMappedUv(U16 point, U16 scale, float uv[2]) {
 }
 
 // --- Interface ---------------------------------------------------------------
+void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth) {
+    memset(v, 0, sizeof(*v));
+    /* Homogeneous form of the engine projection, so a polygon crossing the
+       camera plane (the sky, the sea around the camera) is clipped by the GPU
+       instead of folding over: w = depth, x/w and y/w land where
+       LongProjectPoint would put them. */
+    const float w2 = 2.0f / (float)ModeDesiredX;
+    const float h2 = 2.0f / (float)ModeDesiredY;
+    v->clip[0] = ((float)XCentre * w2 - 1.0f) * depth + x * FRatioX * w2;
+    v->clip[1] = (1.0f - (float)YCentre * h2) * depth - y * FRatioX * FRatioY * h2;
+    v->clip[2] = (depth - (float)NearClip) / SCENERY_DEPTH_RANGE * 0.999f * depth;
+    v->clip[3] = depth;
+    v->vpos[0] = x;
+    v->vpos[1] = y;
+    v->vpos[2] = -depth;
+    v->normal[2] = 1.0f;
+}
+
 void AffGpu_SaveRotated(S32 nbPoints, S32 perGroup) {
     s_pending = GpuObj_Active();
     if (!s_pending) {
