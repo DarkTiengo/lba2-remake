@@ -44,6 +44,9 @@ void CopyVideoArea(void *dst, const void *src, const U32 tabOffDst[],
 
 void HandleEventsVideo(const void *event);
 
+/** The current palette as 256 ARGB entries (alpha always 0xFF). */
+const U32 *GetVideoPaletteLUT();
+
 /** Optional overlay: called after Log→ARGB conversion, before present. pitch = row stride in bytes; palette_rgb = 256*3 bytes (R,G,B per entry). */
 typedef void (*PrePresentFn)(U32 *frameBuffer, U32 pitch, U32 width, U32 height, const U8 *palette_rgb);
 void SetPrePresentCallback(PrePresentFn fn);

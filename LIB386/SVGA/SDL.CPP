@@ -1,6 +1,7 @@
 #include <SVGA/SDL.H>
 
 #include <SVGA/DIRTYBOX.H> // For BoxStaticAdd and BoxCleanClip
+#include <SVGA/GPUOBJ.H>
 #include <SVGA/SCREEN.H>   // For ModeDesiredX, ModeDesiredY and Log buffer
 #include <SVGA/STAGING_BUFFER.H>
 #include <SYSTEM/LOG.H>
@@ -226,6 +227,8 @@ void CopyVideoArea(void *dst, const void *src, const U32 tabOffDst[],
         return;
     }
 
+    GpuObj_OnCopyArea(dst, src, area->x0, area->y0, area->x1, area->y1);
+
     U8 *dstMem = (U8 *)dst;
     U8 *srcMem = (U8 *)src;
     U32 pitch = tabOffDst[1];
@@ -235,6 +238,10 @@ void CopyVideoArea(void *dst, const void *src, const U32 tabOffDst[],
         U8 *dstRow = dstMem + (y * pitch) + area->x0;
         memcpy(dstRow, srcRow, area->x1 - area->x0);
     }
+}
+
+const U32 *GetVideoPaletteLUT() {
+    return paletteLUT;
 }
 
 void SetPrePresentCallback(PrePresentFn fn) {

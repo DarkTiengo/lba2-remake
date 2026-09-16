@@ -34,6 +34,7 @@ not maintained tooling.
 | Script | What it does | Invoked by |
 |--------|--------------|------------|
 | [dev/build-and-run.sh](dev/build-and-run.sh) | Build and run `lba2cc` from any working directory; resolves repo root and game data. | `make run` |
+| [dev/build-gpu-shaders.sh](dev/build-gpu-shaders.sh) | Compile the GPU renderer's GLSL shaders in `LIB386/SYSTEM/SHADERS/` to SPIR-V and regenerate the committed `*.spv.h` headers (needs `glslc` and `xxd`). | manual ([GPU_RENDERER.md](../docs/GPU_RENDERER.md)) |
 | [dev/repo_root.sh](dev/repo_root.sh) | Print the absolute repository root (directory with the top-level `CMakeLists.txt`). | `Makefile` |
 | [dev/check-tooling.sh](dev/check-tooling.sh) | Probe the external tools the repo expects, tier by tier; non-zero only when the clone cannot build. Reads every version floor from the file that pins it. | `make check-tooling`, [TOOLING.md](../docs/TOOLING.md) |
 | [dev/build-android.sh](dev/build-android.sh) | Build the engine for Android (arm64-v8a default, armeabi-v7a via `--abi`). | manual ([ANDROID.md](../docs/ANDROID.md)) |

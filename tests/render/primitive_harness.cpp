@@ -8,6 +8,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #include "primitive_harness.h"
 
+#include <SVGA/SCREEN.H>
+
 #include <cstdio>
 
 // pol_work / svga data globals the primitives read or update.
@@ -18,6 +20,16 @@ S32 ScreenXMin, ScreenXMax, ScreenYMin, ScreenYMax;
 S32 ClipXMin, ClipXMax, ClipYMin, ClipYMax;
 S32 RepMask = 0;
 U8 *PtrMap = 0;
+
+// Read by the GPU object capture (AFF_GPU.CPP), which stays idle here: with no
+// Log it never captures, so the software primitives are what the tests see.
+U8 Fill_Flag_Fog = 0;
+U8 Fill_Logical_Palette[256];
+PTR_U8 PtrCLUTGouraud = 0;
+void *Log = 0;
+void *Screen = 0;
+U32 ModeDesiredX = 0;
+U32 ModeDesiredY = 0;
 
 SpyCapture g_spy;
 int g_failures = 0;

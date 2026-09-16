@@ -1,5 +1,7 @@
 #include <OBJECT/AFF_OBJ.H>
 
+#include <OBJECT/AFF_GPU.H>
+
 #include <SVGA/SCREENXY.H>
 #include <3D/CAMERA.H>
 #include <3D/PROJ.H>
@@ -1478,6 +1480,7 @@ S32 EntityCreation(T_BODY_HEADER *body) {
     // └─────────────────────────────────────────────────────────────────┘
 
     PtrTextures = (U32 *)((U8 *)lBody + lBody->OffTextures);
+    S32 gpuCapture = AffGpu_Begin();
     S32 *list = ListSort;
     S32 *polyInfo = ListSort + MAX_NB_POLYS;
     for (int i = 0; i < Nb_Sort; i++) {
@@ -1492,6 +1495,13 @@ S32 EntityCreation(T_BODY_HEADER *body) {
         void *poly = (void *)((U8 *)lBody + offset);
         Poly_Jump[type](type, poly);
         // @@Return_Display:
+        if (gpuCapture) {
+            AffGpu_Entity(type, poly);
+        }
+    }
+
+    if (gpuCapture) {
+        AffGpu_End();
     }
 
     return 1;
@@ -1673,6 +1683,8 @@ S32 ObjectDisplay(T_OBJ_3D *obj) {
     // *** PROJECTION ***
     // ******************
 
+    AffGpu_SaveRotated(lBody->NbPoints, TRUE);
+
     ProjectList(Obj_ListProjectedPoints, (TYPE_VT16 *)Obj_ListRotatedPoints,
                 lBody->NbPoints, -PosXWr, -PosYWr, -PosZWr);
 
@@ -1695,6 +1707,8 @@ S32 Return_BodyDisplay(TYPE_MAT *srcMatrix, TYPE_MAT *dstMatrix, S32 alpha, S32 
     T_BODY_HEADER *body = (T_BODY_HEADER *)obj;
     TYPE_VT16 *bodyPoints = (TYPE_VT16 *)((U8 *)body + body->OffPoints);
     RotTransList(TabMat, (TYPE_VT16 *)Obj_ListRotatedPoints, bodyPoints, body->NbPoints);
+
+    AffGpu_SaveRotated(body->NbPoints, FALSE);
 
     ProjectList(Obj_ListProjectedPoints, (TYPE_VT16 *)Obj_ListRotatedPoints,
                 lBody->NbPoints, -PosXWr, -PosYWr, -PosZWr);

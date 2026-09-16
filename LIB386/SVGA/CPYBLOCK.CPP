@@ -3,6 +3,7 @@
 #include <memory.h>
 
 #include <SVGA/CLIP.H>
+#include <SVGA/GPUOBJ.H>
 #include <SVGA/SCREEN.H>
 #include <SYSTEM/DEBUG_TRACES.H>
 
@@ -76,6 +77,8 @@ void CopyBlock(S32 x0, S32 y0, S32 x1, S32 y1, void *src, S32 xd, S32 yd,
     // Delta Y
     U32 deltaY = height + 1;
     U32 screenOffset = TabOffLine[1] - (width + 1);
+
+    GpuObj_OnCopyBlock(dst, src, x0, y0, xd, yd, (S32)deltaX, (S32)deltaY);
 
     do {
         memcpy(dstOffset, srcOffset, deltaX);

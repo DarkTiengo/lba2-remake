@@ -2,6 +2,7 @@
 
 #include <SYSTEM/ADELINE_TYPES.H>
 #include <SYSTEM/LIMITS.H>
+#include <SVGA/GPUOBJ.H>
 
 // -----------------------------------------------------------------------------
 #ifdef __cplusplus
@@ -23,7 +24,8 @@ void EndScreen();
 bool CreateScreenMemory(U32 resX, U32 resY);
 
 // -----------------------------------------------------------------------------
-#define CopyScreen(src, dst) FastCopy(dst, src, ModeDesiredX *ModeDesiredY)
+#define CopyScreen(src, dst) \
+    (FastCopy(dst, src, ModeDesiredX * ModeDesiredY), GpuObj_OnCopyArea(dst, src, 0, 0, ModeDesiredX, ModeDesiredY))
 
 // =============================================================================
 #ifdef __cplusplus

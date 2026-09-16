@@ -1,6 +1,7 @@
 #include <SYSTEM/WINDOW.H>
 
 #include <SYSTEM/ANDROID.H>
+#include <SYSTEM/GPURENDER.H>
 #include <SYSTEM/LOG.H>
 #include <SYSTEM/LOGPRINT.H>
 
@@ -56,7 +57,11 @@ static void PresentCurrentTexture() {
 
     SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
     SDL_RenderClear(sdlRenderer);
+    bool gpuComposite = GpuRender_BeginComposite(sdlRenderer);
     SDL_RenderTexture(sdlRenderer, sdlTexture, NULL, NULL);
+    if (gpuComposite) {
+        GpuRender_EndComposite(sdlRenderer);
+    }
     SDL_RenderPresent(sdlRenderer);
 }
 
@@ -156,7 +161,12 @@ bool CreateWindowSurface(U32 resX, U32 resY, bool fullscreen) {
         windowFullscreenEnabled = false;
     }
 
-    sdlRenderer = SDL_CreateRenderer(sdlWindow, NULL);
+    if (GpuRender_Requested()) {
+        sdlRenderer = (SDL_Renderer *)GpuRender_CreateRenderer(sdlWindow);
+    }
+    if (sdlRenderer == NULL) {
+        sdlRenderer = SDL_CreateRenderer(sdlWindow, NULL);
+    }
     if (sdlRenderer == NULL) {
         const char *errorMsg = SDL_GetError();
         Log_Error("Unable to create SDL renderer.\n"
@@ -294,6 +304,7 @@ void DestroyWindowSurface() {
         sdlTexture = NULL;
     }
     if (sdlRenderer) {
+        GpuRender_Shutdown();
         SDL_DestroyRenderer(sdlRenderer);
         sdlRenderer = NULL;
     }
