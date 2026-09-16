@@ -29,7 +29,8 @@ extern "C" {
 
 // -----------------------------------------------------------------------------
 #define GPUOBJ_MAX_VERTS (1u << 20) ///< cached vertices across live draws (about 96 MB)
-#define GPUOBJ_MAX_IDS (1u << 24)   ///< ids are exact in a float32 target
+#define GPUOBJ_MAX_IDS (1u << 23)   ///< ids are exact in a float32 target, below GPUOBJ_SCENE_ID_BIT
+#define GPUOBJ_SCENE_ID_BIT (1u << 23) ///< added to the id the GPU sees for a scene draw
 #define GPUOBJ_SLICES 4096.0f       ///< depth slices ordering draws
 
 /* Fragment modes, read by GPUOBJ.frag. */
@@ -61,6 +62,7 @@ typedef struct {
     U32 Count;
     S32 X0, Y0, X1, Y1; ///< inclusive scissor (the software clip window)
     S32 ZBuffer;        ///< drawn in z-buffer mode: shares depth with its neighbours
+    S32 Scene;          ///< part of the perspective scene: depth-tests every other scene draw
     U8 *Page;           ///< texture page, NULL when untextured
     U8 *Clut;           ///< 16x256 Gouraud CLUT, NULL when unused
     S32 HasLogical;     ///< Logical holds the fog remap
@@ -105,6 +107,13 @@ void GpuObj_EndDraw(void);
  *  Draws inside a group take no snapshot of their own. */
 void GpuObj_BeginGroup(void);
 void GpuObj_EndGroup(void);
+
+/** Draws opened while set belong to the perspective scene (exterior scenery,
+ *  actors, extras). The GPU renders all scene draws against one real depth
+ *  buffer, and any pixel a scene draw tagged shows whichever scene surface is
+ *  nearest there, at the GPU's resolution; other draws (menu and inventory
+ *  models) stay in front of the scene in draw order and keep exact id matching. */
+void GpuObj_SetSceneDepth(S32 scene);
 
 /** The pixels of the box were redrawn with the same geometry (animated water):
  *  keep their tags and take the new palette indices as what they show. */

@@ -499,7 +499,7 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
     for (U32 i = 0; i < count; i++) {
         const T_GPUOBJ_DRAW *draw = draws[i];
         T_DRAW_UNIFORMS u;
-        u.Id = (float)draw->Id;
+        u.Id = (float)(draw->Scene ? (draw->Id | GPUOBJ_SCENE_ID_BIT) : draw->Id);
         u.LutRow = -1.0f;
         u.ClutRow = 0.0f;
         u.Page = 0.0f;
@@ -607,17 +607,24 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     for (U32 i = 0; i < count; i++) {
         const T_GPUOBJ_DRAW *draw = draws[i];
 
-        /* Software draws z-buffered bodies front to back and lets depth decide,
-           so a run of them shares one slice; any other body lands in front of
-           everything drawn before it. */
-        if (!(draw->ZBuffer && i > 0 && draws[i - 1]->ZBuffer)) {
-            slice++;
-        }
+        /* Scene draws share the back half of the depth range and test real
+           depth against each other. Every other draw is ordered as software
+           drew it: a run of z-buffered bodies (drawn front to back, depth
+           decides) shares a slice, any other body lands in front of everything
+           before it; all of them in the front half, over the scene. */
         float sliceUniform[2];
-        sliceUniform[1] = 1.0f / GPUOBJ_SLICES;
-        sliceUniform[0] = (GPUOBJ_SLICES - 1.0f - (float)slice) * sliceUniform[1];
-        if (sliceUniform[0] < 0.0f) {
-            sliceUniform[0] = 0.0f;
+        if (draw->Scene) {
+            sliceUniform[0] = 0.5f;
+            sliceUniform[1] = 0.5f;
+        } else {
+            if (!(draw->ZBuffer && i > 0 && draws[i - 1]->ZBuffer && !draws[i - 1]->Scene)) {
+                slice++;
+            }
+            sliceUniform[1] = 0.5f / GPUOBJ_SLICES;
+            sliceUniform[0] = (GPUOBJ_SLICES - 1.0f - (float)slice) * sliceUniform[1];
+            if (sliceUniform[0] < 0.0f) {
+                sliceUniform[0] = 0.0f;
+            }
         }
 
         /* The clip window is inclusive frame pixels; scale it to the target. */

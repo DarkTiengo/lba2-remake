@@ -51,6 +51,7 @@ static S32 s_drawOpen = FALSE;
 static U32 s_nextId = 1;
 static S32 s_groupOpen = FALSE;
 static U32 s_groupId = 0;
+static S32 s_sceneDepth = FALSE;
 
 // --- Private functions -------------------------------------------------------
 static void FreePlane(T_PLANE *plane) {
@@ -278,6 +279,7 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     T_GPUOBJ_DRAW *draw = &s_draws[s_nbDraws++];
     memset(draw, 0, sizeof(*draw) - sizeof(draw->Logical));
     draw->Id = s_groupOpen ? s_groupId : s_nextId++;
+    draw->Scene = s_sceneDepth;
     draw->First = s_nbVerts;
     s_drawOpen = TRUE;
     return draw;
@@ -348,6 +350,10 @@ void GpuObj_EndDraw(void) {
         return;
     }
     Tag(id);
+}
+
+void GpuObj_SetSceneDepth(S32 scene) {
+    s_sceneDepth = scene;
 }
 
 void GpuObj_BeginGroup(void) {
@@ -564,7 +570,7 @@ U32 GpuObj_BuildPresent(float *out, const T_GPUOBJ_DRAW *const **draws, S32 *box
                     MarkDrawsLive(lastIndex);
                 }
             }
-            dst[x] = lastIndex >= 0 ? (float)id : 0.0f;
+            dst[x] = lastIndex >= 0 ? (float)(s_draws[lastIndex].Scene ? (id | GPUOBJ_SCENE_ID_BIT) : id) : 0.0f;
         }
     }
     if (tagged == 0) {

@@ -34,7 +34,10 @@ void main() {
         o_color = id > 0.0 ? vec4(texelFetch(u_objColor, p, 0).rgb, 1.0) : vec4(1.0, 0.0, 1.0, 1.0);
         return;
     }
-    if (tag > 0.0 && abs(tag - id) < 0.5) {
+    /* Scene tags accept any scene surface: the GPU's depth picks it. */
+    const float SCENE_BIT = 8388608.0;
+    bool match = tag > 0.0 && (abs(tag - id) < 0.5 || (tag >= SCENE_BIT && id >= SCENE_BIT));
+    if (match) {
         /* Colour is cleared to alpha 0 where no body is drawn, so a filtered
            read divided by its alpha averages only body texels at the edge. */
         vec3 gpu;
