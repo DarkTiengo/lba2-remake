@@ -71,6 +71,7 @@ lba2.cfg stores user preferences and last-save info. Read at startup, written at
 | FlagKeepVoice | string | ON, OFF | ON | Keep voice files on HD |
 | MenuMouse | int | 0, 1 | 1 | 1 = menu cursor, hover/left-click confirm, wheel for sliders and save list; 0 = keyboard/joystick only (classic) |
 | TextureFilter | int | 0–2 | 0 | Filtered texture sampling in the software fillers. 0=off (unchanged output), 1=horizontal 2-tap, 2=bilinear 4-tap. `LBA2_TEXFILTER` overrides for one run without persisting. See [GFX_OPTIONS.md](GFX_OPTIONS.md) |
+| GpuRenderer | int | 0–1 | 0 | Renderer for the window: 0=classic, 1=GPU (per-pixel lit, true-colour 3D models). Switched live from the Display menu or `gfx_gpu`. `LBA2_GPU` overrides for one run without persisting. See [GPU_RENDERER.md](GPU_RENDERER.md) |
 | FixedTimestep | int | 0–100 (ms) | 16 | Sim throttle, so movement is frame-rate independent above 60 fps; 0 restores the historical per-frame simulation. Set by the `fixedtimestep` console verb; `--fixed-timestep` overrides for one run without persisting. See [MOVEMENT_FRAMERATE.md](MOVEMENT_FRAMERATE.md) |
 | VSync | int | 0, 1 | 1 | Cap the frame rate to the display refresh. Invalid values → 1. Set by the Display submenu's toggle and the `vsync` console verb; `--vsync <on\|off>` overrides for one run without persisting. The Display submenu prints it, so a UI capture has to pin it; see [CONTROL.md](CONTROL.md#environmental-hygiene) |
 | DitherShading | int | 0, 1 | 0 | Ordered dither on Gouraud shade rows, softening the 16-step ramp banding. See [GFX_OPTIONS.md](GFX_OPTIONS.md) |
@@ -106,6 +107,7 @@ lba2.cfg stores user preferences and last-save info. Read at startup, written at
 | MenuMouse | Optional mouse UX in game menus (`FlagMenuMouse` in code). Default 1 (on). Set 0 to match classic keyboard/joystick-only menus. See [MENU.md](MENU.md) | ReadConfigFile / WriteConfigFile | Options → Advanced options |
 | FollowCamera | Auto camera for exterior scenes (0=classic, 1=auto). Community addition, not in original game; menu label is "Auto camera" / "Classic camera" | ReadConfigFile / WriteConfigFile | Options → Advanced options |
 | TextureFilter, DitherShading | Software-rasterizer smoothing, both off by default. Console cvars `gfx_texfilter` / `gfx_dither` | ReadConfigFile / WriteConfigFile | console only |
+| GpuRenderer | Classic or GPU renderer. Console cvar `gfx_gpu` | ReadConfigFile / WriteConfigFile | Display menu (Renderer row) |
 
 ## How a key is declared
 

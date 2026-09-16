@@ -30,7 +30,11 @@ static volatile long double POLYTZF_PerspInvW;
 /* W queue for POLYTZF — ASM fills ascending on the hardware stack then
  * reads via pop (FIFO: first stored = first consumed).  We replicate this
  * with a simple queue: push appends, pop/top consume from the front. */
-#define POLYTZF_MAX_STACK 64
+/* One entry per POLYTZF_PERSP_VALUE pixels of a span. The filler loops until
+ * the queue holds a whole span, so the capacity must cover the widest
+ * framebuffer (RES_MAX_W 3840 needs 120): a span wider than the queue never
+ * fills it and the loop never ends. */
+#define POLYTZF_MAX_STACK 256
 static struct {
     S32 data[POLYTZF_MAX_STACK];
     U32 write_index;

@@ -66,10 +66,17 @@ typedef struct {
 } T_GPUOBJ_DRAW;
 
 // --- State consumed by the presenter -----------------------------------------
-extern S32 GpuObjEnabled;   ///< player toggle
+extern S32 GpuObjEnabled;   ///< player choice (lba2.cfg GpuRenderer, gfx_gpu); the window follows it
 extern S32 GpuObjAvailable; ///< set by the presenter once its pipeline is live
 
 extern T_GPUOBJ_VERTEX *GpuObjVerts;
+
+/* Size the player chose (it can exceed both the software frame and the window).
+   The GPU renders bodies at least this large and scales them down to the
+   window, so a resolution above the display's supersamples the models. 0 when
+   unknown. */
+extern U32 GpuObjTargetHintW;
+extern U32 GpuObjTargetHintH;
 
 // --- Capture -----------------------------------------------------------------
 /** TRUE when bodies should be captured. */

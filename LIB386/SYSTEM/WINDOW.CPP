@@ -2,6 +2,7 @@
 
 #include <SYSTEM/ANDROID.H>
 #include <SYSTEM/GPURENDER.H>
+#include <SVGA/GPUOBJ.H>
 #include <SYSTEM/LOG.H>
 #include <SYSTEM/LOGPRINT.H>
 
@@ -28,6 +29,11 @@ SDL_Texture *sdlTexture = NULL;
 U32 windowSurfaceResX = 0;
 U32 windowSurfaceResY = 0;
 bool windowFullscreenEnabled = false;
+static int windowVSync = 1;
+/* Which renderer sdlRenderer is, and whether a GPU one could not be created
+   this run (no retry: the device or driver will not appear mid-run). */
+static bool rendererIsGpu = false;
+static bool gpuRendererFailed = false;
 
 static void ApplyGameWindowHideSystemCursor(void) {
     SDL_HideCursor();
@@ -51,9 +57,106 @@ static void SetLogicalPresentation(U32 resX, U32 resY) {
     }
 }
 
+/* Creates the renderer the player's choice asks for (GpuObjEnabled), falling
+   back to the default SDL renderer, plus the streaming frame texture. */
+static bool CreateRendererAndTexture(U32 resX, U32 resY) {
+    assert(sdlWindow != NULL);
+
+    rendererIsGpu = false;
+    sdlRenderer = NULL;
+    if (GpuObjEnabled && !gpuRendererFailed) {
+        sdlRenderer = (SDL_Renderer *)GpuRender_CreateRenderer(sdlWindow);
+        if (sdlRenderer != NULL) {
+            rendererIsGpu = true;
+        } else {
+            gpuRendererFailed = true;
+        }
+    }
+    if (sdlRenderer == NULL) {
+        sdlRenderer = SDL_CreateRenderer(sdlWindow, NULL);
+    }
+    if (sdlRenderer == NULL) {
+        const char *errorMsg = SDL_GetError();
+        Log_Error("Unable to create SDL renderer.\n"
+                  "\tSDL message: %s",
+                  errorMsg);
+        return false;
+    }
+
+    SDL_SetRenderVSync(sdlRenderer, windowVSync);
+
+    sdlTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
+                                   SDL_TEXTUREACCESS_STREAMING, resX, resY);
+    if (sdlTexture == NULL) {
+        const char *errorMsg = SDL_GetError();
+        Log_Error("Unable to create SDL streaming texture.\n"
+                  "\tSize: %ux%u.\n"
+                  "\tSDL message: %s",
+                  resX, resY, errorMsg);
+        if (rendererIsGpu) {
+            GpuRender_Shutdown();
+        }
+        SDL_DestroyRenderer(sdlRenderer);
+        sdlRenderer = NULL;
+        rendererIsGpu = false;
+        return false;
+    }
+
+    SDL_SetTextureScaleMode(sdlTexture, SDL_SCALEMODE_NEAREST);
+    SetLogicalPresentation(resX, resY);
+    return true;
+}
+
+static void DestroyRendererAndTexture() {
+    if (sdlTexture) {
+        SDL_DestroyTexture(sdlTexture);
+        sdlTexture = NULL;
+    }
+    if (sdlRenderer) {
+        if (rendererIsGpu) {
+            GpuRender_Shutdown();
+        }
+        SDL_DestroyRenderer(sdlRenderer);
+        sdlRenderer = NULL;
+    }
+    rendererIsGpu = false;
+}
+
+/* Brings the renderer in line with GpuObjEnabled when the player changed it
+   (Display menu, gfx_gpu). Runs before a frame is written to the texture, so the
+   frame being presented lands in the new one. */
+static void SyncRendererKind() {
+    if (sdlWindow == NULL || sdlRenderer == NULL) {
+        return;
+    }
+    const bool wantGpu = GpuObjEnabled && !gpuRendererFailed;
+    if (wantGpu == rendererIsGpu) {
+        return;
+    }
+
+    DestroyRendererAndTexture();
+    if (!CreateRendererAndTexture(windowSurfaceResX, windowSurfaceResY)) {
+        /* The GPU attempt is marked failed, so this retries the default one. */
+        CreateRendererAndTexture(windowSurfaceResX, windowSurfaceResY);
+    }
+    if (gpuRendererFailed && GpuObjEnabled) {
+        Log_Warn("GPU renderer unavailable on this system; using the classic renderer");
+    }
+    ApplyGameWindowHideSystemCursor();
+}
+
 static void PresentCurrentTexture() {
     assert(sdlRenderer != NULL);
     assert(sdlTexture != NULL);
+
+    /* A frame larger than its place on screen (a resolution above the
+       display's) is scaled down filtered, so it supersamples instead of
+       dropping pixels; scaled up, pixels stay sharp. */
+    SDL_FRect dst;
+    if (SDL_GetRenderLogicalPresentationRect(sdlRenderer, &dst)) {
+        const bool shrink = (float)windowSurfaceResX > dst.w + 0.5f || (float)windowSurfaceResY > dst.h + 0.5f;
+        SDL_SetTextureScaleMode(sdlTexture, shrink ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+    }
 
     SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
     SDL_RenderClear(sdlRenderer);
@@ -161,43 +264,19 @@ bool CreateWindowSurface(U32 resX, U32 resY, bool fullscreen) {
         windowFullscreenEnabled = false;
     }
 
+    /* LBA2_GPU asks for the GPU renderer from the first frame; the cfg choice
+       arrives later through ReadConfigFile and SyncRendererKind. */
     if (GpuRender_Requested()) {
-        sdlRenderer = (SDL_Renderer *)GpuRender_CreateRenderer(sdlWindow);
+        GpuObjEnabled = TRUE;
     }
-    if (sdlRenderer == NULL) {
-        sdlRenderer = SDL_CreateRenderer(sdlWindow, NULL);
-    }
-    if (sdlRenderer == NULL) {
-        const char *errorMsg = SDL_GetError();
-        Log_Error("Unable to create SDL renderer.\n"
-                  "\tSDL message: %s",
-                  errorMsg);
+    if (!CreateRendererAndTexture(resX, resY)) {
         SDL_DestroyWindow(sdlWindow);
         sdlWindow = NULL;
         return false;
     }
 
-    SDL_SetRenderVSync(sdlRenderer, 1);
-
-    sdlTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
-                                   SDL_TEXTUREACCESS_STREAMING, resX, resY);
-    if (sdlTexture == NULL) {
-        const char *errorMsg = SDL_GetError();
-        Log_Error("Unable to create SDL streaming texture.\n"
-                  "\tSize: %ux%u.\n"
-                  "\tSDL message: %s",
-                  resX, resY, errorMsg);
-        SDL_DestroyRenderer(sdlRenderer);
-        sdlRenderer = NULL;
-        SDL_DestroyWindow(sdlWindow);
-        sdlWindow = NULL;
-        return false;
-    }
-
-    SDL_SetTextureScaleMode(sdlTexture, SDL_SCALEMODE_NEAREST);
     windowSurfaceResX = resX;
     windowSurfaceResY = resY;
-    SetLogicalPresentation(resX, resY);
 
     /* Game draws the pointer in the framebuffer; hide the OS cursor to avoid double cursors. */
     ApplyGameWindowHideSystemCursor();
@@ -299,15 +378,7 @@ bool ResizeWindowSurface(U32 newW, U32 newH, bool keepWindowSize) {
 }
 
 void DestroyWindowSurface() {
-    if (sdlTexture) {
-        SDL_DestroyTexture(sdlTexture);
-        sdlTexture = NULL;
-    }
-    if (sdlRenderer) {
-        GpuRender_Shutdown();
-        SDL_DestroyRenderer(sdlRenderer);
-        sdlRenderer = NULL;
-    }
+    DestroyRendererAndTexture();
     if (sdlWindow) {
         SDL_DestroyWindow(sdlWindow);
         sdlWindow = NULL;
@@ -322,6 +393,7 @@ void PresentRendererFrame(const void *pixels, U32 pitch) {
     assert(sdlTexture != NULL);
     assert(pixels != NULL);
 
+    SyncRendererKind();
     SDL_UpdateTexture(sdlTexture, NULL, pixels, (int)pitch);
     PresentCurrentTexture();
 }
@@ -332,6 +404,7 @@ bool LockRendererTexture(void **pixels, int *pitch) {
     assert(pixels != NULL);
     assert(pitch != NULL);
 
+    SyncRendererKind();
     return SDL_LockTexture(sdlTexture, NULL, pixels, pitch);
 }
 
@@ -441,6 +514,7 @@ bool Window_SupportsWindowedMode(void) {
 }
 
 void Window_SetVSync(int enabled) {
+    windowVSync = enabled ? 1 : 0;
     if (sdlRenderer != NULL) {
         SDL_SetRenderVSync(sdlRenderer, enabled ? 1 : 0);
     }

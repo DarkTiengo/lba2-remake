@@ -109,11 +109,23 @@ void Init3DExtView(void) {
     // terrain/buildings that are plainly in view at HD ("clipped on the right").
     // Scale it with height to keep the near plane at the original screen-space
     // position. Exact CLIP_NEAR at the original 480, so 480 is unchanged.
+    //
+    // Above 1080 lines the view stops widening: the focal grows with the height
+    // so 1440p and 4K frame the scene exactly as 1080p does, only sharper. At
+    // 4K the fixed focal would otherwise show past the island's edges.
+    S32 frameY = (S32)ModeDesiredY;
+    S32 champX = ChampX;
+    S32 champZ = ChampZ;
+    if (frameY > 1080) {
+        champX = (S32)((S64)ChampX * frameY / 1080);
+        champZ = (S32)((S64)ChampZ * frameY / 1080);
+        frameY = 1080;
+    }
     S32 nearClip = CLIP_NEAR;
-    if (ModeDesiredY > 480)
-        nearClip = CLIP_NEAR * 480 / (S32)ModeDesiredY;
+    if (frameY > 480)
+        nearClip = CLIP_NEAR * 480 / frameY;
     SetProjection((S32)(ModeDesiredX / 2), (S32)(ModeDesiredY / 2),
-                  nearClip, ChampX, ChampZ);
+                  nearClip, champX, champZ);
     SetFollowCamera(VueOffsetX, VueOffsetY, VueOffsetZ,
                     AlphaCam, BetaCam, GammaCam,
                     VueDistance);

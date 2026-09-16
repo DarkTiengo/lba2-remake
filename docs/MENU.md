@@ -36,6 +36,12 @@ Main Menu
 │   │   ├── Small videos / Full screen videos (27/28)
 │   │   ├── Fullscreen display OFF/ON     [custom localized label]
 │   │   └── Don't display text / Display text (16/17)
+│   ├── Display [custom localized label]
+│   │   ├── Back (26)
+│   │   ├── Resolution: < WxH >        [selector; Enter applies, "(Enter)" marks an unapplied choice]
+│   │   ├── Vsync: < On/Off >          [selector]
+│   │   ├── Renderer: < GPU/Classic >  [selector]
+│   │   └── Display mode: < Fullscreen/Windowed > [selector, hidden on always-fullscreen devices]
 │   ├── Keyboard Config (14)
 └── Quit (75)
 ```

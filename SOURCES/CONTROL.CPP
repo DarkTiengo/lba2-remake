@@ -110,7 +110,7 @@ static long s_res_y = 0;
    the console verb use, so the CLI can't drift from what Res_Switch accepts.
    Min = VGA 320x200 (below this the iso projection origin ModeDesiredX/2 - 32 can
    go negative and the 640x480-authored UI clips heavily); max Y = ADELINE_MAX_Y_RES,
-   the size of TabOffLine[]/TabOffPhysLine[]. Reachable HD modes: 1280x720, 1920x1080. */
+   the size of TabOffLine[]/TabOffPhysLine[]. Reachable HD modes: 1280x720, 1920x1080, 2560x1440, 3840x2160. */
 
 /* --language <name>: override the engine's Language global at boot, bypassing
    the cfg's Language key. Doesn't write anything to disk; the cfg is not touched.

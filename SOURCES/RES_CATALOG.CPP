@@ -19,6 +19,8 @@ static const ResModeEntry kRecommended[] = {
     {1024, 480, "recommended"},   /* ~21:10 */
     {1280, 720, "experimental"},  /* 16:9; Y>480, holoplan zoom may glitch */
     {1920, 1080, "experimental"}, /* 16:9; same caveat */
+    {2560, 1440, "experimental"}, /* 16:9 QHD; 2D UI stays at its authored size */
+    {3840, 2160, "experimental"}, /* 16:9 4K UHD; same caveat */
 };
 #define kRecommendedCount ((int)(sizeof(kRecommended) / sizeof(kRecommended[0])))
 
@@ -83,7 +85,7 @@ U32 Res_SnapAspectWidth(U32 dispW, U32 dispH, U32 targetH) {
        the display aspect at targetH render height. 64-bit intermediate so wide
        displays don't overflow the multiply. Returns 0 (caller drops the entry)
        when the result falls outside [RES_MIN_W, RES_MAX_W]; e.g. an ultrawide
-       at 1080 height would need > 1920 width. */
+       at 2160 height would need > 3840 width. */
     U32 w = (U32)(((U64)targetH * (U64)dispW) / (U64)dispH);
     w &= ~(U32)7;
     if (w < (U32)RES_MIN_W || w > (U32)RES_MAX_W)
@@ -114,17 +116,16 @@ int Res_BuildMenuList(ResModeEntry *out, int cap) {
     /* A ladder of display-aspect-matched modes at increasing render heights, so
        every entry fills this exact panel (no letterbox/pillarbox) at a quality
        the player picks by height. Computed per monitor, so an odd-aspect panel
-       gets its own widths rather than generic ones. Ascending order; the @480
-       rung is the same value the boot auto-detect picks, so the first-launch
-       resolution is always a listed entry. Heights that don't fit the panel, or
-       whose width would exceed 1920 (ultrawide at 1080), are dropped; dups
+       gets its own widths rather than generic ones. The @480 rung is the same
+       value the boot auto-detect picks, so the first-launch resolution is always
+       a listed entry. Rungs taller than the panel stay: they render above the
+       display's size and the present scales them down (supersampling). Rungs
+       whose width would exceed RES_MAX_W (ultrawide at 2160) are dropped; dups
        against the anchor (a 4:3 panel's @480 is 640x480) are skipped. */
-    static const U32 kLadderH[] = {480, 720, 1080};
-    static const char *kLadderTag[] = {"widescreen", "hd", "fhd"};
+    static const U32 kLadderH[] = {480, 720, 1080, 1440, 2160};
+    static const char *kLadderTag[] = {"widescreen", "hd", "fhd", "qhd", "uhd"};
     for (int i = 0; i < (int)(sizeof(kLadderH) / sizeof(kLadderH[0])) && n < cap; i++) {
         const U32 h = kLadderH[i];
-        if (h > dispH)
-            continue;
         const U32 w = Res_SnapAspectWidth(dispW, dispH, h);
         if (w == 0 || catalog_contains(out, n, w, h))
             continue;
@@ -132,6 +133,25 @@ int Res_BuildMenuList(ResModeEntry *out, int cap) {
         out[n].h = h;
         out[n].tag = kLadderTag[i];
         n++;
+    }
+
+    /* The panel's own resolution, which the fixed rungs miss on anything that
+       is not 480/720/1080/1440/2160 lines tall (a 1920x1200 laptop). Kept in
+       height order after the anchor. */
+    {
+        const U32 w = Res_SnapNativeW(dispW);
+        const U32 h = Res_SnapNativeH(dispH);
+        if (w != 0 && h != 0 && n < cap && !catalog_contains(out, n, w, h)) {
+            int at = n;
+            while (at > 1 && (out[at - 1].h > h || (out[at - 1].h == h && out[at - 1].w > w))) {
+                out[at] = out[at - 1];
+                at--;
+            }
+            out[at].w = w;
+            out[at].h = h;
+            out[at].tag = "native";
+            n++;
+        }
     }
 
     return n;

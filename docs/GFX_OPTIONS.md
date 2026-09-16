@@ -10,7 +10,8 @@ All three are off by default, so a stock run renders exactly as before. None of 
 |--------|---------|----------|-------------|--------|
 | Texture filtering | `gfx_texfilter` | `TextureFilter` | `LBA2_TEXFILTER` | 0 off, 1 horizontal 2-tap, 2 bilinear 4-tap |
 | Dithered shading | `gfx_dither` | `DitherShading` | (none) | 0 off, 1 on |
-| Interior render scaling | (none) | (none) | `LBA2_ISO_DIV` | 1 off, 2 to 4 |
+| Interior render scaling | (none) | (none) | `LBA2_ISO_DIV` | 1 off, 2 to 4; unset = follows the frame scaling below |
+| GPU renderer | `gfx_gpu` | `GpuRenderer` | `LBA2_GPU` | 0 classic, 1 GPU (Display menu: Renderer); see [GPU_RENDERER.md](GPU_RENDERER.md) |
 
 **Texture filtering** smooths magnified texels on terrain, sea, and sky. The rasterizer works in palette indices, where averaging two entries is meaningless, so the blend is a precomputed table of the nearest palette index to each 25/50/75% RGB mix. Costs roughly 7% of frame time on terrain and 4% on a sea-heavy view at 1728x1080 with the 4-tap setting.
 
@@ -23,6 +24,8 @@ All three are off by default, so a stock run renders exactly as before. None of 
 ```
 LBA2_ISO_DIV=2 ./lba2cc
 ```
+
+**Frame scaling above 1080 lines.** Resolutions of 2160 lines and more (4K) render the software frame at half size (a 3840x2160 choice renders at 1920x1080, exteriors and interiors alike) and the present scales it up; the choice itself is what is shown in the Display menu and saved to lba2.cfg. The terrain packs screen coordinates in 16 bits and the 2D UI draws at its authored 640x480 size, so a native 4K software frame would break the one and shrink the other. With the GPU renderer on, 3D models still render at the window's own resolution, up to 3840x2160. 1440p and below render natively; above 1080 lines the exterior focal grows with the height so the view is framed as at 1080p rather than widening.
 
 ## Ideas not yet wired up
 

@@ -11,6 +11,7 @@
 #include "INPUT.H"           /* Read/WriteInputConfig, Read/WriteGamepadConfig */
 #include "RES_SWITCH.H"
 #include <POLYGON/POLYFILT.H> /* PolyTexFilter / EnvTexFilter */
+#include <SVGA/GPUOBJ.H>      /* GpuObjEnabled, the GPU renderer choice */
 #include <SVGA/SCREEN.H>
 #include <SYSTEM/KEYBOARD_KEYS.H> /* K_F12, the console toggle default */
 #include <SYSTEM/LOG.H>
@@ -43,6 +44,8 @@ extern S32 GfxDitherShading; /* defined in POLYFILT's caller; no header declares
    on purpose (see WriteConfigFile). */
 static S32 StoredTexFilter = 0;
 static S32 EnvTexFilter = -1;
+static S32 StoredGpuRenderer = FALSE;
+static S32 EnvGpuRenderer = -1;
 static S32 StoredFixedTimestep = 16;
 static S32 StoredLanguage = 0;
 static S32 StoredVSync = TRUE;
@@ -51,6 +54,7 @@ static S32 StoredVSync = TRUE;
    Only those need it: the rule a source decides is what a forced run leaves
    behind, and a row no flag touches keeps its value either way. */
 static T_SETTING_SOURCE SourceTexFilter = SETTING_FROM_DEFAULT;
+static T_SETTING_SOURCE SourceGpuRenderer = SETTING_FROM_DEFAULT;
 static T_SETTING_SOURCE SourceFixedTimestep = SETTING_FROM_DEFAULT;
 static T_SETTING_SOURCE SourceVSync = SETTING_FROM_DEFAULT;
 
@@ -86,6 +90,11 @@ static S32 ForcedTexFilter(void) {
     return EnvTexFilter;
 }
 
+/* Same arrangement for the GPU renderer and LBA2_GPU. */
+static S32 ForcedGpuRenderer(void) {
+    return EnvGpuRenderer;
+}
+
 /* The boot and display settings, declared once. Row order is the cfg's key
  * order, which is user-visible: lba2.cfg is rewritten in this order.
  *
@@ -108,6 +117,8 @@ static const T_SETTING BootSettings[] = {
     {"TextureFilter", NULL, "gfx_texfilter", &PolyTexFilter, SETTING_OR_DEFAULT, POLY_TEX_FILTER_OFF,
      POLY_TEX_FILTER_OFF, POLY_TEX_FILTER_BILINEAR, &StoredTexFilter, ForcedTexFilter, NULL, &SourceTexFilter,
      "Texture filtering: 0 off, 1 horizontal, 2 bilinear"},
+    {"GpuRenderer", NULL, "gfx_gpu", &GpuObjEnabled, SETTING_OR_DEFAULT, FALSE, 0, 1, &StoredGpuRenderer,
+     ForcedGpuRenderer, NULL, &SourceGpuRenderer, "GPU renderer: per-pixel lit, true-colour 3D models"},
     {"FixedTimestep", NULL, NULL, &FixedTimestep, SETTING_OR_DEFAULT, 16, 0, 100,
      &StoredFixedTimestep, ForcedFixedTimestep, NULL, &SourceFixedTimestep},
 };
@@ -171,6 +182,15 @@ void ReadConfigFile(void) {
                 PolyTexFilter = v;
                 EnvTexFilter = v;
             }
+        }
+    }
+
+    EnvGpuRenderer = -1;
+    {
+        const char *env = getenv("LBA2_GPU");
+        if (env != NULL) {
+            EnvGpuRenderer = atoi(env) != 0 ? TRUE : FALSE;
+            GpuObjEnabled = EnvGpuRenderer;
         }
     }
 

@@ -51,14 +51,22 @@ static SDL_GPUShader *s_objFrag = NULL;
 static SDL_GPUShader *s_compositeFrag = NULL;
 static SDL_GPUGraphicsPipeline *s_pipeline = NULL;
 static SDL_GPUSampler *s_nearest = NULL;
+static SDL_GPUSampler *s_linear = NULL;
+static bool s_supersample = false;
 
 /* Frame-sized: follow Log. */
 static SDL_GPUTexture *s_objColor = NULL;
 static SDL_GPUTexture *s_objId = NULL;
 static SDL_GPUTexture *s_depth = NULL;
 static SDL_GPUTexture *s_tags = NULL;
-static U32 s_frameW = 0;
+static U32 s_frameW = 0; ///< software frame (tags)
 static U32 s_frameH = 0;
+static U32 s_targetW = 0; ///< GPU targets: the frame's size on screen
+static U32 s_targetH = 0;
+
+/* Largest GPU target side; beyond 4K the gain is not worth the fill rate. */
+#define GPU_TARGET_MAX_W 3840
+#define GPU_TARGET_MAX_H 2160
 static SDL_GPURenderState *s_composite = NULL;
 
 /* Fixed-size lookup data. */
@@ -152,18 +160,55 @@ static void ReleaseFrameResources(void) {
     memset(s_tagBox, 0, sizeof(s_tagBox));
     s_frameW = 0;
     s_frameH = 0;
+    s_targetW = 0;
+    s_targetH = 0;
+}
+
+/* The GPU targets match the frame's size on screen, so bodies render at the
+   window's resolution whatever the software frame is. Never below the frame. */
+static void TargetSize(U32 w, U32 h, U32 *outW, U32 *outH) {
+    SDL_FRect rect;
+    U32 tw = w;
+    U32 th = h;
+    U32 onScreenW = w;
+    U32 onScreenH = h;
+    if (SDL_GetRenderLogicalPresentationRect(s_renderer, &rect) && rect.w >= 1.0f && rect.h >= 1.0f) {
+        tw = (U32)(rect.w + 0.5f);
+        th = (U32)(rect.h + 0.5f);
+        onScreenW = tw;
+        onScreenH = th;
+    }
+    if (GpuObjTargetHintW > tw || GpuObjTargetHintH > th) {
+        tw = SDL_max(tw, GpuObjTargetHintW);
+        th = SDL_max(th, GpuObjTargetHintH);
+    }
+    if (tw > GPU_TARGET_MAX_W || th > GPU_TARGET_MAX_H) {
+        /* Keep the aspect while capping. */
+        float scale = SDL_min((float)GPU_TARGET_MAX_W / (float)tw, (float)GPU_TARGET_MAX_H / (float)th);
+        tw = (U32)((float)tw * scale);
+        th = (U32)((float)th * scale);
+    }
+    if (tw < w || th < h) {
+        tw = w;
+        th = h;
+    }
+    s_supersample = tw > onScreenW + 1 || th > onScreenH + 1;
+    *outW = tw;
+    *outH = th;
 }
 
 static bool EnsureFrameResources(U32 w, U32 h) {
-    if (s_composite != NULL && s_frameW == w && s_frameH == h) {
+    U32 tw, th;
+    TargetSize(w, h, &tw, &th);
+    if (s_composite != NULL && s_frameW == w && s_frameH == h && s_targetW == tw && s_targetH == th) {
         return true;
     }
     ReleaseFrameResources();
 
     const SDL_GPUTextureUsageFlags targetUsage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-    s_objColor = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, w, h, 1);
-    s_objId = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, targetUsage, w, h, 1);
-    s_depth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, s_depthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, w, h, 1);
+    s_objColor = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, tw, th, 1);
+    s_objId = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, targetUsage, tw, th, 1);
+    s_depth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, s_depthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, tw, th, 1);
     s_tags = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER, w, h, 1);
     s_tagScratch = (float *)malloc((size_t)w * h * sizeof(float));
     s_tagUpload = (float *)malloc((size_t)w * h * sizeof(float));
@@ -174,7 +219,7 @@ static bool EnsureFrameResources(U32 w, U32 h) {
 
     SDL_GPUTextureSamplerBinding bindings[3];
     bindings[0].texture = s_objColor;
-    bindings[0].sampler = s_nearest;
+    bindings[0].sampler = s_linear;
     bindings[1].texture = s_objId;
     bindings[1].sampler = s_nearest;
     bindings[2].texture = s_tags;
@@ -193,11 +238,15 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     }
 
     const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float debugTint = (debug != NULL && SDL_atoi(debug) != 0) ? 1.0f : 0.0f;
-    SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, &debugTint, sizeof(debugTint));
+    float params[2];
+    params[0] = (debug != NULL && SDL_atoi(debug) != 0) ? 1.0f : 0.0f;
+    params[1] = s_supersample ? 1.0f : 0.0f;
+    SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params));
 
     s_frameW = w;
     s_frameH = h;
+    s_targetW = tw;
+    s_targetH = th;
     return true;
 }
 
@@ -323,6 +372,9 @@ static bool CreatePipeline(void) {
     samplerInfo.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
     samplerInfo.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
     s_nearest = SDL_CreateGPUSampler(s_device, &samplerInfo);
+    samplerInfo.min_filter = SDL_GPU_FILTER_LINEAR;
+    samplerInfo.mag_filter = SDL_GPU_FILTER_LINEAR;
+    s_linear = SDL_CreateGPUSampler(s_device, &samplerInfo);
 
     const SDL_GPUTextureUsageFlags sampled = SDL_GPU_TEXTUREUSAGE_SAMPLER;
     s_palette = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, sampled, 256, 1, 1);
@@ -330,7 +382,7 @@ static bool CreatePipeline(void) {
     s_pages = CreateTexture(SDL_GPU_TEXTURETYPE_2D_ARRAY, SDL_GPU_TEXTUREFORMAT_R8_UNORM, sampled, 256, 256,
                             SDL_arraysize(s_pagePtrs));
 
-    return s_nearest && s_palette && s_lut && s_pages;
+    return s_nearest && s_linear && s_palette && s_lut && s_pages;
 }
 
 static void ReleasePipeline(void) {
@@ -354,6 +406,10 @@ static void ReleasePipeline(void) {
     if (s_nearest) {
         SDL_ReleaseGPUSampler(s_device, s_nearest);
         s_nearest = NULL;
+    }
+    if (s_linear) {
+        SDL_ReleaseGPUSampler(s_device, s_linear);
+        s_linear = NULL;
     }
     if (s_pipeline) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipeline);
@@ -556,13 +612,16 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             sliceUniform[0] = 0.0f;
         }
 
-        SDL_Rect scissor;
-        scissor.x = draw->X0 < 0 ? 0 : draw->X0;
-        scissor.y = draw->Y0 < 0 ? 0 : draw->Y0;
+        /* The clip window is inclusive frame pixels; scale it to the target. */
+        S32 x0 = draw->X0 < 0 ? 0 : draw->X0;
+        S32 y0 = draw->Y0 < 0 ? 0 : draw->Y0;
         S32 x1 = draw->X1 >= (S32)s_frameW ? (S32)s_frameW - 1 : draw->X1;
         S32 y1 = draw->Y1 >= (S32)s_frameH ? (S32)s_frameH - 1 : draw->Y1;
-        scissor.w = x1 - scissor.x + 1;
-        scissor.h = y1 - scissor.y + 1;
+        SDL_Rect scissor;
+        scissor.x = (int)((S64)x0 * s_targetW / s_frameW);
+        scissor.y = (int)((S64)y0 * s_targetH / s_frameH);
+        scissor.w = (int)((S64)(x1 + 1) * s_targetW / s_frameW) - scissor.x;
+        scissor.h = (int)((S64)(y1 + 1) * s_targetH / s_frameH) - scissor.y;
         if (scissor.w > 0 && scissor.h > 0) {
             SDL_SetGPUScissor(pass, &scissor);
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));

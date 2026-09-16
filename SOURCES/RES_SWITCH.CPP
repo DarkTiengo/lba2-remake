@@ -9,6 +9,7 @@
 
 #include "ANIMTEX.H"     /* InitPlasmaMenu, DoTextureAnimation (plasma fire bar) */
 #include "RES_CATALOG.H" /* RES_MIN_W / RES_MAX_W / RES_MIN_H / RES_MAX_H bounds */
+#include <SVGA/GPUOBJ.H> /* GpuObjTargetHintW/H */
 #include "C_EXTERN.H"
 #include "CONTROL.H"     /* Control_HasResolution / Get */
 #include "DIRECTORIES.H" /* CFG_NAME */
@@ -68,43 +69,65 @@ bool Res_ResolutionShouldPersist(void) { return g_resShouldPersist; }
 static U32 g_baseW = 0;
 static U32 g_baseH = 0;
 
+/* The GPU layer renders bodies at least at the chosen size. */
+static void Res_CommitBase(U32 w, U32 h) {
+    g_baseW = w;
+    g_baseH = h;
+    GpuObjTargetHintW = w;
+    GpuObjTargetHintH = h;
+}
+
 void Res_BaseDimensions(U32 *outW, U32 *outH) {
     *outW = (g_baseW != 0) ? g_baseW : ModeDesiredX;
     *outH = (g_baseH != 0) ? g_baseH : ModeDesiredY;
+}
+
+/* Above 1080 lines the software frame renders at 1/N of the chosen resolution
+   and the present scales it up. The software renderer and the 2D UI were built
+   around small frames: the terrain packs screen coordinates in 16 bits, and the
+   UI draws at its authored 640x480 size, so a native 4K frame would break the
+   one and shrink the other to a stamp. The GPU layer draws 3D bodies at the
+   window's full size regardless, which is where the extra pixels pay off.
+   N is 1 below 2160 lines, so every mode up to 1440p renders natively. */
+static S32 Res_FrameDivisor(U32 baseH) {
+    S32 v = (S32)(baseH / 1080);
+    if (v < 1)
+        v = 1;
+    if (v > 4)
+        v = 4;
+    return v;
 }
 
 /* Isometric interiors are drawn from pre-rendered brick sprites, and the iso
    projectors take no focal argument, so nothing in an interior scales with the
    framebuffer: a bigger one only reveals more empty space around the room.
    Rendering interiors at 1/N and letting the present stretch them is therefore
-   magnification rather than a loss of detail. 1 disables it. */
-static S32 g_isoDiv = 0; /* 0 = not yet read from the environment */
+   magnification rather than a loss of detail. 1 disables it. LBA2_ISO_DIV pins
+   N for interiors; without it interiors follow Res_FrameDivisor. */
+static S32 g_isoDivEnv = 0; /* 0 = not yet read, -1 = unset */
 
-static S32 Res_InteriorDivisor(void) {
-    if (g_isoDiv == 0) {
+static S32 Res_InteriorDivisor(U32 baseH) {
+    if (g_isoDivEnv == 0) {
         const char *env = getenv("LBA2_ISO_DIV");
-        S32 v = (env != NULL) ? (S32)atoi(env) : 1;
-        if (v < 1)
-            v = 1;
-        if (v > 4)
-            v = 4;
-        g_isoDiv = v;
+        g_isoDivEnv = (env != NULL) ? (S32)atoi(env) : -1;
+        if (env != NULL && g_isoDivEnv < 1)
+            g_isoDivEnv = 1;
+        if (g_isoDivEnv > 4)
+            g_isoDivEnv = 4;
     }
-    return g_isoDiv;
+    if (g_isoDivEnv > 0)
+        return g_isoDivEnv;
+    return Res_FrameDivisor(baseH);
 }
 
 static bool Res_SwitchEx(U32 newW, U32 newH, bool playerChoice);
 
-/* What a base resolution actually renders at in the current scene. Interiors
-   may render smaller; everything else renders at the base. */
-static void Res_SceneTarget(U32 baseW, U32 baseH, U32 *outW, U32 *outH) {
-    const S32 div = Res_InteriorDivisor();
-
+/* The divided size, or the base when dividing would leave the engine's range. */
+static void Res_Divide(U32 baseW, U32 baseH, S32 div, U32 *outW, U32 *outH) {
     *outW = baseW;
     *outH = baseH;
-    if (div <= 1 || CubeMode != CUBE_INTERIEUR)
+    if (div <= 1)
         return;
-
     {
         const U32 w = (baseW / (U32)div) & ~7u; /* width stays a multiple of 8 */
         const U32 h = baseH / (U32)div;
@@ -113,6 +136,12 @@ static void Res_SceneTarget(U32 baseW, U32 baseH, U32 *outW, U32 *outH) {
             *outH = h;
         }
     }
+}
+
+/* What a base resolution actually renders at in the current scene. */
+static void Res_SceneTarget(U32 baseW, U32 baseH, U32 *outW, U32 *outH) {
+    const S32 div = (CubeMode == CUBE_INTERIEUR) ? Res_InteriorDivisor(baseH) : Res_FrameDivisor(baseH);
+    Res_Divide(baseW, baseH, div, outW, outH);
 }
 
 /* Scratch-buffer size for the transient, heap-free boot reads of lba2.cfg
@@ -201,13 +230,11 @@ bool Res_Switch(U32 newW, U32 newH) {
         return false;
     }
 
-    g_baseW = newW;
-    g_baseH = newH;
+    Res_CommitBase(newW, newH);
     Res_SceneTarget(newW, newH, &targetW, &targetH);
 
     if (!Res_SwitchEx(targetW, targetH, true)) {
-        g_baseW = prevBaseW;
-        g_baseH = prevBaseH;
+        Res_CommitBase(prevBaseW, prevBaseH);
         return false;
     }
     return true;
@@ -351,13 +378,9 @@ static bool Res_SwitchEx(U32 newW, U32 newH, bool playerChoice) {
 void Res_ApplySceneRenderSize(void) {
     U32 targetW, targetH;
 
-    if (Res_InteriorDivisor() <= 1)
-        return;
-
     /* First scene of the run: whatever we are at is the player's baseline. */
     if (g_baseW == 0 || g_baseH == 0) {
-        g_baseW = ModeDesiredX;
-        g_baseH = ModeDesiredY;
+        Res_CommitBase(ModeDesiredX, ModeDesiredY);
     }
 
     Res_SceneTarget(g_baseW, g_baseH, &targetW, &targetH);
@@ -391,7 +414,17 @@ bool Res_AutoDetectDimensions(U32 *outW, U32 *outH) {
 static const char *g_bootDimSource = "default";
 const char *Res_BootDimensionsSource(void) { return g_bootDimSource; }
 
+static void Res_LoadBootBase(U32 *outW, U32 *outH);
+
 void Res_LoadBootDimensions(U32 *outW, U32 *outH) {
+    /* The player's choice is the base; the buffers are sized for what it
+       renders at before any scene is loaded (Res_FrameDivisor). */
+    Res_LoadBootBase(outW, outH);
+    Res_CommitBase(*outW, *outH);
+    Res_Divide(*outW, *outH, Res_FrameDivisor(*outH), outW, outH);
+}
+
+static void Res_LoadBootBase(U32 *outW, U32 *outH) {
     /* --resolution CLI overrides everything (one-shot launch). */
     if (Control_HasResolution()) {
         *outW = (U32)Control_GetResolutionX();

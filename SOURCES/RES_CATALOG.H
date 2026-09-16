@@ -30,7 +30,7 @@ extern "C" {
    derive their limits from these. The Y ceiling is ADELINE_MAX_Y_RES so the
    bound and the static TabOffLine[]/TabOffPhysLine[] sizing can't drift. */
 #define RES_MIN_W 320
-#define RES_MAX_W 1920
+#define RES_MAX_W 3840
 #define RES_MIN_H 200
 #define RES_MAX_H ADELINE_MAX_Y_RES
 
@@ -65,9 +65,10 @@ U32 Res_SnapAspectWidth(U32 dispW, U32 dispH, U32 targetH);
 U32 Res_SnapWidescreenWidth(U32 dispW, U32 dispH);
 
 /* The in-game menu's list: the 640x480 classic anchor plus a ladder of
-   display-aspect-matched modes (at 480/720/1080 render heights) that fill this
-   exact panel, computed per monitor. Drops rungs that don't fit the display or
-   exceed the max width, and dups of the anchor. Ascending order. Returns the
+   display-aspect-matched modes (at 480/720/1080/1440/2160 render heights) that
+   fill this exact panel, and the panel's native size, computed per monitor.
+   Rungs above the display stay (they supersample); drops rungs that exceed the
+   max width, and dups. Ascending order. Returns the
    count written (<= cap); headless yields just the anchor. Distinct from
    Res_BuildCatalog, which is the console verb's curated/advanced list. */
 int Res_BuildMenuList(ResModeEntry *out, int cap);

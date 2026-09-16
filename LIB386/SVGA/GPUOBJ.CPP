@@ -12,10 +12,12 @@ extern "C" {
 #endif
 
 // --- Public state ------------------------------------------------------------
-S32 GpuObjEnabled = TRUE;
+S32 GpuObjEnabled = FALSE;
 S32 GpuObjAvailable = FALSE;
 
 T_GPUOBJ_VERTEX *GpuObjVerts = NULL;
+U32 GpuObjTargetHintW = 0;
+U32 GpuObjTargetHintH = 0;
 
 // --- Private state -----------------------------------------------------------
 /* Tag planes shadow full-frame pixel buffers: Log always, Screen and any

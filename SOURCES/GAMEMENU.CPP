@@ -25,6 +25,7 @@
 #include <SYSTEM/LOG.H> /* Log_Warn (askchoice drive hook) */
 #include <SYSTEM/STRING.H>
 #include <SYSTEM/WINDOW.H>
+#include <SVGA/GPUOBJ.H> /* GpuObjEnabled, the Renderer row */
 #include <SYSTEM/MOUSE.H>
 
 #include "GAMEMENU_MOUSE.H"
@@ -93,14 +94,18 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_DISPLAY 2114
 #define MENU_ID_RESOLUTION 2115
 #define MENU_ID_DISPLAY_VSYNC 2116
+#define MENU_ID_DISPLAY_GPU 2117
 
 // Resolution sub-page rows occupy a reserved id range: row i carries id
-// MENU_ID_RESOLUTION_BASE + i, which BuildCustomMenuText and GereResolutionMenu
+// MENU_ID_RESOLUTION_BASE + i, which BuildCustomMenuText and Resolution_MainCapture
 // map back to s_resMenuEntries[i]. DISPLAY_MENU_MAX_ENTRIES ids reserved.
 #define MENU_ID_RESOLUTION_BASE 2200
 
 #define MENU_TYPE_TEXT_LANGUAGE 8
 #define MENU_TYPE_VOICE_LANGUAGE 9
+// A Display option shown as "Label:  <  value  >": left/right (or the mouse
+// wheel) change the value, Enter applies it. See Display_CycleOption.
+#define MENU_TYPE_DISPLAY_SELECTOR 10
 
 char NewGameTxt[MULTI_TEXT_MAX];
 
@@ -146,25 +151,26 @@ U16 GameOptionMenu[] = {
     MENU_ID_CONTROLLER,
 };
 
-// Display submenu: a "Resolution: <current>" row that opens the resolution
-// sub-page (GereResolutionMenu), plus a "Vsync" toggle and the "Fullscreen"
-// toggle (moved here from Advanced options because it belongs with the other
-// display settings). Plain "Back" returns to Options. Fullscreen stays the
-// last entry so the always-fullscreen-device path in GereDisplayMenu can drop
-// it by count. See GereDisplayMenu + GereResolutionMenu.
+// Display submenu: one page of selector rows (Resolution, Vsync, Renderer,
+// Display mode). Left/right change a row's value; toggles apply at once, the
+// resolution applies on Enter because a switch rebuilds every frame buffer.
+// Plain "Back" returns to Options. Display mode stays the last entry so the
+// always-fullscreen-device path in GereDisplayMenu can drop it by count.
 U16 DisplayMenu[] = {
     0,   // selected
-    4,   // nb entries
+    5,   // nb entries
     260, // y center
     0,   // .dia num
 
     0,
     26, // menu precedent
-    0,
+    MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_RESOLUTION,
-    0,
+    MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_DISPLAY_VSYNC,
-    0,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_DISPLAY_GPU,
+    MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_DISPLAY_FULLSCREEN,
 };
 
@@ -173,7 +179,7 @@ U16 DisplayMenu[] = {
 // GameChoiceMenu): a "Back" row plus one plain-button row per resolution.
 // s_resMenuEntries / s_resMenuCount back the range-id rows; the U16 buffer
 // holds 4 header words + (Back + up to DISPLAY_MENU_MAX_ENTRIES) (type, id)
-// pairs. See GereResolutionMenu + BuildCustomMenuText.
+// pairs. See Resolution_MainCapture + BuildCustomMenuText.
 static DisplayEntry s_resMenuEntries[DISPLAY_MENU_MAX_ENTRIES];
 static S32 s_resMenuCount;
 static U16 ResolutionMenu[4 + (1 + DISPLAY_MENU_MAX_ENTRIES) * 2];
@@ -185,7 +191,7 @@ static U16 ResolutionMenu[4 + (1 + DISPLAY_MENU_MAX_ENTRIES) * 2];
 // menu format has no spare per-row slot, and growing it for a single marker
 // isn't worth touching every menu. The contract instead: only the resolution
 // sub-page sets this (BuildResolutionMenu), and it is cleared back to -1 on
-// every exit path (GereResolutionMenu, Resolution_MainCapture), paired with
+// every exit path (Resolution_MainCapture), paired with
 // s_resMenuCount = 0, so no other menu can render a marker. See DrawOneChoice's
 // select bitmask.
 static S32 s_menuMarkRow = -1;
@@ -396,10 +402,74 @@ const char *GetLocalizedResDialogLabel(int which) {
     return GetLocalizedMenuLabel(kMap[which]);
 }
 
+// Resolution selector state for the Display page: the menu's resolution list
+// and the entry the player has cycled to but not applied yet (-1: none, the row
+// shows the current resolution).
+static DisplayEntry s_displayResEntries[DISPLAY_MENU_MAX_ENTRIES];
+static S32 s_displayResCount = 0;
+static S32 s_displayResPending = -1;
+
+static void Display_RebuildResolutionList(void) {
+    s_displayResCount = Display_BuildEntries(s_displayResEntries);
+    s_displayResPending = -1;
+}
+
+// "Label: value", the selector row text; DrawOneChoice adds the arrows (the
+// game font has no arrow or angle-bracket glyphs).
+static void FormatSelector(char *string, const char *label, const char *value) {
+    FormatUtf8ToCp850(string, 256, "%s: %s", label, value);
+}
+
+// One step of a Display selector. Toggles take effect immediately; the
+// resolution only moves the pending choice (Enter applies it).
+static void Display_CycleOption(S32 id, S32 dir) {
+    switch (id) {
+    case MENU_ID_RESOLUTION: {
+        if (s_displayResCount <= 0) {
+            Display_RebuildResolutionList();
+        }
+        if (s_displayResCount <= 0) {
+            break;
+        }
+        S32 idx = s_displayResPending;
+        if (idx < 0) {
+            idx = Display_FindCurrentEntry(s_displayResEntries, s_displayResCount);
+        }
+        if (idx < 0) {
+            idx = dir > 0 ? -1 : 0;
+        }
+        idx += dir;
+        if (idx < 0)
+            idx = s_displayResCount - 1;
+        if (idx >= s_displayResCount)
+            idx = 0;
+        s_displayResPending = idx;
+        break;
+    }
+
+    case MENU_ID_DISPLAY_VSYNC:
+        DisplayVSync ^= 1;
+        ConfigFile_MarkVSyncSetThisRun();
+        Window_SetVSync(DisplayVSync);
+        break;
+
+    case MENU_ID_DISPLAY_GPU:
+        /* The window swaps renderer on its next present. Scene bodies pick up
+           the new look once they are drawn again, after the menu. */
+        GpuObjEnabled ^= 1;
+        break;
+
+    case MENU_ID_DISPLAY_FULLSCREEN:
+        DisplayFullScreen ^= 1;
+        SetWindowFullscreen(DisplayFullScreen != FALSE);
+        break;
+    }
+}
+
 static void BuildCustomMenuText(S32 num, char *string) {
     // Resolution sub-page rows: id in the reserved range maps to a catalog
     // entry's label (e.g. "1280x720 (16:9)"). s_resMenuCount is set by
-    // GereResolutionMenu before the page is drawn.
+    // BuildResolutionMenu before the page is drawn.
     if (num >= MENU_ID_RESOLUTION_BASE &&
         num < MENU_ID_RESOLUTION_BASE + s_resMenuCount) {
         CopyUtf8ToCp850(string, 256, s_resMenuEntries[num - MENU_ID_RESOLUTION_BASE].label);
@@ -428,10 +498,28 @@ static void BuildCustomMenuText(S32 num, char *string) {
         break;
 
     case MENU_ID_RESOLUTION: {
-        char value[64];
-        Display_FormatCurrentLabel(value, sizeof value);
-        FormatUtf8ToCp850(string, 256,
-                          GetLocalizedMenuLabel(MENU_LABEL_RESOLUTION), value);
+        char value[96];
+        char selector[128];
+        const S32 current = Display_FindCurrentEntry(s_displayResEntries, s_displayResCount);
+        // Bare "WxH": the row also carries the label and the apply hint.
+        if (s_displayResPending >= 0 && s_displayResPending < s_displayResCount &&
+            s_displayResPending != current) {
+            snprintf(value, sizeof value, "%ux%u", (unsigned)s_displayResEntries[s_displayResPending].w,
+                     (unsigned)s_displayResEntries[s_displayResPending].h);
+        } else {
+            U32 baseW = 0, baseH = 0;
+            Res_BaseDimensions(&baseW, &baseH);
+            snprintf(value, sizeof value, "%ux%u", (unsigned)baseW, (unsigned)baseH);
+        }
+        snprintf(selector, sizeof selector, "%s", value);
+        char utf8[256];
+        snprintf(utf8, sizeof utf8, GetLocalizedMenuLabel(MENU_LABEL_RESOLUTION), selector);
+        if (s_displayResPending >= 0 && s_displayResPending < s_displayResCount &&
+            s_displayResPending != current) {
+            FormatUtf8ToCp850(string, 256, "%s  (%s)", utf8, GetLocalizedMenuLabel(MENU_LABEL_RES_APPLY_HINT));
+        } else {
+            CopyUtf8ToCp850(string, 256, utf8);
+        }
         break;
     }
 
@@ -466,11 +554,18 @@ static void BuildCustomMenuText(S32 num, char *string) {
         break;
 
     case MENU_ID_DISPLAY_FULLSCREEN:
-        CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(DisplayFullScreen ? MENU_LABEL_DISPLAY_FULLSCREEN : MENU_LABEL_DISPLAY_WINDOWED));
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_DISPLAY_MODE),
+                       GetLocalizedMenuLabel(DisplayFullScreen ? MENU_LABEL_VAL_FULLSCREEN : MENU_LABEL_VAL_WINDOWED));
         break;
 
     case MENU_ID_DISPLAY_VSYNC:
-        CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(DisplayVSync ? MENU_LABEL_VSYNC_ON : MENU_LABEL_VSYNC_OFF));
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_VSYNC),
+                       GetLocalizedMenuLabel(DisplayVSync ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_DISPLAY_GPU:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_RENDERER),
+                       GetLocalizedMenuLabel(GpuObjEnabled ? MENU_LABEL_VAL_GPU : MENU_LABEL_VAL_CLASSIC));
         break;
 
     case MENU_ID_FOLLOW_CAMERA:
@@ -514,7 +609,7 @@ static void CycleTextLanguage(S32 step) {
 // window, never an OS display-mode change that could black out the screen), and
 // the open list is itself the escape hatch: the player can immediately pick
 // another mode or 640x480. The revert dialog also needs a live scene to repaint
-// over, which the boot main menu doesn't have. See GereResolutionMenu.
+// over, which the boot main menu doesn't have. See GereDisplayMenu.
 static void ApplyResolutionChoice(U32 w, U32 h) {
     /* Compare against the chosen base, not the live framebuffer: inside an
        interior the two differ, and picking the size the interior happens to be
@@ -680,7 +775,7 @@ void InitMenuIncrustText(const char *text, S32 sprite, S32 time) {
 // Plasma colour banks: SelectPlasmaBank(n) ramps the fire bar through palette
 // indices n*16+0..10. 12 is the blue/cyan cursor highlight, 4 the red volume
 // slider, 8 a green band used to mark the active value distinct from the cursor
-// (see GereResolutionMenu). Palette rows verified against the menu palette.
+// (see Resolution_MainCapture). Palette rows verified against the menu palette.
 #define PLASMA_BANK_CURSOR 12
 #define PLASMA_BANK_SLIDER 4
 #define PLASMA_BANK_GREEN 8
@@ -2134,7 +2229,7 @@ void DrawOneChoice(S32 x, S32 y, S32 type, S32 num, S32 select) {
 
     // select is a bitmask: bit 0 = cursor row (blue plasma, the usual
     // highlight), bit 1 = active-value marker (green plasma, e.g. the current
-    // resolution in GereResolutionMenu). Cursor wins when a row is both.
+    // resolution in Resolution_MainCapture). Cursor wins when a row is both.
     if (select & 1) {
         switch (type) {
         case 2: // sample volume
@@ -2293,6 +2388,17 @@ void DrawOneChoice(S32 x, S32 y, S32 type, S32 num, S32 select) {
         }
     } else
         Font(x - SizeFont(string) / 2, y - 18, string);
+
+    if (type == MENU_TYPE_DISPLAY_SELECTOR) {
+        // Left and right arrows at the row's edges: the value changes with them.
+        const S32 half = 7;
+        const S32 left = x0 + 18;
+        const S32 right = x1 - 18;
+        for (S32 i = 0; i <= half; i++) {
+            Box(left + i, y - i, left + i, y + i, CoulTextMenu);
+            Box(right - i, y - i, right - i, y + i, CoulTextMenu);
+        }
+    }
 
     RestoreClip();
     //----------------------------------------------------------------------------
@@ -2486,6 +2592,14 @@ static void GameMenuApplyMouseWheelDoGameMenu(U16 *ptrmenu, S16 selected, S32 wy
                 InitWaitNoKey();
                 applied = 1;
             }
+            break;
+
+        case MENU_TYPE_DISPLAY_SELECTOR:
+            Display_CycleOption(ptrmenu[4 + 1 + selected * 2], dir);
+            *flag = 1;
+            InitWaitNoInput(dir < 0 ? I_LEFT : I_RIGHT);
+            InitWaitNoKey();
+            applied = 1;
             break;
 
         case MENU_TYPE_TEXT_LANGUAGE:
@@ -2849,6 +2963,22 @@ S32 DoGameMenu(U16 *ptrmenu) {
             }
             break;
 
+        case MENU_TYPE_DISPLAY_SELECTOR:
+            if ((Input & I_LEFT OR MyKey == K_GRAY_LEFT)) {
+                Display_CycleOption(ptrmenu[4 + 1 + selected * 2], -1);
+                flag = 1;
+                InitWaitNoInput(I_LEFT);
+                InitWaitNoKey();
+            }
+
+            if ((Input & I_RIGHT OR MyKey == K_GRAY_RIGHT)) {
+                Display_CycleOption(ptrmenu[4 + 1 + selected * 2], 1);
+                flag = 1;
+                InitWaitNoInput(I_RIGHT);
+                InitWaitNoKey();
+            }
+            break;
+
         case MENU_TYPE_TEXT_LANGUAGE:
             if ((Input & I_LEFT OR MyKey == K_GRAY_LEFT)) {
                 CycleTextLanguage(-1);
@@ -3140,7 +3270,7 @@ S32 GereLanguageMenu(void) {
 /*══════════════════════════════════════════════════════════════════════════*/
 /*──────────────────────────────────────────────────────────────────────────*/
 
-static void BuildResolutionMenu(void); /* defined below, near GereResolutionMenu */
+static void BuildResolutionMenu(void); /* defined below, near Resolution_MainCapture */
 
 // Harness one-shot capture of the Display submenu. Mirrors
 // Menu_MainCapture's pattern: do the minimal setup the regular
@@ -3160,6 +3290,7 @@ void Display_MainCapture(const char *path) {
     PaletteSync(PtrPalNormal);
     InitDial(0);
 
+    Display_RebuildResolutionList();
     Menu_RequestCapture(path);
     DoGameMenu(DisplayMenu);
     Menu_RequestCapture(NULL); /* disarm if DoGameMenu somehow exited otherwise */
@@ -3208,7 +3339,7 @@ static void MenuSetEntry(U16 *menu, S32 row, U16 type, U16 id) {
 // row plus one plain-button row per resolution (id = MENU_ID_RESOLUTION_BASE +
 // index), cursor landing on the current resolution if present. Refreshes
 // s_resMenuEntries / s_resMenuCount, which back the range-id rows in
-// BuildCustomMenuText. Shared by GereResolutionMenu and Resolution_MainCapture.
+// BuildCustomMenuText. Used by Resolution_MainCapture.
 static void BuildResolutionMenu(void) {
     s_resMenuCount = Display_BuildEntries(s_resMenuEntries);
 
@@ -3235,60 +3366,17 @@ static void BuildResolutionMenu(void) {
 // Picking a row applies it immediately (ApplyResolutionChoice). Mirrors
 // GereDisplayMenu's backdrop setup so the list draws over the shaded scene
 // (in-game) or the boot-menu image.
-static S32 GereResolutionMenu(void) {
-    S32 select;
-    S32 flag = 0;
-
-    BuildResolutionMenu();
-
-    CopyScreen(Screen, Log);
-    BoxStaticAdd(0, 0, ModeDesiredX - 1, ModeDesiredY - 1);
-
-    if (FlagShadeMenu) {
-        ShadeBoxBlk(0, 0, (S32)ModeDesiredX - 1, (S32)ModeDesiredY - 1, SCREEN_SHADE_LVL);
-    }
-
-    while (!flag) {
-        select = DoGameMenu(ResolutionMenu);
-
-        if (select == 26 || select == 1000) {
-            flag = 1;
-        } else if (select >= MENU_ID_RESOLUTION_BASE &&
-                   select < MENU_ID_RESOLUTION_BASE + s_resMenuCount) {
-            const DisplayEntry *e = &s_resMenuEntries[select - MENU_ID_RESOLUTION_BASE];
-            ApplyResolutionChoice(e->w, e->h);
-            // Keep the page open so the player can pick another mode (or back
-            // out). The display-derived list is stable across the switch; move
-            // the green marker to whatever row is current now.
-            S32 c = Display_FindCurrentEntry(s_resMenuEntries, s_resMenuCount);
-            s_menuMarkRow = (c >= 0) ? (1 + c) : -1;
-        }
-    }
-
-    // Clear the sub-page-local statics: the green marker row, and the count the
-    // BuildCustomMenuText range guard keys on. With s_resMenuCount back to 0 the
-    // guard (num >= BASE && num < BASE + count) can't match any other menu's id.
-    s_menuMarkRow = -1;
-    s_resMenuCount = 0;
-
-    CopyScreen(Screen, Log);
-    BoxStaticAdd(0, 0, ModeDesiredX - 1, ModeDesiredY - 1);
-
-    WaitNoInput();
-
-    return FALSE;
-}
-
-// Display submenu: a self-contained submenu of OptionsMenu. The "Resolution:
-// <current>" row opens GereResolutionMenu; Vsync and Fullscreen are toggles.
+// Display submenu: a self-contained submenu of OptionsMenu, one page of
+// selector rows (see DisplayMenu and Display_CycleOption).
 S32 GereDisplayMenu(void) {
     S32 select;
     S32 flag = 0;
 
     /* The Fullscreen toggle is the last entry; drop it on always-fullscreen
        devices (Android phones/TVs) where windowed mode does not exist, leaving
-       Back + Resolution + Vsync. nb_entries 4 = full menu, 3 = hide Fullscreen. */
-    DisplayMenu[1] = Window_SupportsWindowedMode() ? 4 : 3;
+       Back + Resolution + Vsync + Renderer. nb_entries 5 = full menu, 4 = hide Display mode. */
+    DisplayMenu[1] = Window_SupportsWindowedMode() ? 5 : 4;
+    Display_RebuildResolutionList();
 
     CopyScreen(Screen, Log);
     BoxStaticAdd(0, 0, ModeDesiredX - 1, ModeDesiredY - 1);
@@ -3307,19 +3395,18 @@ S32 GereDisplayMenu(void) {
             break;
 
         case MENU_ID_RESOLUTION:
-            // Open the resolution list sub-page.
-            GereResolutionMenu();
+            // Enter applies the resolution the selector shows.
+            if (s_displayResPending >= 0 && s_displayResPending < s_displayResCount) {
+                const DisplayEntry e = s_displayResEntries[s_displayResPending];
+                ApplyResolutionChoice(e.w, e.h);
+            }
+            Display_RebuildResolutionList();
             break;
 
         case MENU_ID_DISPLAY_FULLSCREEN:
-            DisplayFullScreen ^= 1;
-            SetWindowFullscreen(DisplayFullScreen != FALSE);
-            break;
-
         case MENU_ID_DISPLAY_VSYNC:
-            DisplayVSync ^= 1;
-            ConfigFile_MarkVSyncSetThisRun();
-            Window_SetVSync(DisplayVSync);
+        case MENU_ID_DISPLAY_GPU:
+            Display_CycleOption(select, 1);
             break;
         }
     }

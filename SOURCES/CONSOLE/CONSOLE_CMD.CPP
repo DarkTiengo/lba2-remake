@@ -13,7 +13,6 @@
 #include "../FOLLOWCAM.H" // cam_* cvars and the camtrace toggle
 #include "../PLAYACF.H"
 #include <POLYGON/POLYFILT.H>
-#include <SVGA/GPUOBJ.H>
 
 extern S32 GfxDitherShading;
 #include "../CONFIG.H"
@@ -2573,8 +2572,6 @@ void Console_RegisterAll(void) {
 
     Console_RegisterCvar("fps", &DebugFps, CONSOLE_CVAR_BOOL, "Frame rate display");
     Console_RegisterCvar("horizon", (void *)&FlagDrawHorizon, CONSOLE_CVAR_BOOL_U8, "Draw horizon/cubes around");
-    Console_RegisterCvar("gfx_gpu", &GpuObjEnabled, CONSOLE_CVAR_BOOL,
-                         "GPU-lit 3D bodies (the window needs LBA2_GPU=1 at launch)");
     Console_RegisterCvar("zv", &DrawZVObjets, CONSOLE_CVAR_BOOL, "Draw ZV boxes");
 
     /* The cheat code's toggle, reachable without typing the cheat. A fixture that
