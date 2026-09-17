@@ -21,7 +21,11 @@ extern "C" {
 #define CAP_HEIGHT 0.705f ///< Nunito's capital height, in ems
 #define MAX_FONT_TEXTURES 4
 
-enum { ITEM_CARD, ITEM_TEXT, ITEM_SPARKLE, ITEM_CHEVRON };
+enum { ITEM_CARD,
+       ITEM_TEXT,
+       ITEM_SPARKLE,
+       ITEM_CHEVRON,
+       ITEM_IMAGE };
 
 typedef struct {
     S32 Kind;
@@ -33,6 +37,9 @@ typedef struct {
     S32 Align;
     S32 Bold;
     float MaxWidth;
+    const U8 *Pixels;
+    S32 PixelsW, PixelsH;
+    U32 Version;
 } T_ITEM;
 
 typedef struct {
@@ -47,6 +54,12 @@ static T_ITEM s_items[MAX_ITEMS];
 static S32 s_count = 0;
 
 static T_FONT_TEXTURE s_fonts[MAX_FONT_TEXTURES];
+
+/* One cached image texture: the menus show one picture at a time. */
+static SDL_Texture *s_imageTexture = NULL;
+static const U8 *s_imagePixels = NULL;
+static S32 s_imageW = 0, s_imageH = 0;
+static U32 s_imageVersion = 0;
 static SDL_Renderer *s_fontRenderer = NULL;
 static U32 s_frameCounter = 0;
 
@@ -369,9 +382,17 @@ static void DrawChevron(SDL_Renderer *renderer, const T_ITEM *item) {
     const float cx = s_offsetX + item->X0 * k;
     const float cy = s_offsetY + item->Y0 * k;
     const float h = item->Size * k * 0.5f;
-    const float w = h * 0.62f * (item->Align < 0 ? -1.0f : 1.0f);
     const float width = SDL_max(item->Size * k * 0.2f, 2.0f);
     const SDL_FColor c = ToColor(item->Color, 1.0f);
+    if (item->Align == -2 || item->Align == 2) {
+        /* Vertical: the tip up (-2) or down (2). */
+        const float w = h * 0.62f * (item->Align < 0 ? -1.0f : 1.0f);
+        const float tipY = cy + w * 0.5f;
+        Stroke(renderer, cx - h, cy - w * 0.5f, cx, tipY, width, c);
+        Stroke(renderer, cx, tipY, cx + h, cy - w * 0.5f, width, c);
+        return;
+    }
+    const float w = h * 0.62f * (item->Align < 0 ? -1.0f : 1.0f);
     const float tipX = cx + w * 0.5f;
     Stroke(renderer, cx - w * 0.5f, cy - h, tipX, cy, width, c);
     Stroke(renderer, tipX, cy, cx - w * 0.5f, cy + h, width, c);
@@ -580,6 +601,40 @@ static void DrawText(SDL_Renderer *renderer, const T_ITEM *item) {
     Flush(renderer, texture);
 }
 
+static void DrawImage(SDL_Renderer *renderer, const T_ITEM *item) {
+    if (s_fontRenderer != renderer) {
+        UiOverlay_ReleaseTextures();
+        s_fontRenderer = renderer;
+    }
+    if (s_imageTexture == NULL || s_imagePixels != item->Pixels || s_imageVersion != item->Version ||
+        s_imageW != item->PixelsW || s_imageH != item->PixelsH) {
+        if (s_imageTexture != NULL && (s_imageW != item->PixelsW || s_imageH != item->PixelsH)) {
+            SDL_DestroyTexture(s_imageTexture);
+            s_imageTexture = NULL;
+        }
+        if (s_imageTexture == NULL) {
+            s_imageTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC,
+                                               item->PixelsW, item->PixelsH);
+            if (s_imageTexture == NULL) {
+                return;
+            }
+            SDL_SetTextureBlendMode(s_imageTexture, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureScaleMode(s_imageTexture, SDL_SCALEMODE_LINEAR);
+        }
+        SDL_UpdateTexture(s_imageTexture, NULL, item->Pixels, item->PixelsW * 4);
+        s_imagePixels = item->Pixels;
+        s_imageVersion = item->Version;
+        s_imageW = item->PixelsW;
+        s_imageH = item->PixelsH;
+    }
+    SDL_FRect dst;
+    dst.x = s_offsetX + item->X0 * s_scale;
+    dst.y = s_offsetY + item->Y0 * s_scale;
+    dst.w = (item->X1 - item->X0) * s_scale;
+    dst.h = (item->Y1 - item->Y0) * s_scale;
+    SDL_RenderTexture(renderer, s_imageTexture, NULL, &dst);
+}
+
 static T_ITEM *NewItem(S32 kind) {
     if (s_count >= MAX_ITEMS) {
         return NULL;
@@ -641,6 +696,24 @@ void UiOverlay_Sparkle(float x, float y, float size, U32 color) {
     item->Color = color;
 }
 
+void UiOverlay_Image(float x0, float y0, float x1, float y1, const U8 *rgba, S32 w, S32 h, U32 version) {
+    if (rgba == NULL || w <= 0 || h <= 0) {
+        return;
+    }
+    T_ITEM *item = NewItem(ITEM_IMAGE);
+    if (item == NULL) {
+        return;
+    }
+    item->X0 = x0;
+    item->Y0 = y0;
+    item->X1 = x1;
+    item->Y1 = y1;
+    item->Pixels = rgba;
+    item->PixelsW = w;
+    item->PixelsH = h;
+    item->Version = version;
+}
+
 void UiOverlay_Chevron(float x, float y, float size, S32 dir, U32 color) {
     T_ITEM *item = NewItem(ITEM_CHEVRON);
     if (item == NULL) {
@@ -649,7 +722,7 @@ void UiOverlay_Chevron(float x, float y, float size, S32 dir, U32 color) {
     item->X0 = x;
     item->Y0 = y;
     item->Size = size;
-    item->Align = dir < 0 ? -1 : 1;
+    item->Align = dir;
     item->Color = color;
 }
 
@@ -687,6 +760,10 @@ void UiOverlay_Render(void *sdlRenderer) {
         case ITEM_CHEVRON:
             DrawChevron(renderer, item);
             break;
+        case ITEM_IMAGE:
+            Flush(renderer, NULL);
+            DrawImage(renderer, item);
+            break;
         case ITEM_TEXT:
             Flush(renderer, NULL);
             DrawText(renderer, item);
@@ -706,6 +783,11 @@ void UiOverlay_ReleaseTextures(void) {
             s_fonts[i].Texture = NULL;
         }
     }
+    if (s_imageTexture != NULL) {
+        SDL_DestroyTexture(s_imageTexture);
+        s_imageTexture = NULL;
+    }
+    s_imagePixels = NULL;
     s_fontRenderer = NULL;
 }
 

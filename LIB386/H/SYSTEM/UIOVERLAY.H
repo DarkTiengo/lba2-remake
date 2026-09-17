@@ -54,7 +54,13 @@ float UiOverlay_TextWidth(const char *cp850, float size);
 /** A four-pointed sparkle centred on (x, y). */
 void UiOverlay_Sparkle(float x, float y, float size, U32 color);
 
-/** A chevron centred on (x, y), size tall, pointing left (dir < 0) or right. */
+/** An RGBA image (w x h, 4 bytes a pixel, caller-owned and kept alive while
+ *  listed) stretched over [x0, x1] x [y0, y1], filtered. version identifies its
+ *  contents: the texture is uploaded again only when it changes. */
+void UiOverlay_Image(float x0, float y0, float x1, float y1, const U8 *rgba, S32 w, S32 h, U32 version);
+
+/** A chevron centred on (x, y), size tall, pointing left (dir -1), right (1),
+ *  up (-2) or down (2). */
 void UiOverlay_Chevron(float x, float y, float size, S32 dir, U32 color);
 
 /** Draws the list over the frame; called by the window between the frame and the

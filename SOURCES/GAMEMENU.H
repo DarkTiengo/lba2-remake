@@ -60,6 +60,9 @@ extern void DrawOneChoice(S32 x, S32 y, S32 type, S32 num, S32 select);
 #define MENU_STYLE_AUTO 2
 extern S32 MenuStyle;
 
+/* TRUE when menus draw the modern look now (MenuStyle, renderer, a window). */
+extern S32 Menu_IsModern(void);
+
 /*--------------------------------------------------------------------------*/
 extern void DrawGameMenu(U16 *ptrmenu, S32 justone);
 /*--------------------------------------------------------------------------*/

@@ -1188,9 +1188,285 @@ extern S32 DeltaChoice;
 extern MOVE MoveChoice;
 extern void InitShakeChoice(void);
 
+#define NB_GAME_CHOICE 5
+// Save/load + name-entry slot list origin (also feeds the hit-test and the
+// name-entry cursor). Authored on the 480-tall canvas; UI_VCENTER_OFS floats
+// the list to the vertical middle on a taller framebuffer (no-op at 480).
+#define Y_START_CHOICE (205 + UI_VCENTER_OFS)
+
+// --- Modern save / load page --------------------------------------------------
+// The slot list, its title and the scene preview recorded as they are "drawn",
+// then published to the UI overlay as cards (Menu_IsModern). Only while
+// ChoosePlayerName runs: the same drawing calls serve other screens too.
+
+static S32 s_savePage = FALSE;    ///< ChoosePlayerName is up
+static S32 s_saveEditing = FALSE; ///< InputPlayerName is typing into the selected row
+
+typedef struct {
+    char Text[128];
+    S32 Draw;
+    S32 Valid;
+    S32 Caret;
+} T_SAVE_ROW;
+
+static T_SAVE_ROW s_saveRows[5];
+static char s_saveTitle[128];
+static S32 s_savePreview = 0; ///< 0 none, 1 scene thumbnail, 2 new-game slot
+static S32 s_savePreviewY = 0;
+static U8 s_savePreviewRgba[160 * 120 * 4];
+static U32 s_savePreviewVersion = 0;
+static float s_saveFocus[5];
+static U32 s_saveTime = 0;
+static S32 s_saveConfirm = FALSE; ///< the delete confirmation is up (DeleteSavedGame)
+static char s_saveConfirmName[128];
+
+static U32 LerpColor(U32 a, U32 b, float t);
+
+static S32 SavePage_Modern(void) {
+    return s_savePage && Menu_IsModern();
+}
+
+static void SavePage_Reset(void) {
+    memset(s_saveRows, 0, sizeof(s_saveRows));
+    memset(s_saveFocus, 0, sizeof(s_saveFocus));
+    s_saveTitle[0] = 0;
+    s_savePreview = 0;
+    s_saveConfirm = FALSE;
+}
+
+/* The scene thumbnail in true colour, through the palette the menu shows. */
+static void SavePage_SetThumbnail(const U8 *indices, S32 y) {
+    for (S32 i = 0; i < 160 * 120; i++) {
+        const U8 *rgb = PtrPal + indices[i] * 3;
+        s_savePreviewRgba[i * 4 + 0] = rgb[0];
+        s_savePreviewRgba[i * 4 + 1] = rgb[1];
+        s_savePreviewRgba[i * 4 + 2] = rgb[2];
+        s_savePreviewRgba[i * 4 + 3] = 255;
+    }
+    s_savePreview = 1;
+    s_savePreviewY = y;
+    s_savePreviewVersion++;
+}
+
+static void SavePage_Hint(float x, float y, const char *key, S32 label, S32 alignRight) {
+    char text[64];
+    CopyUtf8ToCp850(text, sizeof text, GetLocalizedMenuLabel((enum MenuLocalizedLabel)label));
+    const float keyW = UiOverlay_TextWidth(key, 13.0f) + 14.0f;
+    const float textW = UiOverlay_TextWidth(text, 15.0f);
+    const float total = keyW + 8.0f + textW;
+    const float left = alignRight ? x - total : x;
+    /* A dark pill behind the hint keeps it readable over any backdrop. */
+    T_UIOVERLAY_CARD pill;
+    memset(&pill, 0, sizeof(pill));
+    pill.Radius = 13.0f;
+    pill.FillTop = 0xB0101624u;
+    pill.FillBottom = 0xB00A0E18u;
+    pill.Border = 0x28FFFFFFu;
+    pill.BorderWidth = 1.0f;
+    UiOverlay_Card(left - 4.0f, y - 13.0f, left + total + 10.0f, y + 13.0f, &pill);
+    T_UIOVERLAY_CARD cap;
+    memset(&cap, 0, sizeof(cap));
+    cap.Radius = 6.0f;
+    cap.FillTop = 0xE0404A60u;
+    cap.FillBottom = 0xE02A3044u;
+    cap.Border = 0x60FFFFFFu;
+    cap.BorderWidth = 1.0f;
+    cap.Shadow = 0x60000000u;
+    cap.ShadowY = 2.0f;
+    cap.ShadowBlur = 4.0f;
+    UiOverlay_Card(left, y - 10.0f, left + keyW, y + 10.0f, &cap);
+    UiOverlay_Text(left + keyW * 0.5f, y, key, 13.0f, 0xFFE8EEF8u, UIOVERLAY_ALIGN_CENTER, TRUE, 0.0f);
+    UiOverlay_Text(left + keyW + 8.0f, y, text, 15.0f, 0xFFD0DAE8u, UIOVERLAY_ALIGN_LEFT, TRUE, 0.0f);
+}
+
+static void SavePage_Preview(float cx, float y0, S32 kind, const char *label) {
+    const float x0 = cx - 80.0f, x1 = cx + 80.0f, y1 = y0 + 120.0f;
+    T_UIOVERLAY_CARD frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.Radius = 12.0f;
+    frame.FillTop = 0xF0283048u;
+    frame.FillBottom = 0xF0161B2Au;
+    frame.Border = 0x70B8DCFFu;
+    frame.BorderWidth = 1.5f;
+    frame.Shadow = 0x90000000u;
+    frame.ShadowY = 6.0f;
+    frame.ShadowBlur = 16.0f;
+    frame.Glow = 0x305AB4FFu;
+    frame.GlowSize = 10.0f;
+    UiOverlay_Card(x0 - 7.0f, y0 - 7.0f, x1 + 7.0f, y1 + 7.0f, &frame);
+    if (kind == 1) {
+        UiOverlay_Image(x0, y0, x1, y1, s_savePreviewRgba, 160, 120, s_savePreviewVersion);
+        /* A thin inner edge over the picture's border. */
+        T_UIOVERLAY_CARD edge;
+        memset(&edge, 0, sizeof(edge));
+        edge.Radius = 3.0f;
+        edge.Border = 0x50FFFFFFu;
+        edge.BorderWidth = 1.0f;
+        UiOverlay_Card(x0, y0, x1, y1, &edge);
+    } else {
+        UiOverlay_Sparkle(cx, y0 + 50.0f, 46.0f, 0xFFCFEAFFu);
+        UiOverlay_Sparkle(cx - 34.0f, y0 + 30.0f, 16.0f, 0xB0CFEAFFu);
+        UiOverlay_Sparkle(cx + 32.0f, y0 + 72.0f, 12.0f, 0x90CFEAFFu);
+        if (label != NULL) {
+            UiOverlay_Text(cx, y0 + 100.0f, label, 17.0f, 0xFFD6E6F6u, UIOVERLAY_ALIGN_CENTER, TRUE, 150.0f);
+        }
+    }
+}
+
+static void SavePage_Row(float cx, float y, const T_SAVE_ROW *row, float focus, float pulse, S32 isNew) {
+    const S32 editing = s_saveEditing && (row->Draw & 1);
+    const float halfW = 232.0f + 14.0f * focus;
+    const float halfH = 20.0f + 3.0f * focus;
+    const float x0 = cx - halfW, x1 = cx + halfW;
+    T_UIOVERLAY_CARD card;
+    memset(&card, 0, sizeof(card));
+    card.Radius = 14.0f;
+    card.FillTop = LerpColor(0xD8262E44u, 0xF2305284u, focus);
+    card.FillBottom = LerpColor(0xD8171C2Cu, 0xF21C3560u, focus);
+    card.Border = LerpColor(0x38FFFFFFu, editing ? 0xFFFFD27Au : 0xFF86CCFFu, focus);
+    card.BorderWidth = 1.0f + focus;
+    card.Shadow = LerpColor(0x70000000u, 0x90000000u, focus);
+    card.ShadowY = 4.0f + 4.0f * focus;
+    card.ShadowBlur = 10.0f + 8.0f * focus;
+    if (focus > 0.01f) {
+        const U32 glowAlpha = (U32)(focus * (110.0f + 60.0f * pulse));
+        card.Glow = (glowAlpha << 24) | (editing ? 0xFFC24Au : 0x5AB4FFu);
+        card.GlowSize = 12.0f;
+    }
+    UiOverlay_Card(x0, y - halfH, x1, y + halfH, &card);
+
+    U32 color = LerpColor(0xFFD6DEEAu, 0xFFFFFFFFu, focus);
+    if (isNew && !editing) {
+        color = LerpColor(0xFF9FD8FFu, 0xFFCFEFFFu, focus);
+        UiOverlay_Sparkle(x0 + 30.0f, y, 15.0f + 3.0f * pulse * focus, (0xB0u << 24) | 0xCFEAFFu);
+    }
+    const float maxW = (x1 - x0) - 110.0f;
+    UiOverlay_Text(cx, y, row->Text, 23.0f, color, UIOVERLAY_ALIGN_CENTER, TRUE, maxW);
+    if (editing && row->Caret) {
+        float w = UiOverlay_TextWidth(row->Text, 23.0f);
+        if (w > maxW) {
+            w = maxW;
+        }
+        T_UIOVERLAY_CARD caret;
+        memset(&caret, 0, sizeof(caret));
+        caret.Radius = 1.0f;
+        caret.FillTop = 0xFFFFE2A0u;
+        caret.FillBottom = 0xFFFFC24Au;
+        const float x = cx + w * 0.5f + 4.0f;
+        UiOverlay_Card(x, y - 11.0f, x + 2.5f, y + 11.0f, &caret);
+    }
+    /* More slots above or below: arrows beside the list, clear of the preview. */
+    if (row->Draw & ARROW_SG) {
+        UiOverlay_Chevron(cx + 266.0f, y, 12.0f, -2, 0xE0B8DCFFu);
+    }
+    if (row->Draw & ARROW_ID) {
+        UiOverlay_Chevron(cx + 266.0f, y, 12.0f, 2, 0xE0B8DCFFu);
+    }
+}
+
+/* The delete confirmation's name and picture, under the confirm menu's cards. */
+static void SavePage_Veil(void) {
+    /* Dim the backdrop so the page reads as one layer above the game. */
+    T_UIOVERLAY_CARD veil;
+    memset(&veil, 0, sizeof(veil));
+    veil.FillTop = 0x78000008u;
+    veil.FillBottom = 0x50000008u;
+    UiOverlay_Card(-4.0f, -4.0f, (float)ModeDesiredX + 4.0f, (float)ModeDesiredY + 4.0f, &veil);
+}
+
+static void SavePage_ConfirmDecor(void) {
+    const float cx = (float)UI_CENTER_X;
+    SavePage_Veil();
+    T_SAVE_ROW row;
+    memset(&row, 0, sizeof(row));
+    SDL_strlcpy(row.Text, s_saveConfirmName, sizeof(row.Text));
+    SavePage_Row(cx, (float)(80 + UI_VCENTER_OFS), &row, 0.0f, 0.0f, FALSE);
+    if (s_savePreview == 1) {
+        SavePage_Preview(cx, (float)s_savePreviewY, 1, NULL);
+    }
+}
+
+static void SavePage_Publish(void) {
+    if (!SavePage_Modern()) {
+        return;
+    }
+    const float cx = (float)UI_CENTER_X;
+    const U32 now = (U32)TimerRefHR;
+    float dt = (float)(now - s_saveTime) / 1000.0f;
+    if (dt < 0.0f || dt > 0.25f) {
+        dt = 0.016f;
+    }
+    s_saveTime = now;
+    const float step = SDL_min(dt * 40.0f, 1.0f);
+    const float pulse = 0.5f + 0.5f * (float)sin((double)now / 1000.0 * 3.0);
+
+    UiOverlay_Clear();
+    SavePage_Veil();
+    if (s_saveTitle[0]) {
+        const float ty = (float)(25 + UI_VCENTER_OFS);
+        const float tw = UiOverlay_TextWidth(s_saveTitle, 30.0f);
+        UiOverlay_Text(cx + 1.0f, ty + 2.0f, s_saveTitle, 30.0f, 0x90000000u, UIOVERLAY_ALIGN_CENTER, TRUE, 520.0f);
+        UiOverlay_Text(cx, ty, s_saveTitle, 30.0f, 0xFFFFFFFFu, UIOVERLAY_ALIGN_CENTER, TRUE, 520.0f);
+        const float half = SDL_min(tw, 520.0f) * 0.5f + 22.0f;
+        UiOverlay_Sparkle(cx - half, ty, 16.0f, 0xE0CFEAFFu);
+        UiOverlay_Sparkle(cx + half, ty, 16.0f, 0xE0CFEAFFu);
+    }
+
+    S32 selected = -1;
+    S32 lastValid = -1;
+    for (S32 n = 0; n < 5; n++) {
+        if (s_saveRows[n].Valid) {
+            lastValid = n;
+            if (s_saveRows[n].Draw & 1) {
+                selected = n;
+            }
+        }
+    }
+    if (s_savePreview != 0) {
+        char label[64];
+        label[0] = 0;
+        if (s_savePreview == 2) {
+            SDL_strlcpy(label, NewGameTxt, sizeof label);
+        }
+        SavePage_Preview(cx, (float)s_savePreviewY, s_savePreview, label);
+        const float hy = (float)s_savePreviewY + 30.0f;
+        SavePage_Hint(cx - 112.0f, hy, "Enter", MENU_LABEL_HINT_CONFIRM, TRUE);
+        SavePage_Hint(cx - 112.0f, hy + 34.0f, "Esc", MENU_LABEL_HINT_BACK, TRUE);
+        if (s_savePreview == 1 && !s_saveEditing) {
+            SavePage_Hint(cx + 112.0f, hy, "Del", MENU_LABEL_HINT_DELETE, FALSE);
+        }
+    }
+
+    for (S32 n = 0; n < 5; n++) {
+        const T_SAVE_ROW *row = &s_saveRows[n];
+        if (!row->Valid) {
+            continue;
+        }
+        s_saveFocus[n] += ((n == selected ? 1.0f : 0.0f) - s_saveFocus[n]) * step;
+        /* The new-game slot is always the list's last entry, shown last. */
+        const S32 isNew = n == lastValid && !strcmp(row->Text, NewGameTxt);
+        SavePage_Row(cx, (float)(Y_START_CHOICE + 60 * n), row, s_saveFocus[n], pulse, isNew);
+    }
+    /* A present only happens for a dirty frame. */
+    BoxStaticAdd(0, 0, 1, 1);
+}
+
 void DrawOneString(S32 x, S32 y, char *playername, S32 draw) {
     S32 x0, y0, x1, y1;
     S32 dx;
+
+    if (SavePage_Modern()) {
+        const S32 n = (y - Y_START_CHOICE + 30) / 60;
+        if (y >= Y_START_CHOICE - 30 && n >= 0 && n < 5) {
+            T_SAVE_ROW *row = &s_saveRows[n];
+            SDL_strlcpy(row->Text, playername, sizeof(row->Text));
+            row->Draw = draw;
+            row->Valid = TRUE;
+            row->Caret = CursorActif;
+            SavePage_Publish();
+            return;
+        }
+    }
 
     x0 = x - LargeurMenu / 2;
     x1 = x + LargeurMenu / 2;
@@ -1267,6 +1543,16 @@ void DrawOneString(S32 x, S32 y, char *playername, S32 draw) {
 void ClearOneString(S32 x, S32 y) {
     S32 x0, y0, x1, y1;
 
+    if (SavePage_Modern()) {
+        const S32 n = (y - Y_START_CHOICE + 30) / 60;
+        if (y >= Y_START_CHOICE - 30 && n >= 0 && n < 5) {
+            s_saveRows[n].Valid = FALSE;
+        }
+        SavePage_Publish();
+        BoxUpdate();
+        return;
+    }
+
     x0 = x - LargeurMenu / 2;
     x1 = x + LargeurMenu / 2;
 
@@ -1286,6 +1572,12 @@ void ClearOneString(S32 x, S32 y) {
 void DrawSingleString(S32 x, S32 y, char *string) {
     S32 x0, y0, x1, y1;
     S32 sf;
+
+    if (SavePage_Modern()) {
+        SDL_strlcpy(s_saveTitle, string, sizeof(s_saveTitle));
+        SavePage_Publish();
+        return;
+    }
 
     sf = SizeFont(string);
 
@@ -1310,6 +1602,13 @@ void DrawSingleString(S32 x, S32 y, char *string) {
 /*──────────────────────────────────────────────────────────────────────────*/
 
 void DrawCadreNewGame(void) {
+    if (SavePage_Modern()) {
+        s_savePreview = 2;
+        s_savePreviewY = SAVE_THUMB_Y;
+        SavePage_Publish();
+        return;
+    }
+
     S32 num = 16; // Logo Americain
     S32 dx, dy;
     S32 x, y;
@@ -1335,11 +1634,6 @@ void DrawCadreNewGame(void) {
 }
 
 /*──────────────────────────────────────────────────────────────────────────*/
-#define NB_GAME_CHOICE 5
-// Save/load + name-entry slot list origin (also feeds the hit-test and the
-// name-entry cursor). Authored on the 480-tall canvas; UI_VCENTER_OFS floats
-// the list to the vertical middle on a taller framebuffer (no-op at 480).
-#define Y_START_CHOICE (205 + UI_VCENTER_OFS)
 #define GM_MENU_HALF_WIDTH_SAVE 275
 
 static S32 GameMenuSaveListHitTest(U32 mx, U32 my, S32 nb, S32 start, S32 *outSel) {
@@ -1376,7 +1670,16 @@ static S32 GameMenuSaveListHitTest(U32 mx, U32 my, S32 nb, S32 start, S32 *outSe
 // does, both are routed past this function inside ChoosePlayerName: new-game slot
 // gets a datetime stem, existing slot keeps its current name (overwrite). See the
 // !LastInputWasKeyboard branch there.
+static S32 InputPlayerNameLoop(S32 choice, char *name);
+
 S32 InputPlayerName(S32 choice, char *name) {
+    s_saveEditing = TRUE;
+    const S32 ret = InputPlayerNameLoop(choice, name);
+    s_saveEditing = FALSE;
+    return ret;
+}
+
+static S32 InputPlayerNameLoop(S32 choice, char *name) {
     char memoplayername[255];
     S32 flag = 1;
     S32 retval = FALSE;
@@ -1534,7 +1837,19 @@ S32 InputPlayerName(S32 choice, char *name) {
 #define TEMPO_SCREEN_SAVE 110
 #define TEMPO_REPEAT_KEY 150
 
+static S32 ChoosePlayerNameLoop(S32 mess, S32 flagflip, S32 flagnew);
+
 S32 ChoosePlayerName(S32 mess, S32 flagflip, S32 flagnew) {
+    SavePage_Reset();
+    s_savePage = TRUE;
+    const S32 ret = ChoosePlayerNameLoop(mess, flagflip, flagnew);
+    s_savePage = FALSE;
+    SavePage_Reset();
+    UiOverlay_Clear();
+    return ret;
+}
+
+static S32 ChoosePlayerNameLoop(S32 mess, S32 flagflip, S32 flagnew) {
     S32 flag = 3;
     char *listplayername;
     char **ptrlist;
@@ -1668,6 +1983,9 @@ S32 ChoosePlayerName(S32 mess, S32 flagflip, S32 flagnew) {
             // Reset marquee so the newly-selected slot starts scrolling
             // from the left edge — matches DrawGameMenu's pattern.
             InitShakeChoice();
+            if (SavePage_Modern()) {
+                memset(s_saveRows, 0, sizeof(s_saveRows));
+            }
             for (n = 0; n < NB_GAME_CHOICE; n++) {
                 if (n + start >= nb)
                     break;
@@ -2681,6 +2999,9 @@ static void DrawGameMenuModern(U16 *ptrmenu) {
     const float pulse = 0.5f + 0.5f * (float)sin((double)now / 1000.0 * 3.0);
 
     UiOverlay_Clear();
+    if (s_saveConfirm) {
+        SavePage_ConfirmDecor();
+    }
     for (S32 n = 0; n < nb && n < MODERN_MAX_ROWS; n++) {
         const S32 type = ptrmenu[4 + n * 2];
         const S32 num = ptrmenu[4 + n * 2 + 1];
@@ -4091,11 +4412,21 @@ S32 DeleteSavedGame(void) {
 
     // Delete-save confirmation: float the name + preview with SavedConfirmMenu
     // (which floats via DrawGameMenu) so the whole screen stays coherent. No-op at 480.
-    DrawOneString(UI_CENTER_X, 80 + UI_VCENTER_OFS, PlayerName, 2);
-    ptr = LoadGameScreen();
-    if (ptr)
-        DrawScreenSave(ptr, SAVE_THUMB_X, 130 + UI_VCENTER_OFS);
-    BoxUpdate();
+    if (SavePage_Modern()) {
+        /* The confirm menu's cards carry the name and picture (SavePage_ConfirmDecor). */
+        SDL_strlcpy(s_saveConfirmName, PlayerName, sizeof(s_saveConfirmName));
+        ptr = LoadGameScreen();
+        s_savePreview = 0;
+        if (ptr)
+            SavePage_SetThumbnail(ptr, 130 + UI_VCENTER_OFS);
+        s_saveConfirm = TRUE;
+    } else {
+        DrawOneString(UI_CENTER_X, 80 + UI_VCENTER_OFS, PlayerName, 2);
+        ptr = LoadGameScreen();
+        if (ptr)
+            DrawScreenSave(ptr, SAVE_THUMB_X, 130 + UI_VCENTER_OFS);
+        BoxUpdate();
+    }
 
     SavedConfirmMenu[0] = 0;
 
@@ -4123,6 +4454,8 @@ S32 DeleteSavedGame(void) {
     InitWaitNoInput(I_FIRE | I_ACTION | I_JOY | I_MENUS);
 
     MenuMouseRelease();
+    s_saveConfirm = FALSE;
+    s_savePreview = 0;
     return ret;
 }
 
@@ -4182,6 +4515,12 @@ static void DrawScreenSaveNoFlip(U8 *ptr, S32 x, S32 y) {
 
 /*──────────────────────────────────────────────────────────────────────────*/
 void DrawScreenSave(U8 *ptr, S32 x, S32 y) {
+    if (SavePage_Modern()) {
+        SavePage_SetThumbnail(ptr, y);
+        SavePage_Publish();
+        BoxUpdate();
+        return;
+    }
     DrawScreenSaveNoFlip(ptr, x, y);
     BoxUpdate();
 }
