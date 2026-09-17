@@ -220,6 +220,8 @@ extern void AffUpperRight(S32 x, S32 y, S32 flag);
 extern void AffLowerRight(S32 x, S32 y, S32 flag);
 extern void DoAnimHolo(void);
 extern void AffReticule(void);
+/* Modern style: remove the holomap's overlay reticule and name strip. */
+extern void HoloModern_Close(void);
 extern void AffHoloMess(void);
 extern void AdjustScreenMax(void);
 extern void ComputeCoorGlobe(void);

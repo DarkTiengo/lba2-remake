@@ -1318,6 +1318,7 @@ static S32 s_dialModern = FALSE;
 static T_DIAL_LINE s_dialLines[DIAL_MODERN_LINES];
 static S32 s_dialNbLines = 0;
 static S32 s_dialArrow = FALSE;
+static S32 s_dialCentered = FALSE; ///< the holomap's one-line name strip
 
 static void DialModern_ResetText(void) {
     s_dialNbLines = 0;
@@ -1379,21 +1380,30 @@ static void DialModern_Publish(void) {
     panel.GlowSize = 10.0f;
     UiOverlay_Card(x0, y0, x1, y1, &panel);
 
+    if (s_dialCentered) {
+        /* The holomap strip: sparkles either side of the centred name. */
+        UiOverlay_Sparkle(x0 + 30.0f, (y0 + y1) * 0.5f, 16.0f, 0xD0CFEAFFu);
+        UiOverlay_Sparkle(x1 - 30.0f, (y0 + y1) * 0.5f, 16.0f, 0xD0CFEAFFu);
+    }
     /* A bar in the speaker's colour down the left edge. */
     T_UIOVERLAY_CARD bar;
     memset(&bar, 0, sizeof(bar));
     bar.Radius = 2.0f;
     bar.FillTop = (accent & 0x00FFFFFFu) | 0xE0000000u;
     bar.FillBottom = (accent & 0x00FFFFFFu) | 0x60000000u;
-    UiOverlay_Card(x0 + 7.0f, y0 + 14.0f, x0 + 11.0f, y1 - 14.0f, &bar);
+    if (!s_dialCentered) {
+        UiOverlay_Card(x0 + 7.0f, y0 + 14.0f, x0 + 11.0f, y1 - 14.0f, &bar);
+    }
 
     for (S32 i = 0; i < s_dialNbLines; i++) {
         const T_DIAL_LINE *line = &s_dialLines[i];
         /* Engine lines hold a glyph cell's top; the text centres its capitals. */
-        const float ty = (float)line->Y + 17.0f;
-        const float tx = (float)line->X + 10.0f;
-        UiOverlay_Text(tx + 1.0f, ty + 2.0f, line->Text, 27.0f, 0x90000000u, UIOVERLAY_ALIGN_LEFT, TRUE, x1 - tx - 20.0f);
-        UiOverlay_Text(tx, ty, line->Text, 27.0f, accent, UIOVERLAY_ALIGN_LEFT, TRUE, x1 - tx - 20.0f);
+        const float ty = s_dialCentered ? (y0 + y1) * 0.5f : (float)line->Y + 17.0f;
+        const float tx = s_dialCentered ? (x0 + x1) * 0.5f : (float)line->X + 10.0f;
+        const S32 align = s_dialCentered ? UIOVERLAY_ALIGN_CENTER : UIOVERLAY_ALIGN_LEFT;
+        const float maxW = s_dialCentered ? x1 - x0 - 60.0f : x1 - tx - 20.0f;
+        UiOverlay_Text(tx + 1.0f, ty + 2.0f, line->Text, 27.0f, 0x90000000u, align, TRUE, maxW);
+        UiOverlay_Text(tx, ty, line->Text, 27.0f, accent, align, TRUE, maxW);
     }
 
     if (s_dialArrow) {
@@ -1408,7 +1418,12 @@ static void DialModern_Close(void) {
         BoxStaticAdd(0, 0, 1, 1);
     }
     s_dialModern = FALSE;
+    s_dialCentered = FALSE;
     DialModern_ResetText();
+}
+
+void Dial_ModernClose(void) {
+    DialModern_Close();
 }
 
 /*-------------------------------------------------------------------------*/
@@ -1746,6 +1761,7 @@ void TestAndDrawRadio(void) {
 void NewInitDialWindow() {
     /* Modern style: the box is an overlay card, the frame keeps the scene. */
     s_dialModern = Menu_IsModern() && FlagMessageShade;
+    s_dialCentered = FALSE;
     DialModern_ResetText();
 
     //----- Cadre et Shade
@@ -1805,13 +1821,19 @@ void NextDialWindow() {
 /*-------------------------------------------------------------------------*/
 //      Utilise pour HoloGlobe et HoloPlan ( sans AffScene ni clip box )
 void HoloInitDialWindow() {
-    DialModern_Close();
     HoloWinDial();
 
-    BackupAngles(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1);
-    ShadeBoxBlk(Dial_X0 + 1, Dial_Y0 + 1, Dial_X1 - 1, Dial_Y1 - 1, 8);
-    DrawCadre(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1, ALL_ANGLES);
-    RestoreAngles(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1);
+    s_dialModern = Menu_IsModern();
+    s_dialCentered = s_dialModern;
+    DialModern_ResetText();
+    if (s_dialModern) {
+        DialModern_Publish();
+    } else {
+        BackupAngles(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1);
+        ShadeBoxBlk(Dial_X0 + 1, Dial_Y0 + 1, Dial_X1 - 1, Dial_Y1 - 1, 8);
+        DrawCadre(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1, ALL_ANGLES);
+        RestoreAngles(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1);
+    }
 
     CopyBlock(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1, Log,
               Dial_X0, Dial_Y0, Screen);

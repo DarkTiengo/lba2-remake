@@ -3,6 +3,7 @@
 //
 
 #include "C_EXTERN.H" // include LBA2
+#include "GAMEMENU.H" /* Menu_IsModern */
 #include "DIRECTORIES.H"
 #include "INPUT.H"
 #include "UI_LAYOUT.H" /* UI_VCENTER_OFS */
@@ -10,6 +11,7 @@
 #include <FILEIO/SAVEPNG.H>
 #include <SVGA/SCREEN.H>
 #include <SYSTEM/KEYBOARD_KEYS.H>
+#include <SYSTEM/UIOVERLAY.H>
 #include <string.h>
 #include "AMBIANCE.H"
 #include "BOOT_EXIT.H"
@@ -208,6 +210,40 @@ void AffLowerRight(S32 x, S32 y, S32 flag) {
 }
 //────────────────────────────────────────────────────────────────────────────
 
+/* Modern style: the target reticule as glowing overlay corners. */
+static void HoloModern_Reticule(S32 visible, S32 x0, S32 y0, S32 x1, S32 y1) {
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+    if (visible) {
+        const float len = (float)SizeRet * 0.55f + 6.0f;
+        const float w = 3.0f;
+        T_UIOVERLAY_CARD stroke;
+        memset(&stroke, 0, sizeof(stroke));
+        stroke.Radius = 1.5f;
+        stroke.FillTop = 0xFFA8F0FFu;
+        stroke.FillBottom = 0xFF6FD6FFu;
+        stroke.Glow = 0x7045C8FFu;
+        stroke.GlowSize = 6.0f;
+        const float fx0 = (float)x0, fy0 = (float)y0, fx1 = (float)x1, fy1 = (float)y1;
+        /* Each corner: a horizontal and a vertical bar meeting at it. */
+        UiOverlay_Card(fx0, fy0, fx0 + len, fy0 + w, &stroke);
+        UiOverlay_Card(fx0, fy0, fx0 + w, fy0 + len, &stroke);
+        UiOverlay_Card(fx1 - len, fy0, fx1, fy0 + w, &stroke);
+        UiOverlay_Card(fx1 - w, fy0, fx1, fy0 + len, &stroke);
+        UiOverlay_Card(fx0, fy1 - w, fx0 + len, fy1, &stroke);
+        UiOverlay_Card(fx0, fy1 - len, fx0 + w, fy1, &stroke);
+        UiOverlay_Card(fx1 - len, fy1 - w, fx1, fy1, &stroke);
+        UiOverlay_Card(fx1 - w, fy1 - len, fx1, fy1, &stroke);
+    }
+    BoxStaticAdd(0, 0, 1, 1);
+}
+
+void HoloModern_Close(void) {
+    if (Menu_IsModern()) {
+        UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+    }
+    Dial_ModernClose();
+}
+
 //	Pas gegene, je reve d'autre chose, mais quoi ?
 void AffReticule() {
     S32 x0, y0;
@@ -219,14 +255,22 @@ void AffReticule() {
         MemoTimerRet = TimerRefHR;
     }
 
-    if (NumObjectif == -1)
+    const S32 modern = Menu_IsModern();
+
+    if (NumObjectif == -1) {
+        if (modern)
+            HoloModern_Reticule(FALSE, 0, 0, 0, 0);
         return; //	Invalid
+    }
 
     if (SizeRet > 16) {
         SizeRet = BoundRegleTrois(80, 16, 20 * 20, TimerRefHR - MemoTimerRet);
     } // No flash if FlagMap ( I like flashing 1/3  2/3 ;)
-    else if ((!FlagMap)AND(((TimerRefHR) & 0xFF) < 5 * 20))
+    else if ((!FlagMap)AND(((TimerRefHR) & 0xFF) < 5 * 20)) {
+        if (modern)
+            HoloModern_Reticule(FALSE, 0, 0, 0, 0);
         return;
+    }
 
     x0 = XpObjectif - SizeRet;
     y0 = YpObjectif - SizeRet;
@@ -234,6 +278,11 @@ void AffReticule() {
     y1 = YpObjectif + SizeRet;
 
     UnsetClip();
+
+    if (modern) {
+        HoloModern_Reticule(TRUE, x0, y0, x1, y1);
+        return;
+    }
 
     AffUpperLeft(x0, y0, 1);
     AffLowerLeft(x0, y1, 1);
@@ -878,6 +927,7 @@ void InitHoloGlobe(S32 planet) {
 }
 //────────────────────────────────────────────────────────────────────────────
 void ClearHoloGlobe() {
+    HoloModern_Close();
     ClearObjectifPlanet();
 
     /*	Unused depuis HoloMalloc

@@ -85,6 +85,8 @@ extern void TestCoulDial(S32 coul);
 extern S32 GereFlagDial(S32 text);
 extern S32 GetText(S32 text);
 extern void AffFleche(void);
+/* The modern dialogue box or holomap strip goes (UI overlay); no-op otherwise. */
+extern void Dial_ModernClose(void);
 //----- incrust vignette Radio
 extern void TestAndDrawRadio(void);
 extern void InitDialWindow(void);

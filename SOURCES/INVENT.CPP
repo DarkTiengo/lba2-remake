@@ -788,6 +788,36 @@ static void InvModern_Publish(void) {
     BoxStaticAdd(0, 0, 1, 1);
 }
 
+/* The found-object box: a golden card with sparkles circling it. */
+static void FoundModern_Publish(S32 x0, S32 y0, S32 x1, S32 y1) {
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+    const float t = (float)TimerRefHR / 1000.0f;
+    const float pulse = 0.5f + 0.5f * (float)sin((double)t * 3.0);
+    T_UIOVERLAY_CARD card;
+    memset(&card, 0, sizeof(card));
+    card.Radius = 14.0f;
+    card.FillTop = 0x28FFE6A0u;
+    card.FillBottom = 0x00FFE6A0u;
+    card.Border = 0xFFFFD27Au;
+    card.BorderWidth = 2.0f;
+    card.Glow = ((U32)(110.0f + 90.0f * pulse) << 24) | 0xFFB43Cu;
+    card.GlowSize = 16.0f;
+    card.Shadow = 0x80000000u;
+    card.ShadowY = 6.0f;
+    card.ShadowBlur = 16.0f;
+    UiOverlay_Card((float)x0, (float)y0, (float)x1, (float)y1, &card);
+    if (x1 - x0 > 40) {
+        const float cx = (float)(x0 + x1) * 0.5f, cy = (float)(y0 + y1) * 0.5f;
+        const float rx = (float)(x1 - x0) * 0.62f, ry = (float)(y1 - y0) * 0.62f;
+        for (S32 i = 0; i < 4; i++) {
+            const double a = (double)t * 1.4 + (double)i * 1.5708;
+            const float size = 12.0f + 6.0f * (float)sin((double)t * 4.0 + i);
+            UiOverlay_Sparkle(cx + rx * (float)cos(a), cy + ry * (float)sin(a), size, 0xF0FFF0C0u);
+        }
+    }
+    BoxStaticAdd(0, 0, 1, 1);
+}
+
 static void InvModern_Close(void) {
     if (s_invModern) {
         UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
@@ -1941,7 +1971,11 @@ void DoFoundObj(S32 numvar) {
         RestoreCamera();
         SetLightVector(AlphaLight, BetaLight, 0);
 
-        DrawCadre(x0, y0, x1, y1, ALL_ANGLES);
+        if (Menu_IsModern()) {
+            FoundModern_Publish(x0, y0, x1, y1);
+        } else {
+            DrawCadre(x0, y0, x1, y1, ALL_ANGLES);
+        }
         RestoreAngles(x0, y0, x1, y1);
         BoxMovingAdd(x0, y0, x1, y1);
 
@@ -2029,6 +2063,11 @@ void DoFoundObj(S32 numvar) {
     }
 
     ptrobj->WorkFlags = workflag;
+
+    if (Menu_IsModern()) {
+        UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+        Dial_ModernClose();
+    }
 
     //	FlagNoFlip = 0			;
 

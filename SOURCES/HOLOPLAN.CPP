@@ -516,6 +516,7 @@ void InitHoloPlan() {
 }
 //════════════════════════════════════════════════════════════════════════════
 void ClearHoloPlan() {
+    HoloModern_Close();
     /*      Unused depuis HoloMalloc
 
 	if ( BufDyno )		Free(BufDyno)		;
