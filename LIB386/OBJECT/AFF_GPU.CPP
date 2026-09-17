@@ -3,7 +3,6 @@
 #include <OBJECT/AFF_OBJ.H>
 #include <3D/LROT3D.H>
 #include <3D/CAMERA.H>
-#include <3D/CAMERA.H>
 #include <3D/DATAMAT.H>
 #include <3D/LIGHT.H>
 #include <3D/PROJ.H>
@@ -470,6 +469,115 @@ void AffGpu_Entity(U32 type, void *poly) {
         }
     }
     EmitPolygon(points, nbPoints, faceNormal, smooth, &m, uvs);
+}
+
+static float MaxF(float a, float b) {
+    return a > b ? a : b;
+}
+
+static S32 s_orbOpen = FALSE;
+
+S32 AffGpu_OrbBegin(S32 cx, S32 cy, S32 halfBox) {
+    s_orbOpen = FALSE;
+    if (!GpuObj_Active()) {
+        return FALSE;
+    }
+    T_GPUOBJ_DRAW *draw = GpuObj_BeginDraw();
+    if (draw == NULL) {
+        return FALSE;
+    }
+    draw->X0 = ClipXMin;
+    draw->Y0 = ClipYMin;
+    draw->X1 = ClipXMax;
+    draw->Y1 = ClipYMax;
+    /* Exact id matching: the sprite's halo pixels, outside the sphere, keep the
+       software colour instead of showing the scene surface behind. */
+    draw->Scene = FALSE;
+    GpuObj_SnapshotBegin(cx - halfBox, cy - halfBox, cx + halfBox, cy + halfBox);
+    s_orbOpen = TRUE;
+    return TRUE;
+}
+
+void AffGpu_OrbEnd(S32 cx, S32 cy, const U8 *palette) {
+    if (!s_orbOpen) {
+        return;
+    }
+    s_orbOpen = FALSE;
+
+    /* The sprite's extent gives the sphere's size; its core the ball proper. */
+    float radius = 6.0f;
+    if (ScreenXMax >= ScreenXMin && ScreenYMax >= ScreenYMin) {
+        const S32 w = ScreenXMax - ScreenXMin + 1;
+        const S32 h = ScreenYMax - ScreenYMin + 1;
+        /* Centred on what was drawn: the sprite's hot spot is not its middle. */
+        cx = (ScreenXMin + ScreenXMax) / 2;
+        cy = (ScreenYMin + ScreenYMax) / 2;
+        radius = (float)(w < h ? w : h) * 0.5f * 0.72f;
+        if (radius < 2.0f) {
+            radius = 2.0f;
+        }
+    }
+
+    /* Colour: the sprite's saturated pixels within the sphere, bright core ignored. */
+    float sum[3] = {0.0f, 0.0f, 0.0f};
+    float weight = 0.0f;
+    const S32 r = (S32)radius;
+    const U8 *log = (const U8 *)Log;
+    for (S32 y = cy - r; y <= cy + r; y++) {
+        if (y < ClipYMin || y > ClipYMax) {
+            continue;
+        }
+        for (S32 x = cx - r; x <= cx + r; x++) {
+            if (x < ClipXMin || x > ClipXMax || (x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r) {
+                continue;
+            }
+            const U8 *c = palette + log[y * (S32)ModeDesiredX + x] * 3;
+            const float mx = (float)(c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]));
+            const float mn = (float)(c[0] < c[1] ? (c[0] < c[2] ? c[0] : c[2]) : (c[1] < c[2] ? c[1] : c[2]));
+            const float w = (mx - mn) + 1.0f;
+            sum[0] += c[0] * w;
+            sum[1] += c[1] * w;
+            sum[2] += c[2] * w;
+            weight += w;
+        }
+    }
+    float rgb[3] = {1.0f, 0.85f, 0.3f};
+    if (weight > 0.0f) {
+        const float peak = MaxF(sum[0], MaxF(sum[1], sum[2]));
+        if (peak > 0.0f) {
+            for (S32 i = 0; i < 3; i++) {
+                rgb[i] = sum[i] / peak;
+            }
+        }
+    }
+
+    T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(6);
+    if (v != NULL) {
+        static const S32 order[6] = {0, 1, 2, 0, 2, 3};
+        static const float cornerX[4] = {-1.0f, 1.0f, 1.0f, -1.0f};
+        static const float cornerY[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
+        const float sw = 2.0f / (float)ModeDesiredX;
+        const float sh = 2.0f / (float)ModeDesiredY;
+        for (S32 i = 0; i < 6; i++) {
+            const S32 k = order[i];
+            const float px = (float)cx + 0.5f + cornerX[k] * radius;
+            const float py = (float)cy + 0.5f + cornerY[k] * radius;
+            memset(&v[i], 0, sizeof(v[i]));
+            v[i].clip[0] = px * sw - 1.0f;
+            v[i].clip[1] = 1.0f - py * sh;
+            v[i].clip[2] = 0.5f;
+            v[i].clip[3] = 1.0f;
+            v[i].normal[2] = 1.0f;
+            v[i].light[3] = (float)GPUOBJ_MODE_ORB;
+            v[i].vpos[3] = (float)GPUOBJ_FLAG_BAKED;
+            v[i].mat[1] = rgb[0];
+            v[i].mat[2] = rgb[1];
+            v[i].mat[3] = rgb[2];
+            v[i].uv[2] = cornerX[k];
+            v[i].uv[3] = cornerY[k];
+        }
+    }
+    GpuObj_EndDraw();
 }
 
 void AffGpu_End(void) {

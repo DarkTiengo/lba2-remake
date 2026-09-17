@@ -5237,6 +5237,15 @@ S32 AffOneObject(T_SORT *pt) {
             // Toujours des sprites Raw
             CalculeScaleFactorSprite(ptrextra->PosX, ptrextra->PosY, ptrextra->PosZ, ptrextra->Scale);
 
+            /* GPU renderer: the flying magic ball becomes a lit 3D sphere. */
+            const S32 orb = numobj == MagicBall AND !(ptrextra->Flags & EXTRA_SEARCH_OBJ) AND
+                                          AffGpu_OrbBegin(Xp, Yp, 96);
+            /* The sphere's size comes from the sprite's own extent. */
+            const S32 memoXMin = ScreenXMin, memoYMin = ScreenYMin, memoXMax = ScreenXMax, memoYMax = ScreenYMax;
+            if (orb) {
+                ClearScreenMinMax();
+            }
+
             if (ptrextra->Flags & EXTRA_TRANSPARENT) {
                 ScaleSpriteTransp(0, SpriteX, SpriteY,
                                   ScaleFactorSprite, ScaleFactorSprite,
@@ -5246,6 +5255,13 @@ S32 AffOneObject(T_SORT *pt) {
                 ScaleSprite(0, SpriteX, SpriteY,
                             ScaleFactorSprite, ScaleFactorSprite,
                             HQR_Get(HQRPtrSpriteRaw, num));
+            }
+            if (orb) {
+                AffGpu_OrbEnd(Xp, Yp, PtrPal);
+                ScreenXMin = ade_min(ScreenXMin, memoXMin);
+                ScreenYMin = ade_min(ScreenYMin, memoYMin);
+                ScreenXMax = ade_max(ScreenXMax, memoXMax);
+                ScreenYMax = ade_max(ScreenYMax, memoYMax);
             }
         }
 
@@ -5840,7 +5856,8 @@ startaffscene:
 
     /* Dynamic lights for the GPU scene: the room's lamps, the magic ball, and in
        rooms a soft warm light following the hero so actors stand out of the bricks. */
-    if (MagicBall != -1 AND ListExtra[MagicBall].Sprite != -1) {
+    /* Not while the ball flies home: that is an invisible seeker, not the ball. */
+    if (MagicBall != -1 AND ListExtra[MagicBall].Sprite != -1 AND !(ListExtra[MagicBall].Flags & EXTRA_SEARCH_OBJ)) {
         AffGpu_AddWorldLight(ListExtra[MagicBall].PosX, ListExtra[MagicBall].PosY, ListExtra[MagicBall].PosZ, 2600.0f,
                              0.7f, 0.85f, 1.0f, 0.8f);
     }

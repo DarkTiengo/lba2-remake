@@ -42,6 +42,7 @@ extern "C" {
 #define GPUOBJ_MODE_DISC 5      ///< Sphere: palette[color] inside the unit disc
 #define GPUOBJ_MODE_CLUT 6      ///< CLUT[shade][color]: the terrain's Gouraud table fill
 #define GPUOBJ_MODE_BRICK 7     ///< interior brick sprite from the atlas, depth from its grid cell
+#define GPUOBJ_MODE_ORB 8       ///< lit glossy sphere inside the unit disc, colour in mat.yzw
 
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)

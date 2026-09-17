@@ -68,6 +68,7 @@ const int MODE_TEXSHADED = 4;
 const int MODE_DISC = 5;
 const int MODE_CLUT = 6;
 const int MODE_BRICK = 7;
+const int MODE_ORB = 8;
 
 /* Must match ISO_DEPTH_RANGE in AFF_GPU.CPP: bricks and iso bodies share depth. */
 const float ISO_DEPTH_RANGE = 524288.0;
@@ -240,6 +241,29 @@ void main() {
         int rowA = int(clutRow) + min(row, 15);
         int rowB = int(clutRow) + min(row + 1, 15);
         color = mix(Pal(Lut(rowA, base)), Pal(Lut(rowB, base)), fract(shade));
+    } else if (mode == MODE_ORB) {
+        /* A glowing glass ball: lit from the upper left, a hot core, a coloured
+           rim, and a sharp highlight. */
+        vec2 d = v_uv.zw;
+        float r2 = dot(d, d);
+        if (r2 > 1.0) {
+            discard;
+        }
+        vec3 n = vec3(d.x, -d.y, sqrt(1.0 - r2));
+        vec3 l = normalize(vec3(-0.45, 0.6, 0.66));
+        vec3 h = normalize(l + vec3(0.0, 0.0, 1.0));
+        vec3 tint = v_mat.yzw;
+        float lambert = max(dot(n, l), 0.0);
+        float highlight = pow(max(dot(n, h), 0.0), 48.0);
+        float rim = pow(1.0 - n.z, 2.0);
+        float core = pow(n.z, 5.0);
+        color = tint * (0.35 + 0.65 * lambert);
+        color += mix(tint, vec3(1.0), 0.55) * core * 0.6;
+        color += tint * rim * 0.9;
+        color += vec3(1.0) * highlight * (0.35 + 0.6 * specular);
+        o_color = vec4(clamp(color, 0.0, 1.0), 1.0);
+        o_id = vec4(id, 0.0, 0.0, 1.0);
+        return;
     } else {
         if (dot(v_uv.zw, v_uv.zw) > 1.0) {
             discard;

@@ -32,6 +32,14 @@ void AffGpu_End(void);
  *  the caller. */
 void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth);
 
+/** A glowing sphere replacing the core of a sprite (the magic ball): call Begin
+ *  with the sprite's projected centre before the sprite is drawn, End after. The
+ *  sprite's pixels inside the sphere show a lit 3D ball at the GPU's resolution,
+ *  its halo keeps the software colours. palette is the 768-byte RGB palette the
+ *  frame shows, used to take the sphere's colour from the sprite. */
+S32 AffGpu_OrbBegin(S32 cx, S32 cy, S32 halfBox);
+void AffGpu_OrbEnd(S32 cx, S32 cy, const U8 *palette);
+
 /** A point light at world position (x, y, z), moved into the space the bodies
  *  of the current projection are captured in (GpuObj_AddLight). */
 void AffGpu_AddWorldLight(S32 x, S32 y, S32 z, float radius, float r, float g, float b, float intensity);
