@@ -884,17 +884,6 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
 
 void GpuRender_EndComposite(void *sdlRenderer) {
     SDL_SetGPURenderState((SDL_Renderer *)sdlRenderer, NULL);
-
-    /* Development aid: LBA2_GPU_CAPTURE=<file.bmp> keeps the last composited
-       frame on disk, since --screenshot saves the software frame. */
-    const char *capture = SDL_getenv("LBA2_GPU_CAPTURE");
-    if (capture != NULL && capture[0] != '\0') {
-        SDL_Surface *surface = SDL_RenderReadPixels((SDL_Renderer *)sdlRenderer, NULL);
-        if (surface != NULL) {
-            SDL_SaveBMP(surface, capture);
-            SDL_DestroySurface(surface);
-        }
-    }
 }
 
 #endif // SDL_VERSION_ATLEAST(3, 4, 0)

@@ -1,4 +1,5 @@
 #include <SYSTEM/MOUSE.H>
+#include <SYSTEM/UIOVERLAY.H>
 
 #include <SVGA/SCREEN.H> // For ModeDesiredX, ModeDesiredY
 #include <SYSTEM/WINDOW.H>
@@ -69,6 +70,10 @@ void EndMouse() {
 }
 
 bool MouseSpriteShouldDraw(void) {
+    return MousePointerVisible() && !UiOverlay_Active();
+}
+
+bool MousePointerVisible(void) {
     if (!FlagMouse)
         return false;
     if (s_showSpriteAfterFirstMotion)

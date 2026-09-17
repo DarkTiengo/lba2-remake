@@ -40,6 +40,7 @@ void WindowToSurfaceCoords(S32 wx, S32 wy, S32 *sx, S32 *sy) {
 }
 extern "C" {
 U8 BinGphMouse[4096] = {0};
+S32 UiOverlay_Active(void) { return 0; } // MOUSE.CPP: no UI overlay in this test
 }
 U32 ModeDesiredX = 640; // MOUSE.CPP SetMousePos clamp (unreached path here)
 U32 ModeDesiredY = 480;

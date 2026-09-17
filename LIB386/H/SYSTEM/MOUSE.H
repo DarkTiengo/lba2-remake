@@ -22,7 +22,11 @@ extern S32 MouseSpriteGraphicNum;      ///< Id of graphic for mouse cursor
 extern const void *MouseSpriteGraphic; ///< Memory of graphic for mouse cursor
 
 /// True when the software cursor should be composited this frame (respects idle hide).
+/// False while the UI overlay is up: the overlay draws its own pointer.
 bool MouseSpriteShouldDraw(void);
+
+/// True when a cursor should be visible at all (idle hide, mouse enabled).
+bool MousePointerVisible(void);
 
 /// True when mouse has moved since last call (edge-consuming).
 bool MouseConsumeMotionFlag(void);

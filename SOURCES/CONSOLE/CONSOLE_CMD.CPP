@@ -621,6 +621,16 @@ static void cmd_ui_dispatch(int argc, const char *argv[]) {
         Console_Print("ui display -> %s", argv[2]);
         return;
     }
+    if (argc >= 3 && !strcmp(argv[1], "volume")) {
+        /* Sound volume page. Same black-bg convention as `display`. */
+        if (Console_GetCaptureBlackBg()) {
+            memset(Log, 0, (size_t)ModeDesiredX * (size_t)ModeDesiredY);
+            memset(Screen, 0, (size_t)ModeDesiredX * (size_t)ModeDesiredY);
+        }
+        Volume_MainCapture(argv[2]);
+        Console_Print("ui volume -> %s", argv[2]);
+        return;
+    }
     if (argc >= 3 && !strcmp(argv[1], "gpu-effects")) {
         /* GPU effects submenu (opened from the Display page while the GPU
            renderer is on). Same black-bg convention as `display`. */

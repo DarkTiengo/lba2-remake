@@ -27,12 +27,14 @@
 #include <SYSTEM/WINDOW.H>
 #include <SVGA/GPUOBJ.H> /* GpuObjEnabled, the Renderer row */
 #include <SYSTEM/MOUSE.H>
+#include <SYSTEM/UIOVERLAY.H>
 
 #include "GAMEMENU_MOUSE.H"
 #include "CONFIG_FILE.H" /* ConfigFile_MarkVSyncSetThisRun */
 #include "UI_LAYOUT.H"   /* UI_CENTER_X, UI_VCENTER_OFS */
 
 #include <dirent.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -101,6 +103,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_DEBAND 2121
 #define MENU_ID_GPU_SPECULAR 2122
 #define MENU_ID_GPU_UI_SCALE 2124
+#define MENU_ID_DISPLAY_MENU_STYLE 2125
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -166,7 +169,9 @@ U16 GameOptionMenu[] = {
 // buffer. Plain "Back" returns to Options. Built by Display_BuildMenu: the GPU
 // effects button only exists while the GPU renderer is on, and Display mode is
 // dropped on always-fullscreen devices.
-U16 DisplayMenu[4 + 6 * 2];
+U16 DisplayMenu[4 + 7 * 2];
+
+S32 MenuStyle = MENU_STYLE_AUTO;
 
 // GPU effects submenu, opened from the Display page while the GPU renderer is
 // on: one selector row per effect.
@@ -502,6 +507,15 @@ static void Display_CycleOption(S32 id, S32 dir) {
         GpuObjUiScale ^= 1;
         break;
 
+    case MENU_ID_DISPLAY_MENU_STYLE:
+        /* Auto, Modern, Classic. */
+        MenuStyle = MenuStyle == MENU_STYLE_AUTO     ? (dir > 0 ? MENU_STYLE_MODERN : MENU_STYLE_CLASSIC)
+                    : MenuStyle == MENU_STYLE_MODERN ? (dir > 0 ? MENU_STYLE_CLASSIC : MENU_STYLE_AUTO)
+                                                     : (dir > 0 ? MENU_STYLE_AUTO : MENU_STYLE_MODERN);
+        /* The page changes look: redraw it from its backdrop. */
+        s_menuRebuild = TRUE;
+        break;
+
     case MENU_ID_DISPLAY_FULLSCREEN:
         DisplayFullScreen ^= 1;
         SetWindowFullscreen(DisplayFullScreen != FALSE);
@@ -613,6 +627,13 @@ static void BuildCustomMenuText(S32 num, char *string) {
 
     case MENU_ID_GPU_EFFECTS:
         CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(MENU_LABEL_GPU_EFFECTS));
+        break;
+
+    case MENU_ID_DISPLAY_MENU_STYLE:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_MENU_STYLE),
+                       GetLocalizedMenuLabel(MenuStyle == MENU_STYLE_MODERN    ? MENU_LABEL_VAL_MODERN
+                                             : MenuStyle == MENU_STYLE_CLASSIC ? MENU_LABEL_VAL_CLASSIC
+                                                                               : MENU_LABEL_VAL_AUTO));
         break;
 
     case MENU_ID_GPU_LIGHTS:
@@ -2488,6 +2509,192 @@ void DrawOneChoice(S32 x, S32 y, S32 type, S32 num, S32 select) {
 
 /*──────────────────────────────────────────────────────────────────────────*/
 
+// --- Modern menu ------------------------------------------------------------
+// Floating cards in true colour, drawn by the UI overlay over the frame. Rows sit
+// where the classic bars do (same centres and height), so mouse hit-testing and
+// every caller's layout hold; Log keeps only the page's backdrop.
+
+S32 Menu_IsModern(void) {
+    if (Control_IsHeadless()) {
+        return FALSE; /* no window to draw the overlay in: harness captures stay classic */
+    }
+    return MenuStyle == MENU_STYLE_MODERN || (MenuStyle == MENU_STYLE_AUTO && GpuObjEnabled);
+}
+
+#define MODERN_MAX_ROWS 64
+static float s_modernFocus[MODERN_MAX_ROWS]; ///< 0..1 eased highlight per row
+static const U16 *s_modernMenu = NULL;
+static U32 s_modernTime = 0;
+
+static U32 LerpColor(U32 a, U32 b, float t) {
+    U32 out = 0;
+    for (S32 shift = 0; shift < 32; shift += 8) {
+        const float ca = (float)((a >> shift) & 0xFF);
+        const float cb = (float)((b >> shift) & 0xFF);
+        out |= (U32)(ca + (cb - ca) * t + 0.5f) << shift;
+    }
+    return out;
+}
+
+// Slider value 0..1 for the volume and detail rows, -1 for other rows.
+static float ModernSliderValue(S32 type) {
+    switch (type) {
+    case 2:
+        return (float)SampleVolume / 127.0f;
+    case 3:
+        return (float)VoiceVolume / 127.0f;
+    case 4:
+        return (float)JingleVolume / 127.0f;
+    case 5:
+#ifdef CDROM
+        return (float)CDVolume / 127.0f;
+#else
+        return 1.0f;
+#endif
+    case 6:
+        return (float)MasterVolume / 127.0f;
+    case 7:
+        return (float)DetailLevel / (float)MAX_DETAIL_LEVEL;
+    }
+    return -1.0f;
+}
+
+static void DrawModernRow(S32 y, S32 type, S32 num, S32 sel, float focus, float pulse) {
+    char string[256];
+    BuildCustomMenuText(num, string);
+
+    const float cx = (float)UI_CENTER_X;
+    const float halfW = 232.0f + 14.0f * focus;
+    const float halfH = 20.0f + 3.0f * focus;
+    const float x0 = cx - halfW;
+    const float x1 = cx + halfW;
+    const float y0 = (float)y - halfH;
+    const float y1 = (float)y + halfH;
+
+    T_UIOVERLAY_CARD card;
+    memset(&card, 0, sizeof(card));
+    card.Radius = 14.0f;
+    card.FillTop = LerpColor(0xD8262E44u, 0xF2305284u, focus);
+    card.FillBottom = LerpColor(0xD8171C2Cu, 0xF21C3560u, focus);
+    card.Border = LerpColor(0x38FFFFFFu, 0xFF86CCFFu, focus);
+    card.BorderWidth = 1.0f + focus;
+    card.Shadow = LerpColor(0x70000000u, 0x90000000u, focus);
+    card.ShadowX = 0.0f;
+    card.ShadowY = 4.0f + 4.0f * focus;
+    card.ShadowBlur = 10.0f + 8.0f * focus;
+    if (focus > 0.01f) {
+        const U32 glowAlpha = (U32)(focus * (110.0f + 60.0f * pulse));
+        card.Glow = (glowAlpha << 24) | 0x5AB4FFu;
+        card.GlowSize = 12.0f;
+    }
+    if (sel & 2) {
+        /* The active value (current resolution): a green edge. */
+        card.Border = LerpColor(0xFF6ED49Au, card.Border, focus);
+        card.BorderWidth = SDL_max(card.BorderWidth, 1.5f);
+    }
+    UiOverlay_Card(x0, y0, x1, y1, &card);
+
+    const U32 textColor = LerpColor(0xFFD6DEEAu, 0xFFFFFFFFu, focus);
+    const U32 accent = 0xFF9FD8FFu;
+    const float textSize = 23.0f;
+    const float slider = ModernSliderValue(type);
+
+    if (type == MENU_TYPE_DISPLAY_SELECTOR) {
+        /* "Label: value": label on the left, value on the right between arrows. */
+        const char *colon = strstr(string, ": ");
+        const U32 arrow = LerpColor(0x80FFFFFFu, accent, focus);
+        UiOverlay_Chevron(x0 + 26.0f - 3.0f * focus * pulse, (float)y, 16.0f, -1, arrow);
+        UiOverlay_Chevron(x1 - 26.0f + 3.0f * focus * pulse, (float)y, 16.0f, 1, arrow);
+        if (colon != NULL) {
+            char label[256];
+            const size_t n = (size_t)(colon - string);
+            memcpy(label, string, n);
+            label[n] = 0;
+            const float valueW = UiOverlay_TextWidth(colon + 2, textSize);
+            const float room = (x1 - x0) - 100.0f;
+            UiOverlay_Text(x0 + 50.0f, (float)y, label, textSize, textColor, UIOVERLAY_ALIGN_LEFT, TRUE,
+                           SDL_max(room - valueW, room * 0.4f));
+            UiOverlay_Text(x1 - 50.0f, (float)y, colon + 2, textSize, LerpColor(0xFFB8CCE0u, accent, focus),
+                           UIOVERLAY_ALIGN_RIGHT, TRUE, room * 0.6f);
+        } else {
+            UiOverlay_Text(cx, (float)y, string, textSize, textColor, UIOVERLAY_ALIGN_CENTER, TRUE, (x1 - x0) - 100.0f);
+        }
+    } else if (slider >= 0.0f) {
+        /* Label on the left, a bar with the level on the right. */
+        const float barX0 = cx + 10.0f;
+        const float barX1 = x1 - 26.0f;
+        UiOverlay_Text(x0 + 26.0f, (float)y, string, textSize, textColor, UIOVERLAY_ALIGN_LEFT, TRUE,
+                       barX0 - x0 - 40.0f);
+        T_UIOVERLAY_CARD track;
+        memset(&track, 0, sizeof(track));
+        track.Radius = 4.0f;
+        track.FillTop = 0x50000000u;
+        track.FillBottom = 0x30FFFFFFu;
+        UiOverlay_Card(barX0, (float)y - 4.0f, barX1, (float)y + 4.0f, &track);
+        T_UIOVERLAY_CARD level;
+        memset(&level, 0, sizeof(level));
+        level.Radius = 4.0f;
+        level.FillTop = 0xFFA6E2FFu;
+        level.FillBottom = 0xFF4A9EF0u;
+        if (focus > 0.01f) {
+            level.Glow = ((U32)(focus * 120.0f) << 24) | 0x5AB4FFu;
+            level.GlowSize = 6.0f;
+        }
+        const float fillX1 = barX0 + (barX1 - barX0) * SDL_clamp(slider, 0.0f, 1.0f);
+        if (fillX1 > barX0 + 8.0f) {
+            UiOverlay_Card(barX0, (float)y - 4.0f, fillX1, (float)y + 4.0f, &level);
+        }
+    } else {
+        UiOverlay_Text(cx, (float)y, string, textSize, textColor, UIOVERLAY_ALIGN_CENTER, TRUE, (x1 - x0) - 110.0f);
+        if (focus > 0.01f) {
+            const U32 alpha = (U32)(focus * 255.0f);
+            const float size = 17.0f + 4.0f * pulse;
+            UiOverlay_Sparkle(x0 + 30.0f, (float)y, size, (alpha << 24) | 0xCFEAFFu);
+            UiOverlay_Sparkle(x1 - 30.0f, (float)y, size, (alpha << 24) | 0xCFEAFFu);
+        }
+    }
+}
+
+static void DrawGameMenuModern(U16 *ptrmenu) {
+    const S32 selected = ptrmenu[0];
+    const S32 nb = ptrmenu[1];
+    S32 y = ptrmenu[2];
+
+    if (y == 0) {
+        y = HAUTEUR_STANDARD / 2 + 10 + UI_VCENTER_OFS;
+    } else {
+        y += UI_VCENTER_OFS;
+        y -= (HAUTEUR_STANDARD * nb + (nb - 1) * MENU_SPACE) / 2;
+    }
+
+    /* Ease each row's highlight toward the cursor. */
+    const U32 now = (U32)TimerRefHR;
+    float dt = (float)(now - s_modernTime) / 1000.0f;
+    if (s_modernMenu != ptrmenu || dt < 0.0f || dt > 0.25f) {
+        dt = s_modernMenu != ptrmenu ? 1.0f : 0.016f;
+        memset(s_modernFocus, 0, sizeof(s_modernFocus));
+        s_modernMenu = ptrmenu;
+    }
+    s_modernTime = now;
+    const float step = SDL_min(dt * 14.0f, 1.0f);
+    const float pulse = 0.5f + 0.5f * (float)sin((double)now / 1000.0 * 3.0);
+
+    UiOverlay_Clear();
+    for (S32 n = 0; n < nb && n < MODERN_MAX_ROWS; n++) {
+        const S32 type = ptrmenu[4 + n * 2];
+        const S32 num = ptrmenu[4 + n * 2 + 1];
+        S32 sel = (n == selected) ? 1 : 0;
+        if (n == s_menuMarkRow)
+            sel |= 2;
+        s_modernFocus[n] += ((sel & 1 ? 1.0f : 0.0f) - s_modernFocus[n]) * step;
+        DrawModernRow(y, type, num, sel, s_modernFocus[n], pulse);
+        y += HAUTEUR_STANDARD + MENU_SPACE;
+    }
+    /* A present only happens for a dirty frame; the cards animate every pass. */
+    BoxStaticAdd(0, 0, 1, 1);
+    BoxUpdate();
+}
+
 void DrawGameMenu(U16 *ptrmenu, S32 justone) {
     S32 n, y;
     S32 nb;
@@ -2498,6 +2705,11 @@ void DrawGameMenu(U16 *ptrmenu, S32 justone) {
     if (ptrmenu == GameMainMenu)
         mainmenu = TRUE;
 #endif
+
+    if (Menu_IsModern()) {
+        DrawGameMenuModern(ptrmenu);
+        return;
+    }
 
     selected = *ptrmenu++;
 
@@ -2774,7 +2986,16 @@ void Menu_RequestCapture(const char *path) {
                                       menu fade-in and dynamic-item initial draws */
 }
 
+static S32 DoGameMenuLoop(U16 *ptrmenu);
+
 S32 DoGameMenu(U16 *ptrmenu) {
+    const S32 ret = DoGameMenuLoop(ptrmenu);
+    /* The page is gone: its cards must not outlive it. */
+    UiOverlay_Clear();
+    return ret;
+}
+
+static S32 DoGameMenuLoop(U16 *ptrmenu) {
     S32 flag = 1;
     U32 chrono;
     S32 timerkey;
@@ -3387,7 +3608,21 @@ void Display_MainCapture(const char *path) {
 
 // Harness one-shot capture of the GPU effects submenu, same shape as
 // Display_MainCapture.
+static void MenuPage_MainCapture(U16 *menu, const char *path);
+
 void GpuEffects_MainCapture(const char *path) {
+    MenuPage_MainCapture(GpuEffectsMenu, path);
+}
+
+void Volume_MainCapture(const char *path) {
+#ifdef DEMO
+    MenuPage_MainCapture(VolumeMenu, path);
+#else
+    MenuPage_MainCapture(FlagSpeak ? VolumeMenuVoice : VolumeMenuNoVoice, path);
+#endif
+}
+
+static void MenuPage_MainCapture(U16 *menu, const char *path) {
     HQ_StopSample();
     InitPlasmaMenu();
 
@@ -3398,7 +3633,7 @@ void GpuEffects_MainCapture(const char *path) {
     InitDial(0);
 
     Menu_RequestCapture(path);
-    DoGameMenu(GpuEffectsMenu);
+    DoGameMenu(menu);
     Menu_RequestCapture(NULL); /* disarm if DoGameMenu somehow exited otherwise */
 }
 
@@ -3537,6 +3772,7 @@ static void Display_BuildMenu(void) {
     if (GpuObjEnabled) {
         MenuSetEntry(DisplayMenu, n++, 0, MENU_ID_GPU_EFFECTS);
     }
+    MenuSetEntry(DisplayMenu, n++, MENU_TYPE_DISPLAY_SELECTOR, MENU_ID_DISPLAY_MENU_STYLE);
     if (Window_SupportsWindowedMode()) {
         MenuSetEntry(DisplayMenu, n++, MENU_TYPE_DISPLAY_SELECTOR, MENU_ID_DISPLAY_FULLSCREEN);
     }
@@ -3588,6 +3824,7 @@ S32 GereDisplayMenu(void) {
         case MENU_ID_DISPLAY_FULLSCREEN:
         case MENU_ID_DISPLAY_VSYNC:
         case MENU_ID_DISPLAY_GPU:
+        case MENU_ID_DISPLAY_MENU_STYLE:
             Display_CycleOption(select, 1);
             break;
 

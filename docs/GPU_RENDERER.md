@@ -16,7 +16,7 @@ An opt-in renderer that draws the game's 3D bodies (actors, decor objects, extra
 | `gfx_specular 0/1` | console | Specular highlights on 3D models. Saved as `GpuSpecular`, on by default. |
 | `LBA2_GPU=1` / `LBA2_GPU=0` | environment | Forces the choice for this run only, without changing the saved one. With `1` the window is created with the GPU renderer from the first frame. |
 | `LBA2_GPU_DEBUG=1` | environment | Tints every pixel the GPU supplies green, to check coverage. `2` shows the GPU image alone (magenta where it drew nothing), without the software frame. |
-| `LBA2_GPU_CAPTURE=<file.bmp>` | environment | Writes the last composited frame to disk. `--screenshot` saves the software frame, so this is how to capture the GPU look. |
+| `LBA2_GPU_CAPTURE=<file.bmp>` | environment | Writes the last presented frame to disk (GPU composite and menu overlay included, with either renderer); add `LBA2_CAPTURE_MENU=1` to keep only frames with the modern menu up. `--screenshot` saves the software frame, so this is how to capture the GPU look. |
 | `LBA2_GPU_STATS=1` | environment | Logs the CPU cost of each present (tag scan, uploads, render) every 300 presents. |
 
 If the GPU renderer cannot be created (no Vulkan device, headless run), the window keeps the classic renderer and logs a warning; the saved choice is left as the player set it.

@@ -24,6 +24,7 @@ extern S32 GfxDitherShading; /* defined in POLYFILT's caller; no header declares
 #include <stdlib.h>
 #include <string.h>
 #include "AMBIANCE.H"
+#include "GAMEMENU.H" /* MenuStyle */
 
 /*══════════════════════════════════════════════════════════════════════════*
                       █▀▀▀▀ █▀▀▀█ ██▄ █ █▀▀▀▀  █    █▀▀▀▀
@@ -125,6 +126,8 @@ static const T_SETTING BootSettings[] = {
      NULL, "GPU renderer: xBR pixel-art filter on upscaled 2D art"},
     {"GpuDeband", NULL, "gfx_deband", &GpuObjDeband, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: smooth the palette's colour steps on upscaled 2D art"},
+    {"MenuStyle", NULL, "gfx_menustyle", &MenuStyle, SETTING_OR_DEFAULT, MENU_STYLE_AUTO, MENU_STYLE_CLASSIC,
+     MENU_STYLE_AUTO, NULL, NULL, NULL, NULL, "Menu look: 0 classic, 1 modern cards, 2 modern with the GPU renderer"},
     {"GpuUiScale", NULL, "gfx_uiscale", &GpuObjUiScale, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: draw 2D (menus, text, sprites, rooms) at the classic size, upscaled"},
     {"GpuSpecular", NULL, "gfx_specular", &GpuObjSpecular, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,

@@ -5,6 +5,7 @@
 #include <SVGA/GPUOBJ.H>
 #include <SYSTEM/LOG.H>
 #include <SYSTEM/LOGPRINT.H>
+#include <SYSTEM/UIOVERLAY.H>
 
 #include <SDL3/SDL.h>
 #include <assert.h>
@@ -113,6 +114,7 @@ static void DestroyRendererAndTexture() {
         sdlTexture = NULL;
     }
     if (sdlRenderer) {
+        UiOverlay_ReleaseTextures();
         if (rendererIsGpu) {
             GpuRender_Shutdown();
         }
@@ -164,6 +166,22 @@ static void PresentCurrentTexture() {
     SDL_RenderTexture(sdlRenderer, sdlTexture, NULL, NULL);
     if (gpuComposite) {
         GpuRender_EndComposite(sdlRenderer);
+    }
+    UiOverlay_Render(sdlRenderer);
+
+    /* Development aid: LBA2_GPU_CAPTURE=<file.bmp> keeps the last presented
+       frame on disk (GPU composite and UI overlay included), since --screenshot
+       saves the software frame. */
+    static const char *capture = SDL_getenv("LBA2_GPU_CAPTURE");
+    /* LBA2_CAPTURE_MENU=1: only frames with the menu overlay up, so the last
+       modern menu page survives the gameplay frames after it. */
+    static const bool menuOnly = SDL_getenv("LBA2_CAPTURE_MENU") != NULL;
+    if (capture != NULL && capture[0] != '\0' && (!menuOnly || UiOverlay_Active())) {
+        SDL_Surface *surface = SDL_RenderReadPixels(sdlRenderer, NULL);
+        if (surface != NULL) {
+            SDL_SaveBMP(surface, capture);
+            SDL_DestroySurface(surface);
+        }
     }
     SDL_RenderPresent(sdlRenderer);
 }

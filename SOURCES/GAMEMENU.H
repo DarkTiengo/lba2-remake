@@ -52,6 +52,14 @@ extern S32 ChoosePlayerName(S32 mess, S32 flagflip, S32 flagnew);
 extern void ShowGameSavedConfirmation(void);
 /*--------------------------------------------------------------------------*/
 extern void DrawOneChoice(S32 x, S32 y, S32 type, S32 num, S32 select);
+/* Menu look: MENU_STYLE_CLASSIC (the 1997 plasma bars), MENU_STYLE_MODERN
+   (true-colour cards over the frame, UI overlay) or MENU_STYLE_AUTO (modern with
+   the GPU renderer). lba2.cfg MenuStyle, console gfx_menustyle. */
+#define MENU_STYLE_CLASSIC 0
+#define MENU_STYLE_MODERN 1
+#define MENU_STYLE_AUTO 2
+extern S32 MenuStyle;
+
 /*--------------------------------------------------------------------------*/
 extern void DrawGameMenu(U16 *ptrmenu, S32 justone);
 /*--------------------------------------------------------------------------*/
@@ -84,6 +92,8 @@ extern void Menu_MainCapture(const char *path);
 extern void Display_MainCapture(const char *path);
 /* Harness one-shot capture of the GPU effects submenu. */
 extern void GpuEffects_MainCapture(const char *path);
+/* Harness one-shot capture of the sound volume page. */
+extern void Volume_MainCapture(const char *path);
 /* Harness hook: capture the resolution sub-page (the list opened from the
    Display submenu's Resolution row). Like Display_MainCapture but builds the
    runtime ResolutionMenu first, then drives DoGameMenu on it. */
