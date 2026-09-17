@@ -209,11 +209,60 @@ static void TargetSize(U32 w, U32 h, U32 *outW, U32 *outH) {
     *outH = th;
 }
 
+/* Flame sprites the composite draws this present: boxes in frame uv. */
+#define MAX_FLAME_SPRITES 16
+static float s_flames[MAX_FLAME_SPRITES * 4];
+static U32 s_nbFlames = 0;
+
+/* One sprite per burning body; boxes that touch are merged (a fire made of many
+   small bodies, a dragon's breath, is one flame). */
+static void CollectFlames(const T_GPUOBJ_DRAW *const *draws, U32 count, U32 frameW, U32 frameH) {
+    s_nbFlames = 0;
+    if (!GpuObjFire || frameW == 0 || frameH == 0) {
+        return;
+    }
+    for (U32 i = 0; i < count; i++) {
+        const T_GPUOBJ_DRAW *draw = draws[i];
+        if (!draw->HasFire || !draw->FireRises) {
+            continue;
+        }
+        float box[4] = {draw->FireRect[0] / (float)frameW, draw->FireRect[1] / (float)frameH,
+                        draw->FireRect[2] / (float)frameW, draw->FireRect[3] / (float)frameH};
+        if (box[2] <= box[0] || box[3] <= box[1]) {
+            continue;
+        }
+        S32 merged = FALSE;
+        for (U32 k = 0; k < s_nbFlames; k++) {
+            float *f = s_flames + k * 4;
+            /* Only boxes that really overlap: two braziers one above the other on
+               screen stay two flames. */
+            const float ox = SDL_min(f[2], box[2]) - SDL_max(f[0], box[0]);
+            const float oy = SDL_min(f[3], box[3]) - SDL_max(f[1], box[1]);
+            const float smaller = SDL_min((f[2] - f[0]) * (f[3] - f[1]), (box[2] - box[0]) * (box[3] - box[1]));
+            if (ox > 0.0f && oy > 0.0f && ox * oy >= smaller * 0.3f) {
+                f[0] = SDL_min(f[0], box[0]);
+                f[1] = SDL_min(f[1], box[1]);
+                f[2] = SDL_max(f[2], box[2]);
+                f[3] = SDL_max(f[3], box[3]);
+                merged = TRUE;
+                break;
+            }
+        }
+        if (!merged && s_nbFlames < MAX_FLAME_SPRITES) {
+            SDL_memcpy(s_flames + s_nbFlames * 4, box, sizeof(box));
+            s_nbFlames++;
+        }
+    }
+}
+
 /* Composite switches: the player's GPU effects can change at any present. */
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[8];
+    float params[12 + MAX_FLAME_SPRITES * 4];
     SDL_zeroa(params);
+    params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
+    params[9] = (float)s_nbFlames;
+    SDL_memcpy(params + 12, s_flames, sizeof(s_flames));
     params[0] = (debug != NULL) ? (float)SDL_atoi(debug) : 0.0f;
     params[1] = s_supersample ? 1.0f : 0.0f;
     params[2] = (s_upscale && GpuObjPixelFilter) ? 1.0f : 0.0f;
@@ -858,6 +907,8 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     static T_DRAW_UNIFORMS uniforms[8192];
     U32 vertexBytes = 0;
     U32 count = liveCount > 0 ? ResolveDraws(live, liveCount, kept, uniforms, &vertexBytes) : 0;
+    CollectFlames(kept, count, w, h);
+    PushCompositeParams();
     if (count == 0) {
         vertexBytes = 0;
         memset(box, 0, sizeof(box));

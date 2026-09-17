@@ -75,6 +75,8 @@ typedef struct {
     S32 FogColor; ///< palette index the fog fades to
     S32 HasFire;  ///< some of its polygons show an animated fire texture
     float FirePos[3]; ///< where they are, in the draw's scene space
+    float FireRect[4]; ///< their screen box in frame pixels (x0, y0, x1, y1), for the flame sprite
+    S32 FireRises;     ///< they stand up in the world (a flame), not lie flat (a laser bar)
     S32 HasGlow;      ///< a lamp's bright globe: 1 in an isometric room, 2 in a perspective scene
     float GlowPos[3]; ///< where they are, in the draw's scene space
     float GlowColor[3]; ///< their colour, 0..1

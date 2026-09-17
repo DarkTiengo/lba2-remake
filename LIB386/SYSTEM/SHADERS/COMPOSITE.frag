@@ -25,7 +25,71 @@ layout(set = 3, binding = 0) uniform Params {
     float glowPad0;
     float glowPad1;
     float glowPad2;
+    float flameTime;  // seconds
+    float flameCount; // boxes in flameBoxes
+    float flamePad0;
+    float flamePad1;
+    vec4 flameBoxes[16]; // burning polygons' screen boxes in frame uv (x0, y0, x1, y1)
 };
+
+// --- Flames ----------------------------------------------------------------------
+float FlameHash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float FlameNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(FlameHash(i), FlameHash(i + vec2(1.0, 0.0)), u.x),
+               mix(FlameHash(i + vec2(0.0, 1.0)), FlameHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float FlameFbm(vec2 p) {
+    float sum = 0.0;
+    float amp = 0.5;
+    for (int k = 0; k < 4; k++) {
+        sum += amp * FlameNoise(p);
+        p = p * 2.07 + vec2(3.1, 7.7);
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+/* A soft volumetric flame rising from each burning box: taller than the
+   polygons, licking tongues, transparent edges. Premultiplied, added to the frame. */
+vec3 Flames(vec2 uv) {
+    vec3 sum = vec3(0.0);
+    for (int k = 0; k < int(flameCount); k++) {
+        vec4 b = flameBoxes[k];
+        float w = max(b.z - b.x, 0.004) * 1.35;
+        float h = clamp((b.w - b.y) * 2.0, w * 1.6, w * 3.0);
+        float cx = (b.x + b.z) * 0.5;
+        float base = b.w + (b.w - b.y) * 0.05;
+        float u = (uv.x - cx) / (w * 0.5);
+        float v = (base - uv.y) / h; // 0 at the roots, 1 at the tips
+        if (v < -0.08 || v > 1.0 || abs(u) > 1.6) {
+            continue;
+        }
+        float seed = float(k) * 17.3;
+        float t = flameTime;
+        /* Sway and turbulence grow with height. */
+        float sway = (FlameFbm(vec2(v * 2.0 - t * 1.3, seed)) - 0.5) * 0.9 * v;
+        float uu = u + sway;
+        float width = pow(clamp(1.0 - v, 0.0, 1.0), 0.55) * (0.85 + 0.15 * sin(t * 7.0 + seed));
+        float body = 1.0 - smoothstep(width * 0.35, width, abs(uu));
+        float n = FlameFbm(vec2(uu * 2.5, v * 3.5 - t * 3.2) + seed);
+        float heat = body * (1.15 - v * 1.05) + (n - 0.5) * 0.9 * body;
+        heat *= smoothstep(-0.08, 0.06, v);
+        heat = clamp(heat, 0.0, 1.0);
+        vec3 c = mix(vec3(0.5, 0.04, 0.0), vec3(1.0, 0.3, 0.02), smoothstep(0.05, 0.35, heat));
+        c = mix(c, vec3(1.0, 0.65, 0.12), smoothstep(0.3, 0.6, heat));
+        c = mix(c, vec3(1.0, 0.92, 0.55), smoothstep(0.6, 0.9, heat));
+        float alpha = smoothstep(0.04, 0.45, heat);
+        sum += c * alpha * 1.1;
+    }
+    return sum;
+}
 
 /* Soft halo from the emissive surfaces around this pixel: two rings of taps on
    the GPU targets, each weighting the surface's colour by its emissive mask. */
@@ -232,6 +296,9 @@ void main() {
     const float SCENE_BIT = 8388608.0;
     bool match = tag > 0.0 && (abs(tag - id) < 0.5 || (tag >= SCENE_BIT && id >= SCENE_BIT));
     vec3 halo = glow > 0.0 ? Glow(v_uv) : vec3(0.0);
+    if (flameCount > 0.5) {
+        halo += Flames(v_uv);
+    }
     if (!match) {
         o_color = vec4(SoftwarePixel(v_uv) + halo, 1.0) * v_color;
         return;

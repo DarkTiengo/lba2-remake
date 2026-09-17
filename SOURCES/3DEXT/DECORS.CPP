@@ -282,6 +282,11 @@ typedef struct {
 
 static const T_LAMP_MODEL kLampModels[] = {
     {0, 26}, /* Citadel Island street lamp */
+    {2, 0},  /* Desert Island lighthouse */
+    {3, 19}, /* Emerald Moon ring light */
+    {3, 27}, /* Emerald Moon square light */
+    {3, 29}, /* Emerald Moon lanterns */
+    {6, 24}, /* dome lamp */
 };
 
 static S32 IsLampModel(S32 island, S32 body) {

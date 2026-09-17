@@ -66,6 +66,9 @@ static T_GPUOBJ_DRAW *s_draw = NULL;
 
 /* Fire-textured polygons of the body being captured: their centres summed. */
 static float s_fireSum[3];
+static float s_fireRect[4];
+static float s_fireMin[3], s_fireMax[3]; ///< scene-space bounds of the fire polygons
+static S32 s_fireSlender = 0;            ///< fire polygons far longer than wide (laser bars, beams)
 static S32 s_fireCount = 0;
 
 /* Lamp globes of the body being captured: bright, coloured, unshaded solid polygons. */
@@ -388,6 +391,7 @@ S32 AffGpu_Begin(void) {
     }
     s_pending = FALSE;
     s_fireCount = 0;
+    s_fireSlender = 0;
     s_fireSum[0] = s_fireSum[1] = s_fireSum[2] = 0.0f;
     s_glowCount = 0;
     s_glowSum[0] = s_glowSum[1] = s_glowSum[2] = 0.0f;
@@ -565,9 +569,42 @@ void AffGpu_Entity(U32 type, void *poly) {
         const S32 v = (S32)(cv / (float)nbPoints);
         const S32 index = ((S32)m.TexOffset + ((((v & 255) << 8) | (u & 255)) & (S32)m.TexMask)) & 65535;
         if (GpuObj_FireAt(index & 255, index >> 8) >= 0) {
+            /* Longest side against shortest: a beam's polygons are slivers. */
+            float longest = 0.0f, shortest = 1e30f;
+            T_GPU_PROJ corner[4];
+            for (S32 i = 0; i < nbPoints; i++) {
+                Project(points[i], &corner[i]);
+            }
+            for (S32 i = 0; i < nbPoints; i++) {
+                const T_GPU_PROJ *a = &corner[i];
+                const T_GPU_PROJ *b = &corner[(i + 1) % nbPoints];
+                const float ex = a->Vx - b->Vx, ey = a->Vy - b->Vy, ez = a->Vz - b->Vz;
+                const float len = ex * ex + ey * ey + ez * ez;
+                longest = len > longest ? len : longest;
+                shortest = len < shortest ? len : shortest;
+            }
+            if (longest > shortest * 16.0f) {
+                s_fireSlender++;
+            }
             for (S32 i = 0; i < nbPoints; i++) {
                 T_GPU_PROJ p;
                 Project(points[i], &p);
+                if (s_fireCount == 0 && i == 0) {
+                    s_fireRect[0] = s_fireRect[2] = p.Sx;
+                    s_fireRect[1] = s_fireRect[3] = p.Sy;
+                }
+                s_fireRect[0] = p.Sx < s_fireRect[0] ? p.Sx : s_fireRect[0];
+                s_fireRect[1] = p.Sy < s_fireRect[1] ? p.Sy : s_fireRect[1];
+                s_fireRect[2] = p.Sx > s_fireRect[2] ? p.Sx : s_fireRect[2];
+                s_fireRect[3] = p.Sy > s_fireRect[3] ? p.Sy : s_fireRect[3];
+                const float vp[3] = {p.Vx, p.Vy, p.Vz};
+                for (S32 a = 0; a < 3; a++) {
+                    if (s_fireCount == 0 && i == 0) {
+                        s_fireMin[a] = s_fireMax[a] = vp[a];
+                    }
+                    s_fireMin[a] = vp[a] < s_fireMin[a] ? vp[a] : s_fireMin[a];
+                    s_fireMax[a] = vp[a] > s_fireMax[a] ? vp[a] : s_fireMax[a];
+                }
                 s_fireSum[0] += p.Vx / (float)nbPoints;
                 s_fireSum[1] += p.Vy / (float)nbPoints;
                 s_fireSum[2] += p.Vz / (float)nbPoints;
@@ -703,8 +740,19 @@ void AffGpu_End(void) {
         for (S32 i = 0; i < 3; i++) {
             s_draw->FirePos[i] = s_fireSum[i] / (float)s_fireCount;
         }
+        for (S32 i = 0; i < 4; i++) {
+            s_draw->FireRect[i] = s_fireRect[i];
+        }
+        /* Vertical extent against horizontal: a brazier's flame or a fireball has
+           height, a laser bar sharing the fire texture lies flat. */
+        const float dy = s_fireMax[1] - s_fireMin[1];
+        const float dx = s_fireMax[0] - s_fireMin[0];
+        const float dz = s_fireMax[2] - s_fireMin[2];
+        const float flat = dx > dz ? dx : dz;
+        s_draw->FireRises = dy >= flat * 0.45f && s_fireSlender * 2 < s_fireCount;
     }
     s_fireCount = 0;
+    s_fireSlender = 0;
     s_fireSum[0] = s_fireSum[1] = s_fireSum[2] = 0.0f;
     s_glowCount = 0;
     s_glowSum[0] = s_glowSum[1] = s_glowSum[2] = 0.0f;

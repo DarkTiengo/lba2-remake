@@ -315,8 +315,9 @@ void main() {
         if (fire.a < 0.5 && (Flags() & FLAG_CHROMAKEY) != 0) {
             discard;
         }
+        /* The flame itself is drawn above by the composite: this is its glowing bed. */
         color = fire.rgb * fire.a;
-        emissive = fire.a;
+        emissive = fire.a * 0.8;
     } else if (mode == MODE_TEX) {
         color = Textured(0.0, false).rgb;
     } else if (mode == MODE_TEXSHADED) {
