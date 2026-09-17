@@ -31,6 +31,8 @@
 #include <SYSTEM/KEYBOARD.H>
 #include <SYSTEM/KEYBOARD_KEYS.H>
 #include <SYSTEM/STRING.H>
+#include <SYSTEM/UIOVERLAY.H>
+#include <math.h>
 #include "AMBIANCE.H"
 
 #define CONFIG_SHADE_LVL MENU_SHADE_LVL
@@ -352,8 +354,197 @@ void InitKeyStrings(void) {
 }
 
 //▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+// --- Modern key configuration --------------------------------------------------
+// With the modern menu style the whole screen is overlay cards rebuilt from the
+// current state (selection, key strings, status) whenever the classic code would
+// redraw a part of it.
+
+static S32 s_cfgStatus = STATUS_MENU;
+
+static void ConfigStatusText(S32 num, char *txt, size_t size) {
+    if (num == STATUS_MENU && s_ConfigGamepadTripleFooter) {
+        char kExit[KEY_STRING_LEN];
+        char kSel[KEY_STRING_LEN];
+        char kClr[KEY_STRING_LEN];
+
+        if (GamepadKeys[9].Key1 != 0)
+            GetKeyText(kExit, GamepadKeys[9].Key1);
+        else if (GamepadKeys[9].Key2 != 0)
+            GetKeyText(kExit, GamepadKeys[9].Key2);
+        else
+            strcpy(kExit, "---");
+
+        if (GamepadKeys[8].Key1 != 0)
+            GetKeyText(kSel, GamepadKeys[8].Key1);
+        else if (GamepadKeys[8].Key2 != 0)
+            GetKeyText(kSel, GamepadKeys[8].Key2);
+        else
+            strcpy(kSel, "---");
+
+        if (GamepadKeys[7].Key1 != 0)
+            GetKeyText(kClr, GamepadKeys[7].Key1);
+        else if (GamepadKeys[7].Key2 != 0)
+            GetKeyText(kClr, GamepadKeys[7].Key2);
+        else
+            strcpy(kClr, "---");
+
+        FormatUtf8ToCp850(txt, size, GetLocalizedMenuLabel(MENU_LABEL_KEYCFG_FOOTER), kExit, kSel, kClr);
+        return;
+    }
+    char tmp[MULTI_TEXT_MAX];
+    GetMultiText(START_STATUS_TXT + num, tmp);
+    SDL_strlcpy(txt, tmp, size);
+}
+
+/* A key name as shown on its keycap: trimmed, empty when unbound. */
+static void ConfigKeyLabel(const char *key, char *out, size_t size) {
+    while (*key == ' ')
+        key++;
+    SDL_strlcpy(out, key, size);
+    size_t len = strlen(out);
+    while (len > 0 && out[len - 1] == ' ')
+        out[--len] = 0;
+    if (!strcmp(out, KEY_STRING_EMPTY) || !strcmp(out, "---")) {
+        out[0] = 0;
+    }
+}
+
+static void ConfigModern_Publish(void) {
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+    const float pulse = 0.5f + 0.5f * (float)sin((double)TimerRefHR / 1000.0 * 6.0);
+    const S32 waiting = s_cfgStatus == STATUS_PRESS || s_cfgStatus == STATUS_NOTHING;
+
+    T_UIOVERLAY_CARD veil;
+    memset(&veil, 0, sizeof(veil));
+    veil.FillTop = 0x80000008u;
+    veil.FillBottom = 0x60000008u;
+    UiOverlay_Card(-4.0f, -4.0f, (float)ModeDesiredX + 4.0f, (float)ModeDesiredY + 4.0f, &veil);
+
+    T_UIOVERLAY_CARD panel;
+    memset(&panel, 0, sizeof(panel));
+    panel.Radius = 12.0f;
+    panel.FillTop = 0xE01A2438u;
+    panel.FillBottom = 0xE00E1422u;
+    panel.Border = 0x70A8D0FFu;
+    panel.BorderWidth = 1.5f;
+    panel.Shadow = 0xA0000000u;
+    panel.ShadowY = 6.0f;
+    panel.ShadowBlur = 16.0f;
+    UiOverlay_Card((float)CFG_X0, (float)CFG_Y0, (float)CFG_X1, (float)CFG_Y1, &panel);
+
+    /* Column titles and a rule under them. */
+    char text[MULTI_TEXT_MAX];
+    const float headY = (float)CFG_Y0 + 11.0f;
+    const U32 accent = 0xFF9FD8FFu;
+    GetMultiText(START_MENUS_TXT + CFG_TXT_ACTION, text);
+    UiOverlay_Text((float)ACTION_X, headY, text, 12.0f, accent, UIOVERLAY_ALIGN_LEFT, TRUE, 0.0f);
+    GetMultiText(START_MENUS_TXT + CFG_TXT_KEY1, text);
+    UiOverlay_Text((float)(KEY1_X - 5 + KEY2_X - 15) * 0.5f, headY, text, 12.0f, accent, UIOVERLAY_ALIGN_CENTER, TRUE, 0.0f);
+    GetMultiText(START_MENUS_TXT + CFG_TXT_KEY2, text);
+    UiOverlay_Text((float)(KEY2_X - 5 + CFG_X1 - 5) * 0.5f, headY, text, 12.0f, accent, UIOVERLAY_ALIGN_CENTER, TRUE, 0.0f);
+    T_UIOVERLAY_CARD rule;
+    memset(&rule, 0, sizeof(rule));
+    rule.FillTop = 0x50A8D0FFu;
+    rule.FillBottom = 0x50A8D0FFu;
+    UiOverlay_Card((float)CFG_X0 + 10.0f, (float)CFG_Y0 + 19.5f, (float)CFG_X1 - 10.0f, (float)CFG_Y0 + 21.5f, &rule);
+
+    for (S32 n = 0; n < MAX_INPUT_SLOTS; n++) {
+        const float top = (float)(CFG_Y0 + 30 + n * 10) - 1.5f;
+        const float cy = top + 5.5f;
+        const S32 selected = n == SelectConfig;
+        if (selected || (n & 1)) {
+            T_UIOVERLAY_CARD stripe;
+            memset(&stripe, 0, sizeof(stripe));
+            stripe.Radius = 3.0f;
+            stripe.FillTop = selected ? 0x405AB4FFu : 0x0CFFFFFFu;
+            stripe.FillBottom = stripe.FillTop;
+            UiOverlay_Card((float)CFG_X0 + 6.0f, top, (float)CFG_X1 - 6.0f, top + 10.0f, &stripe);
+        }
+        GetMultiText(START_ACTION_TXT + n, text);
+        UiOverlay_Text((float)ACTION_X, cy, text, 11.0f, selected ? 0xFFFFFFFFu : 0xFFC8D2E0u, UIOVERLAY_ALIGN_LEFT, TRUE,
+                       (float)(KEY1_X - ACTION_X - 20));
+
+        for (S32 k = 0; k < 2; k++) {
+            const float cx0 = (float)(k == 0 ? KEY1_X - 5 : KEY2_X - 5);
+            const float cx1 = (float)(k == 0 ? KEY2_X - 15 : CFG_X1 - 5);
+            const S32 active = selected && SelectKey == k;
+            char label[KEY_STRING_LEN];
+            ConfigKeyLabel(KeyStrings[n * 2 + k], label, sizeof label);
+            if (active && waiting) {
+                SDL_strlcpy(label, "...", sizeof label);
+            }
+            if (label[0] || active) {
+                T_UIOVERLAY_CARD cap;
+                memset(&cap, 0, sizeof(cap));
+                cap.Radius = 4.0f;
+                cap.FillTop = 0xE0364258u;
+                cap.FillBottom = 0xE0222A3Cu;
+                cap.Border = 0x40FFFFFFu;
+                cap.BorderWidth = 1.0f;
+                if (active) {
+                    cap.Border = waiting ? 0xFFFFC24Au : 0xFF86CCFFu;
+                    cap.BorderWidth = 1.5f;
+                    cap.Glow = ((U32)(90.0f + 90.0f * pulse) << 24) | (waiting ? 0xFFA028u : 0x5AB4FFu);
+                    cap.GlowSize = 6.0f;
+                }
+                UiOverlay_Card(cx0 + 2.0f, top + 0.5f, cx1 - 2.0f, top + 9.5f, &cap);
+            }
+            if (label[0]) {
+                UiOverlay_Text((cx0 + cx1) * 0.5f, cy, label, 10.0f, active ? 0xFFFFFFFFu : 0xFFD8E2F0u, UIOVERLAY_ALIGN_CENTER,
+                               TRUE, cx1 - cx0 - 10.0f);
+            } else {
+                UiOverlay_Text((cx0 + cx1) * 0.5f, cy, "-", 10.0f, 0x50FFFFFFu, UIOVERLAY_ALIGN_CENTER, TRUE, 0.0f);
+            }
+        }
+    }
+
+    /* Default / previous / accept, as buttons. */
+    UiOverlay_Card((float)CFG_MENU_X0, (float)CFG_MENU_Y0, (float)CFG_MENU_X1, (float)CFG_MENU_Y1, &panel);
+    for (S32 i = 0; i < 3; i++) {
+        GetMultiText(START_MENUS_TXT + CFG_TXT_DEFAUT + i, text);
+        const float cy = (float)(CFG_MENU_Y0 + 7 + i * 10) + 4.0f;
+        const float half = UiOverlay_TextWidth(text, 11.0f) * 0.5f + 16.0f;
+        const float cx = (float)ModeDesiredX * 0.5f;
+        const S32 selected = SelectConfig - MAX_INPUT_SLOTS == i;
+        T_UIOVERLAY_CARD button;
+        memset(&button, 0, sizeof(button));
+        button.Radius = 4.5f;
+        button.FillTop = selected ? 0xF0305284u : 0x00000000u;
+        button.FillBottom = selected ? 0xF01C3560u : 0x00000000u;
+        if (selected) {
+            button.Border = 0xFF86CCFFu;
+            button.BorderWidth = 1.5f;
+            button.Glow = ((U32)(90.0f + 70.0f * pulse) << 24) | 0x5AB4FFu;
+            button.GlowSize = 6.0f;
+        }
+        UiOverlay_Card(cx - half, cy - 4.5f, cx + half, cy + 4.5f, &button);
+        UiOverlay_Text(cx, cy, text, 11.0f, selected ? 0xFFFFFFFFu : 0xFFB8CCE0u, UIOVERLAY_ALIGN_CENTER, TRUE, 0.0f);
+    }
+
+    /* Status line. */
+    T_UIOVERLAY_CARD bar = panel;
+    if (s_cfgStatus == STATUS_ERROR) {
+        bar.Border = 0xFFFF6A5Au;
+    } else if (waiting) {
+        bar.Border = 0xFFFFC24Au;
+    }
+    UiOverlay_Card((float)CFG_TXT_X0, (float)CFG_TXT_Y0, (float)CFG_TXT_X1, (float)CFG_TXT_Y1_NORMAL, &bar);
+    ConfigStatusText(s_cfgStatus == STATUS_NOTHING ? STATUS_PRESS : s_cfgStatus, text, sizeof text);
+    const U32 statusColor = s_cfgStatus == STATUS_ERROR ? 0xFFFF8A7Au : waiting ? 0xFFFFD27Au
+                                                                                : 0xFFD6E6F6u;
+    UiOverlay_Text((float)ModeDesiredX * 0.5f, (float)(CFG_TXT_Y0 + CFG_TXT_Y1_NORMAL) * 0.5f, text, 12.0f, statusColor,
+                   UIOVERLAY_ALIGN_CENTER, TRUE, (float)(CFG_TXT_X1 - CFG_TXT_X0) - 20.0f);
+
+    BoxStaticAdd(0, 0, 1, 1);
+}
+
 void DrawOneConfig(S32 n) {
     char string[MULTI_TEXT_MAX];
+
+    if (Menu_IsModern()) {
+        ConfigModern_Publish();
+        return;
+    }
     S32 y = CFG_Y0 + 30 + n * 10;
     S32 x = ACTION_X;
     S32 x0, y0, x1, y1;
@@ -457,6 +648,11 @@ void DrawOneConfigMenu(S32 n) {
     S32 x0, y0, x1, y1;
     S32 y;
 
+    if (Menu_IsModern()) {
+        ConfigModern_Publish();
+        return;
+    }
+
     if (n < MAX_INPUT_SLOTS) {
         DrawOneConfig(n);
         return;
@@ -520,6 +716,12 @@ void DrawCadreConfig(S32 x0, S32 y0, S32 x1, S32 y1, S32 flagclean) {
 void DrawStatusConfig(S32 num) {
     char txt[MULTI_TEXT_MAX];
 
+    if (Menu_IsModern()) {
+        s_cfgStatus = num;
+        ConfigModern_Publish();
+        return;
+    }
+
     if (num == STATUS_MENU && s_ConfigGamepadTripleFooter) {
         char lineBuf[220];
         char kExit[KEY_STRING_LEN];
@@ -577,6 +779,13 @@ void DrawScreenConfig(S32 gamepadTripleFooter) {
     s_ConfigGamepadTripleFooter = gamepadTripleFooter;
 
     CopyScreen(Screen, Log);
+
+    if (Menu_IsModern()) {
+        s_cfgStatus = STATUS_MENU;
+        ConfigModern_Publish();
+        BoxStaticAdd(0, 0, ModeDesiredX, ModeDesiredY);
+        return;
+    }
 
     // Fenetres Action/Key1/Key2
 
@@ -951,6 +1160,7 @@ endloop:
         InitKeyStrings();
     }
 
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
     CopyScreen(Screen, Log);
     BoxStaticAdd(0, 0, ModeDesiredX, ModeDesiredY);
 
@@ -1262,6 +1472,7 @@ endloop_pad:
 
     s_ConfigGamepadTripleFooter = 0;
 
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
     CopyScreen(Screen, Log);
     BoxStaticAdd(0, 0, ModeDesiredX, ModeDesiredY);
 
