@@ -4583,10 +4583,43 @@ static void ShowSaveConfirmation(enum MenuLocalizedLabel label) {
     HQ_MixSample(SAMPLE_FOUND_OBJ, 0x1000, 0, 1, 64, 127);
     CopyScreen(Screen, Log);
     ShadeBoxBlk(0, 0, (S32)ModeDesiredX - 1, (S32)ModeDesiredY - 1, SCREEN_SHADE_LVL);
+    const S32 modern = Menu_IsModern();
     {
         char savedMsg[256];
         CopyUtf8ToCp850(savedMsg, sizeof savedMsg, GetLocalizedMenuLabel(label));
-        DrawSingleString((S32)ModeDesiredX / 2, (S32)ModeDesiredY / 2, savedMsg);
+        if (modern) {
+            /* A toast card: success-green edge, a check mark, the message. */
+            UiOverlay_ClearLayer(UIOVERLAY_LAYER_MENU);
+            const float cx = (float)ModeDesiredX * 0.5f;
+            const float cy = (float)ModeDesiredY * 0.5f;
+            const float textW = UiOverlay_TextWidth(savedMsg, 28.0f);
+            const float halfW = textW * 0.5f + 52.0f;
+            T_UIOVERLAY_CARD card;
+            memset(&card, 0, sizeof(card));
+            card.Radius = 18.0f;
+            card.FillTop = 0xF0283A4Cu;
+            card.FillBottom = 0xF0162230u;
+            card.Border = 0xFF6ED49Au;
+            card.BorderWidth = 2.0f;
+            card.Glow = 0x806ED49Au;
+            card.GlowSize = 14.0f;
+            card.Shadow = 0xA0000000u;
+            card.ShadowY = 8.0f;
+            card.ShadowBlur = 20.0f;
+            UiOverlay_Card(cx - halfW, cy - 32.0f, cx + halfW, cy + 32.0f, &card);
+            /* Check mark: a green disc with a short and a long stroke. */
+            T_UIOVERLAY_CARD disc;
+            memset(&disc, 0, sizeof(disc));
+            disc.Radius = 14.0f;
+            disc.FillTop = 0xFF7EE0A8u;
+            disc.FillBottom = 0xFF3FAE70u;
+            const float ix = cx - halfW + 34.0f;
+            UiOverlay_Card(ix - 14.0f, cy - 14.0f, ix + 14.0f, cy + 14.0f, &disc);
+            UiOverlay_Chevron(ix - 1.0f, cy + 1.0f, 14.0f, 2, 0xFFFFFFFFu);
+            UiOverlay_Text(cx + 18.0f, cy, savedMsg, 28.0f, 0xFFFFFFFFu, UIOVERLAY_ALIGN_CENTER, TRUE, 0.0f);
+        } else {
+            DrawSingleString((S32)ModeDesiredX / 2, (S32)ModeDesiredY / 2, savedMsg);
+        }
     }
     BoxStaticFullflip();
     {
@@ -4606,6 +4639,11 @@ static void ShowSaveConfirmation(enum MenuLocalizedLabel label) {
             ManageTime();
             MyGetInput();
         }
+    }
+    if (modern) {
+        UiOverlay_ClearLayer(UIOVERLAY_LAYER_MENU);
+        BoxStaticAdd(0, 0, 1, 1);
+        BoxUpdate();
     }
     InitWaitNoInput(I_FIRE | I_ACTION | I_MENUS);
 }

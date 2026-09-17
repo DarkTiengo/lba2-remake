@@ -11,6 +11,9 @@
 /*──────────────────────────────────────────────────────────────────────────*/
 
 #include "C_EXTERN.H"
+#include "GAMEMENU.H" /* Menu_IsModern */
+#include <SYSTEM/UIOVERLAY.H>
+#include <math.h>
 
 #include <SVGA/SCREEN.H>
 #include <SVGA/VIDEO.H>
@@ -615,8 +618,53 @@ S32 GamePlayCredits(const char *file_name, S32 mode) {
         }
 
         ptr = ptrl;
+        /* Modern style: the scrolling text is overlay text, fading at the edges. */
+        const S32 modern = Menu_IsModern();
+        if (modern) {
+            UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+            BoxStaticAdd(0, 0, 1, 1);
+        }
         for (n = 0; n <= nbl; n++) {
             yf = y + FontHeight * n;
+
+            if (modern) {
+                const char kind = (char)ptr[0];
+                if (kind == '.') {
+                    flagexit = TRUE;
+                }
+                const char *text = (char *)ptr + 2;
+                if (*text) {
+                    const float cy = (float)yf + 20.0f;
+                    const float edge = 70.0f;
+                    float fade = 1.0f;
+                    if (cy < edge)
+                        fade = cy / edge;
+                    if (cy > (float)ModeDesiredY - edge)
+                        fade = ((float)ModeDesiredY - cy) / edge;
+                    if (fade > 0.0f) {
+                        const U32 alpha = (U32)(fade * 255.0f) << 24;
+                        const U32 shadow = (U32)(fade * 150.0f) << 24;
+                        float size = 24.0f;
+                        U32 color = 0xFFFFFFu;
+                        if (kind == '>') {
+                            color = 0xA8DCFFu; /* names */
+                        } else if (kind == '+') {
+                            size = 32.0f; /* headings */
+                            color = 0xFFD27Au;
+                        }
+                        const float maxW = (float)ModeDesiredX - 40.0f;
+                        UiOverlay_Text((float)xc + 1.5f, cy + 2.0f, text, size, shadow, UIOVERLAY_ALIGN_CENTER, TRUE, maxW);
+                        UiOverlay_Text((float)xc, cy, text, size, alpha | color, UIOVERLAY_ALIGN_CENTER, TRUE, maxW);
+                        if (kind == '+') {
+                            const float half = UiOverlay_TextWidth(text, size) * 0.5f + 22.0f;
+                            UiOverlay_Sparkle((float)xc - half, cy, 16.0f, alpha | 0xFFE6A0u);
+                            UiOverlay_Sparkle((float)xc + half, cy, 16.0f, alpha | 0xFFE6A0u);
+                        }
+                    }
+                }
+                ptr = NextLine(ptr);
+                continue;
+            }
 
             switch (ptr[0]) {
                 //                      case '*':       // line feed
@@ -668,6 +716,7 @@ S32 GamePlayCredits(const char *file_name, S32 mode) {
     }
 
 end_credits:
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
 
     InitObjects(BufferAnim, SIZE_BUFFER_ANIM, GivePtrBody, GivePtrAnim);
 
