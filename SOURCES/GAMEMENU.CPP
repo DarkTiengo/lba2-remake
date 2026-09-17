@@ -2676,7 +2676,8 @@ static void DrawGameMenuModern(U16 *ptrmenu) {
         s_modernMenu = ptrmenu;
     }
     s_modernTime = now;
-    const float step = SDL_min(dt * 14.0f, 1.0f);
+    /* Fast enough to never trail the cursor: settled within about 60 ms. */
+    const float step = SDL_min(dt * 40.0f, 1.0f);
     const float pulse = 0.5f + 0.5f * (float)sin((double)now / 1000.0 * 3.0);
 
     UiOverlay_Clear();
@@ -3612,6 +3613,10 @@ static void MenuPage_MainCapture(U16 *menu, const char *path);
 
 void GpuEffects_MainCapture(const char *path) {
     MenuPage_MainCapture(GpuEffectsMenu, path);
+}
+
+void Advanced_MainCapture(const char *path) {
+    MenuPage_MainCapture(AdvancedOptionMenu, path);
 }
 
 void Volume_MainCapture(const char *path) {

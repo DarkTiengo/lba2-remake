@@ -94,6 +94,8 @@ extern void Display_MainCapture(const char *path);
 extern void GpuEffects_MainCapture(const char *path);
 /* Harness one-shot capture of the sound volume page. */
 extern void Volume_MainCapture(const char *path);
+/* Harness one-shot capture of the advanced options page. */
+extern void Advanced_MainCapture(const char *path);
 /* Harness hook: capture the resolution sub-page (the list opened from the
    Display submenu's Resolution row). Like Display_MainCapture but builds the
    runtime ResolutionMenu first, then drives DoGameMenu on it. */

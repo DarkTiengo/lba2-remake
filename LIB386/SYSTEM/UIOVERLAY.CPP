@@ -384,8 +384,17 @@ static void DrawPointer(SDL_Renderer *renderer) {
         return;
     }
     const float k = SDL_max(s_scale, 1.0f);
-    const float mx = s_offsetX + (float)MouseX * s_scale;
-    const float my = s_offsetY + (float)MouseY * s_scale;
+    /* The window's own mouse position: finer than the frame's pixels when the
+       frame is magnified, and current at the moment of the present. */
+    float mx = s_offsetX + (float)MouseX * s_scale;
+    float my = s_offsetY + (float)MouseY * s_scale;
+    float wx = 0.0f, wy = 0.0f;
+    SDL_GetMouseState(&wx, &wy);
+    float rx = 0.0f, ry = 0.0f;
+    if (SDL_RenderCoordinatesFromWindow(renderer, wx, wy, &rx, &ry)) {
+        mx = rx;
+        my = ry;
+    }
     static const float shape[7][2] = {{0, 0}, {0, 17}, {4.5f, 13}, {7.5f, 19.5f}, {10, 18.5f}, {7, 12}, {12.5f, 12}};
     const float outline = 1.6f;
     const SDL_FColor dark = {0.05f, 0.07f, 0.12f, 0.95f};

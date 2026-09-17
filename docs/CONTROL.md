@@ -547,6 +547,7 @@ widescreen, font, palette, or layout changes are most likely to disturb.
 | `ui dialog <text-id> <path>` | The dialogue bubble + portrait + typewriter text for that text-id |
 | `ui menu-options <path>` | The in-game ESC menu (Volume / Language / Advanced / Controls) over the shaded scene |
 | `ui volume <path>` | The Sound volume page |
+| `ui advanced <path>` | The Advanced options page |
 | `ui gpu-effects <path>` | The GPU effects page (Display menu, GPU renderer) |
 | `ui menu-main <path>` | The boot-time main menu (Resume / New Game / Load / Options / Quit) |
 | `ui found-object <numvar> <path>` | The found-object cinematic — 3D rotation of `TabInv[numvar]`'s item + dialogue |
