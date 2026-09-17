@@ -1,4 +1,6 @@
 #include "DEFINES.H"
+#include "../C_EXTERN.H" /* Island */
+#include <SVGA/GPUOBJ.H>
 
 /*══════════════════════════════════════════════════════════════════════════*
 		      █▀▀▀▄ █▀▀▀▀ █▀▀▀▀ █▀▀▀█ █▀▀▀█ ██▀▀▀
@@ -271,6 +273,26 @@ void AffichageObjetDecorsZV(void) {
 
 // Version masques compris
 
+/* The island decor models that are lamps, found by looking at the islands: the
+   GPU renderer makes their bright glass glow and cast light. */
+typedef struct {
+    S32 Island;
+    S32 Body;
+} T_LAMP_MODEL;
+
+static const T_LAMP_MODEL kLampModels[] = {
+    {0, 26}, /* Citadel Island street lamp */
+};
+
+static S32 IsLampModel(S32 island, S32 body) {
+    for (S32 i = 0; i < (S32)(sizeof(kLampModels) / sizeof(kLampModels[0])); i++) {
+        if (kLampModels[i].Island == island && kLampModels[i].Body == body) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 void AffichageObjetDecorsZBuf(void) {
     S32 i;
     T_LIST_TRI *ptrtri;
@@ -376,6 +398,9 @@ void AffichageObjetDecorsZBuf(void) {
                                      clipzstart,
                                      ptrtri->Zrot - StartZFog));
 
+        /* Tell the GPU capture when this decor is a lamp: its bright glass glows. */
+        GpuObjLampModel = IsLampModel(Island, (S32)(ptrobj->Body & 0xFFFF));
+        GpuObjLampPalette = PtrPal;
         if (BodyDisplay(ptrobj->Xworld,
                         ptrobj->Yworld,
                         ptrobj->Zworld,
@@ -389,6 +414,7 @@ void AffichageObjetDecorsZBuf(void) {
             }
         }
     }
+    GpuObjLampModel = FALSE;
 
     //	Switch_Fillers( FILL_TEXTURES_ON );
 

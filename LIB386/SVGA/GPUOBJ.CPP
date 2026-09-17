@@ -27,6 +27,8 @@ S32 GpuObjSpecular = TRUE;
 S32 GpuObjUiScale = TRUE;
 S32 GpuObjFire = TRUE;
 S32 GpuObjGlow = TRUE;
+S32 GpuObjLampModel = FALSE;
+const U8 *GpuObjLampPalette = NULL;
 
 const U8 *GpuObjFirePage = NULL;
 T_GPUOBJ_RECT GpuObjFireRects[GPUOBJ_MAX_FIRES];

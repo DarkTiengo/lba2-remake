@@ -21,7 +21,39 @@ layout(set = 3, binding = 0) uniform Params {
     float supersample; // > 0: the GPU targets are larger than the screen area
     float pixelFilter; // > 0: upscaled software pixels go through xBR
     float deband;      // > 0: upscaled software pixels are debanded
+    float glow;        // > 0: bloom halo around emissive surfaces (fire, lamp globes)
+    float glowPad0;
+    float glowPad1;
+    float glowPad2;
 };
+
+/* Soft halo from the emissive surfaces around this pixel: two rings of taps on
+   the GPU targets, each weighting the surface's colour by its emissive mask. */
+vec3 Glow(vec2 uv) {
+    ivec2 size = textureSize(u_objLight, 0);
+    vec2 centre = uv * vec2(size);
+    float scale = float(size.y) / 540.0;
+    vec3 sum = vec3(0.0);
+    float total = 0.0;
+    const int TAPS = 12;
+    for (int ring = 1; ring <= 3; ring++) {
+        float radius = scale * (float(ring) * float(ring) * 2.2);
+        float weight = 1.0 / float(ring);
+        for (int k = 0; k < TAPS; k++) {
+            float a = (float(k) + float(ring) * 0.5) * 6.2831853 / float(TAPS);
+            ivec2 q = clamp(ivec2(centre + vec2(cos(a), sin(a)) * radius), ivec2(0), size - ivec2(1));
+            float e = texelFetch(u_objLight, q, 0).a;
+            if (e > 0.0) {
+                sum += texelFetch(u_objColor, q, 0).rgb * e * weight;
+            }
+            total += weight;
+        }
+    }
+    float e0 = texelFetch(u_objLight, clamp(ivec2(centre), ivec2(0), size - ivec2(1)), 0).a;
+    sum += texelFetch(u_objColor, clamp(ivec2(centre), ivec2(0), size - ivec2(1)), 0).rgb * e0 * 2.0;
+    total += 2.0;
+    return sum / total * 2.2;
+}
 
 // --- Software frame -----------------------------------------------------------
 ivec2 g_frameSize;
@@ -199,8 +231,9 @@ void main() {
     /* Scene tags accept any scene surface: the GPU's depth picks it. */
     const float SCENE_BIT = 8388608.0;
     bool match = tag > 0.0 && (abs(tag - id) < 0.5 || (tag >= SCENE_BIT && id >= SCENE_BIT));
+    vec3 halo = glow > 0.0 ? Glow(v_uv) : vec3(0.0);
     if (!match) {
-        o_color = vec4(SoftwarePixel(v_uv), 1.0) * v_color;
+        o_color = vec4(SoftwarePixel(v_uv) + halo, 1.0) * v_color;
         return;
     }
 
@@ -209,7 +242,7 @@ void main() {
     if (nearest.a < 0.5) {
         /* A surface whose colour is the software frame (interior bricks). */
         vec3 c = SoftwarePixel(v_uv);
-        o_color = vec4(c * (vec3(1.0) + light), 1.0) * v_color;
+        o_color = vec4(c * (vec3(1.0) + light) + halo, 1.0) * v_color;
         return;
     }
 
@@ -223,6 +256,7 @@ void main() {
         gpu = nearest.rgb;
     }
     gpu *= vec3(1.0) + light;
+    gpu += halo;
     gpu = mix(gpu, vec3(0.0, 1.0, 0.0), min(debugTint, 1.0) * 0.5);
     o_color = vec4(gpu, frame.a);
 }

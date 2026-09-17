@@ -47,6 +47,7 @@ extern "C" {
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
 #define GPUOBJ_FLAG_BAKED 4     ///< shade comes from normal.w as authored, not from lighting
+#define GPUOBJ_FLAG_EMISSIVE 8  ///< glows: a lamp's globe (bloom halo, brighter core)
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
 typedef struct {
@@ -106,6 +107,8 @@ extern S32 GpuObjDeband;      ///< in-between colours on the palette's ramps (gf
 extern S32 GpuObjSpecular;    ///< specular highlights on models (gfx_specular)
 extern S32 GpuObjUiScale;     ///< 2D drawn at its classic size and upscaled (gfx_uiscale)
 extern S32 GpuObjGlow;        ///< lamp globes on 3D models cast light (gfx_lamps)
+extern S32 GpuObjLampModel;   ///< set by the caller while it draws a lamp model
+extern const U8 *GpuObjLampPalette; ///< the scene's 768-byte RGB palette, for the lamp glass
 extern S32 GpuObjFire;        ///< procedural flames and firelight on fire textures (gfx_fire)
 
 /* The animated fire regions of the object texture page (ANIMTEX.CPP): polygons

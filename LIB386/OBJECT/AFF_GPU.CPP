@@ -1,4 +1,3 @@
-#include <SVGA/VIDEO.H>
 #include <OBJECT/AFF_GPU.H>
 
 #include <OBJECT/AFF_OBJ.H>
@@ -222,25 +221,38 @@ static void EmitQuad(const float sx[4], const float sy[4], const T_GPU_PROJ *dep
 
 /* A bright, coloured palette entry on an unshaded surface is a lamp's globe or
    a lit window; dark or grey ones are ordinary paint. */
-static void AddGlow(U32 color, const float *pos) {
-    if (!GpuObjGlow) {
-        return;
+static S32 IsGlowColor(U32 color, S32 *rgb) {
+    if (!GpuObjGlow || !GpuObjLampModel) {
+        return FALSE;
     }
-    const U32 rgb = GetVideoPaletteLUT()[color & 255];
-    const S32 r = (S32)((rgb >> 16) & 255), g = (S32)((rgb >> 8) & 255), b = (S32)(rgb & 255);
+    /* The scene's own palette: the video palette may still be fading in while
+       decors are captured. */
+    if (GpuObjLampPalette == NULL) {
+        return FALSE;
+    }
+    const U8 *c = GpuObjLampPalette + (color & 255) * 3;
+    const S32 r = c[0], g = c[1], b = c[2];
     const S32 mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
     const S32 mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
     const S32 luma = (r * 77 + g * 150 + b * 29) >> 8;
-    /* Pale and bright: a hero's golden hair (e0ac50) is saturated but not this light. */
-    if (luma < 190 || mx - mn < 60 || r < b) {
+    rgb[0] = r;
+    rgb[1] = g;
+    rgb[2] = b;
+    /* A lamp model's pale, bright, warm glass (its grey metal stays unlit). */
+    return luma >= 150 && mx - mn >= 40 && r >= b;
+}
+
+static void AddGlow(U32 color, const float *pos) {
+    S32 rgb[3];
+    if (!IsGlowColor(color, rgb)) {
         return;
     }
     s_glowSum[0] += pos[0];
     s_glowSum[1] += pos[1];
     s_glowSum[2] += pos[2];
-    s_glowRgb[0] += (float)r / 255.0f;
-    s_glowRgb[1] += (float)g / 255.0f;
-    s_glowRgb[2] += (float)b / 255.0f;
+    s_glowRgb[0] += (float)rgb[0] / 255.0f;
+    s_glowRgb[1] += (float)rgb[1] / 255.0f;
+    s_glowRgb[2] += (float)rgb[2] / 255.0f;
     s_glowCount++;
 }
 
@@ -266,6 +278,10 @@ static void EmitSphere(const U16 *w, S32 pass) {
     memset(&m, 0, sizeof(m));
     m.Mode = (float)(pass ? GPUOBJ_MODE_PASS : GPUOBJ_MODE_DISC);
     m.Color = (float)(w[1] & 0xFF);
+    S32 rgb[3];
+    if (!pass && IsGlowColor(w[1] & 255, rgb)) {
+        m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_EMISSIVE);
+    }
 
     const float sx[4] = {center.Sx - radius, center.Sx + radius, center.Sx + radius, center.Sx - radius};
     const float sy[4] = {center.Sy - radius, center.Sy - radius, center.Sy + radius, center.Sy + radius};
@@ -457,15 +473,25 @@ void AffGpu_Entity(U32 type, void *poly) {
         switch (polyType) {
         case POLY_SOLID:
             m.Mode = (float)GPUOBJ_MODE_SOLID;
+            {
+                S32 rgb[3];
+                if (IsGlowColor(color & 255, rgb)) {
+                    m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_EMISSIVE);
+                }
+            }
             break;
         case POLY_FLAT:
-            m.Mode = (float)GPUOBJ_MODE_SHADED;
-            break;
         case POLY_GOURAUD:
-        case POLY_DITHER:
+        case POLY_DITHER: {
             m.Mode = (float)GPUOBJ_MODE_SHADED;
-            smooth = TRUE;
+            smooth = polyType != POLY_FLAT;
+            /* A lamp model's glass: the ramp's brightest entry tells. */
+            S32 rgb[3];
+            if (IsGlowColor((color & 255) | 15, rgb)) {
+                m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_EMISSIVE);
+            }
             break;
+        }
         default:
             /* Transparent, pattern and table fills keep the software colour. */
             break;
@@ -513,8 +539,8 @@ void AffGpu_Entity(U32 type, void *poly) {
     }
     EmitPolygon(points, nbPoints, faceNormal, smooth, &m, uvs);
 
-    /* A lamp's globe: the models paint it as a solid (unshaded) polygon. */
-    if (m.Mode == (float)GPUOBJ_MODE_SOLID) {
+    /* A lamp model's glowing glass: its centre and colour make the light. */
+    if (((S32)m.Flags & GPUOBJ_FLAG_EMISSIVE) != 0) {
         float c[3] = {0.0f, 0.0f, 0.0f};
         for (S32 i = 0; i < nbPoints; i++) {
             T_GPU_PROJ p;
@@ -523,7 +549,7 @@ void AffGpu_Entity(U32 type, void *poly) {
             c[1] += p.Vy / (float)nbPoints;
             c[2] += p.Vz / (float)nbPoints;
         }
-        AddGlow(color & 255, c);
+        AddGlow(m.Mode == (float)GPUOBJ_MODE_SHADED ? ((color & 255) | 15) : (color & 255), c);
     }
 
     /* A polygon showing the animated fire texture: remember where it is, so the

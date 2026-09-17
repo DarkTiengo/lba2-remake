@@ -81,6 +81,7 @@ const float ISO_DEPTH_RANGE = 524288.0;
 const int FLAG_CHROMAKEY = 1;
 const int FLAG_ISO = 2;
 const int FLAG_BAKED = 4;
+const int FLAG_EMISSIVE = 8;
 
 vec3 Pal(int i) {
     return texelFetch(u_palette, ivec2(i & 255, 0), 0).rgb;
@@ -278,7 +279,7 @@ void main() {
         o_id = vec4(id, 0.0, 0.0, 1.0);
         vec3 surface;
         gl_FragDepth = BrickDepth(surface);
-        o_light = vec4(min(DynamicLight(surface, vec3(0.0, 1.0, 0.0), false), vec3(2.0)) * 0.5, 1.0);
+        o_light = vec4(min(DynamicLight(surface, vec3(0.0, 1.0, 0.0), false), vec3(2.0)) * 0.5, 0.0);
         return;
     }
 
@@ -289,16 +290,25 @@ void main() {
     }
 
     vec3 color;
+    float emissive = 0.0; // written to o_light.a: the composite's glow halo
     vec2 fireLocal;
     float spec = 0.0;
     int base = int(v_mat.x);
 
     if (mode == MODE_SOLID) {
         color = Pal(Logical(base));
+        if ((Flags() & FLAG_EMISSIVE) != 0) {
+            emissive = 1.0;
+        }
     } else if (mode == MODE_SHADED) {
         float shade = ShadeValue(spec);
         color = Ramp(base, shade);
         color += spec * specular * 0.35 * Pal(Logical(base | 15));
+        if ((Flags() & FLAG_EMISSIVE) != 0) {
+            /* A lamp's glass, lit from inside: the ramp's brightest entry. */
+            color = mix(color, Pal(Logical(base | 15)), 0.55) * 1.1;
+            emissive = 0.65;
+        }
     } else if ((mode == MODE_TEX || mode == MODE_TEXSHADED) && fireInfo.x > 0.5 && FireLocal(fireLocal)) {
         /* Animated fire texture: flames drawn here, glowing, not shaded. */
         vec4 fire = ProceduralFire(fireLocal);
@@ -306,6 +316,7 @@ void main() {
             discard;
         }
         color = fire.rgb * fire.a;
+        emissive = fire.a;
     } else if (mode == MODE_TEX) {
         color = Textured(0.0, false).rgb;
     } else if (mode == MODE_TEXSHADED) {
@@ -343,10 +354,20 @@ void main() {
         o_id = vec4(id, 0.0, 0.0, 1.0);
         return;
     } else {
-        if (dot(v_uv.zw, v_uv.zw) > 1.0) {
+        float r2 = dot(v_uv.zw, v_uv.zw);
+        if (r2 > 1.0) {
             discard;
         }
         color = Pal(Logical(base));
+        if ((Flags() & FLAG_EMISSIVE) != 0) {
+            emissive = 1.0;
+        }
+    }
+
+    if (emissive > 0.0 && (Flags() & FLAG_EMISSIVE) != 0) {
+        /* A lit globe: a white-hot core fading to the glass colour at the rim. */
+        float centre = mode == MODE_DISC ? 1.0 - dot(v_uv.zw, v_uv.zw) : 0.6;
+        color = mix(color * 1.25, vec3(1.0, 0.98, 0.9), centre * 0.7);
     }
 
     if (fogEnd > fogStart) {
@@ -356,6 +377,6 @@ void main() {
 
     o_color = vec4(clamp(color, 0.0, 1.0), 1.0);
     bool baked = (Flags() & FLAG_BAKED) != 0;
-    o_light = vec4(min(DynamicLight(v_vpos.xyz, v_normal.xyz, !baked), vec3(2.0)) * 0.5, 1.0);
+    o_light = vec4(min(DynamicLight(v_vpos.xyz, v_normal.xyz, !baked), vec3(2.0)) * 0.5, clamp(emissive, 0.0, 1.0));
     o_id = vec4(id, 0.0, 0.0, 1.0);
 }

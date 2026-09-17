@@ -212,11 +212,13 @@ static void TargetSize(U32 w, U32 h, U32 *outW, U32 *outH) {
 /* Composite switches: the player's GPU effects can change at any present. */
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[4];
+    float params[8];
+    SDL_zeroa(params);
     params[0] = (debug != NULL) ? (float)SDL_atoi(debug) : 0.0f;
     params[1] = s_supersample ? 1.0f : 0.0f;
     params[2] = (s_upscale && GpuObjPixelFilter) ? 1.0f : 0.0f;
     params[3] = (s_upscale && GpuObjDeband) ? 1.0f : 0.0f;
+    params[4] = (GpuObjFire || GpuObjGlow) ? 1.0f : 0.0f;
     SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params));
 }
 
