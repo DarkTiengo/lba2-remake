@@ -105,6 +105,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_UI_SCALE 2124
 #define MENU_ID_DISPLAY_MENU_STYLE 2125
 #define MENU_ID_GPU_FIRE 2126
+#define MENU_ID_GPU_LAMPS 2127
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -178,7 +179,7 @@ S32 MenuStyle = MENU_STYLE_AUTO;
 // on: one selector row per effect.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    7,   // nb entries
+    8,   // nb entries
     260, // y center
     0,   // .dia num
 
@@ -188,6 +189,8 @@ U16 GpuEffectsMenu[] = {
     MENU_ID_GPU_UI_SCALE,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_FIRE,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_LAMPS,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_LIGHTS,
     MENU_TYPE_DISPLAY_SELECTOR,
@@ -508,6 +511,10 @@ static void Display_CycleOption(S32 id, S32 dir) {
         GpuObjFire ^= 1;
         break;
 
+    case MENU_ID_GPU_LAMPS:
+        GpuObjGlow ^= 1;
+        break;
+
     case MENU_ID_GPU_UI_SCALE:
         /* Takes effect when the page is left (Display_ApplyRenderSize): the
            switch rebuilds every frame buffer. */
@@ -661,6 +668,11 @@ static void BuildCustomMenuText(S32 num, char *string) {
     case MENU_ID_GPU_SPECULAR:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_SPECULAR),
                        GetLocalizedMenuLabel(GpuObjSpecular ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_LAMPS:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_LAMPS),
+                       GetLocalizedMenuLabel(GpuObjGlow ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
         break;
 
     case MENU_ID_GPU_FIRE:
@@ -4067,6 +4079,7 @@ static S32 GereGpuEffectsMenu(void) {
 
         case MENU_ID_GPU_UI_SCALE:
         case MENU_ID_GPU_FIRE:
+        case MENU_ID_GPU_LAMPS:
         case MENU_ID_GPU_LIGHTS:
         case MENU_ID_GPU_PIXEL_FILTER:
         case MENU_ID_GPU_DEBAND:

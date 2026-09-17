@@ -74,6 +74,9 @@ typedef struct {
     S32 FogColor; ///< palette index the fog fades to
     S32 HasFire;  ///< some of its polygons show an animated fire texture
     float FirePos[3]; ///< where they are, in the draw's scene space
+    S32 HasGlow;      ///< a lamp's bright globe: 1 in an isometric room, 2 in a perspective scene
+    float GlowPos[3]; ///< where they are, in the draw's scene space
+    float GlowColor[3]; ///< their colour, 0..1
     U8 Logical[256];
 } T_GPUOBJ_DRAW;
 
@@ -102,6 +105,7 @@ extern S32 GpuObjPixelFilter; ///< xBR pixel-art upscaler on software pixels (gf
 extern S32 GpuObjDeband;      ///< in-between colours on the palette's ramps (gfx_deband)
 extern S32 GpuObjSpecular;    ///< specular highlights on models (gfx_specular)
 extern S32 GpuObjUiScale;     ///< 2D drawn at its classic size and upscaled (gfx_uiscale)
+extern S32 GpuObjGlow;        ///< lamp globes on 3D models cast light (gfx_lamps)
 extern S32 GpuObjFire;        ///< procedural flames and firelight on fire textures (gfx_fire)
 
 /* The animated fire regions of the object texture page (ANIMTEX.CPP): polygons

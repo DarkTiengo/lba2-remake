@@ -36,6 +36,13 @@ int g_failures = 0;
 
 // The pol_work fillers have C linkage (POLY.H wraps them in extern "C").
 extern "C" {
+// AFF_GPU.CPP reads the palette to spot lamp globes; the geometry tests never
+// enable the GPU layer, so a black palette is enough.
+const U32 *GetVideoPaletteLUT() {
+    static U32 palette[256];
+    return palette;
+}
+
 void Fill_Sphere(S32 type, S32 col, S32 cx, S32 cy, S32 rayon, S32 /*z*/) {
     g_spy.sphere_calls++;
     g_spy.sphere_type = type;

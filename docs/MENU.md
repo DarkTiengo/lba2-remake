@@ -63,6 +63,7 @@ Main Menu
 │   │   ├── Renderer: < GPU/Classic >  [selector]
 │   │   ├── GPU effects [only while Renderer is GPU; the row appears/disappears as it is switched]
 │   │   │   ├── 2D size: < Classic, upscaled/Native > [selector, gfx_uiscale; applied when the page is left]
+│   │   │   ├── Lamps on models: < On/Off > [selector, gfx_lamps]
 │   │   │   ├── Modern fire: < On/Off > [selector, gfx_fire]
 │   │   │   ├── Dynamic lights: < On/Off > [selector, gfx_lights]
 │   │   │   ├── Pixel art filter: < On/Off > [selector, gfx_pixelfilter]

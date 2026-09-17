@@ -1,3 +1,4 @@
+#include <SVGA/VIDEO.H>
 #include <OBJECT/AFF_GPU.H>
 
 #include <OBJECT/AFF_OBJ.H>
@@ -67,6 +68,11 @@ static T_GPUOBJ_DRAW *s_draw = NULL;
 /* Fire-textured polygons of the body being captured: their centres summed. */
 static float s_fireSum[3];
 static S32 s_fireCount = 0;
+
+/* Lamp globes of the body being captured: bright, coloured, unshaded solid polygons. */
+static float s_glowSum[3];
+static float s_glowRgb[3];
+static S32 s_glowCount = 0;
 
 // --- Private functions -------------------------------------------------------
 static void RotateNormals(const TYPE_MAT *mat, const TYPE_VT16 *src, S32 n, S32 dst, float lightLen) {
@@ -214,9 +220,37 @@ static void EmitQuad(const float sx[4], const float sy[4], const T_GPU_PROJ *dep
     }
 }
 
+/* A bright, coloured palette entry on an unshaded surface is a lamp's globe or
+   a lit window; dark or grey ones are ordinary paint. */
+static void AddGlow(U32 color, const float *pos) {
+    if (!GpuObjGlow) {
+        return;
+    }
+    const U32 rgb = GetVideoPaletteLUT()[color & 255];
+    const S32 r = (S32)((rgb >> 16) & 255), g = (S32)((rgb >> 8) & 255), b = (S32)(rgb & 255);
+    const S32 mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    const S32 mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    const S32 luma = (r * 77 + g * 150 + b * 29) >> 8;
+    /* Pale and bright: a hero's golden hair (e0ac50) is saturated but not this light. */
+    if (luma < 190 || mx - mn < 60 || r < b) {
+        return;
+    }
+    s_glowSum[0] += pos[0];
+    s_glowSum[1] += pos[1];
+    s_glowSum[2] += pos[2];
+    s_glowRgb[0] += (float)r / 255.0f;
+    s_glowRgb[1] += (float)g / 255.0f;
+    s_glowRgb[2] += (float)b / 255.0f;
+    s_glowCount++;
+}
+
 static void EmitSphere(const U16 *w, S32 pass) {
     T_GPU_PROJ center;
     Project(w[2], &center);
+    if (!pass) {
+        const float pos[3] = {center.Vx, center.Vy, center.Vz};
+        AddGlow(w[1] & 255, pos);
+    }
 
     float radius;
     if (TypeProj == TYPE_3D) {
@@ -339,6 +373,9 @@ S32 AffGpu_Begin(void) {
     s_pending = FALSE;
     s_fireCount = 0;
     s_fireSum[0] = s_fireSum[1] = s_fireSum[2] = 0.0f;
+    s_glowCount = 0;
+    s_glowSum[0] = s_glowSum[1] = s_glowSum[2] = 0.0f;
+    s_glowRgb[0] = s_glowRgb[1] = s_glowRgb[2] = 0.0f;
 
     s_light[0] = (float)CameraXLight;
     s_light[1] = (float)CameraYLight;
@@ -475,6 +512,19 @@ void AffGpu_Entity(U32 type, void *poly) {
         }
     }
     EmitPolygon(points, nbPoints, faceNormal, smooth, &m, uvs);
+
+    /* A lamp's globe: the models paint it as a solid (unshaded) polygon. */
+    if (m.Mode == (float)GPUOBJ_MODE_SOLID) {
+        float c[3] = {0.0f, 0.0f, 0.0f};
+        for (S32 i = 0; i < nbPoints; i++) {
+            T_GPU_PROJ p;
+            Project(points[i], &p);
+            c[0] += p.Vx / (float)nbPoints;
+            c[1] += p.Vy / (float)nbPoints;
+            c[2] += p.Vz / (float)nbPoints;
+        }
+        AddGlow(color & 255, c);
+    }
 
     /* A polygon showing the animated fire texture: remember where it is, so the
        body casts firelight. */
@@ -615,6 +665,13 @@ void AffGpu_End(void) {
         return;
     }
     s_capturing = FALSE;
+    if (s_glowCount >= 1 && s_draw != NULL) {
+        s_draw->HasGlow = TypeProj == TYPE_3D ? 2 : 1;
+        for (S32 i = 0; i < 3; i++) {
+            s_draw->GlowPos[i] = s_glowSum[i] / (float)s_glowCount;
+            s_draw->GlowColor[i] = s_glowRgb[i] / (float)s_glowCount;
+        }
+    }
     if (s_fireCount > 0 && s_draw != NULL) {
         s_draw->HasFire = TRUE;
         for (S32 i = 0; i < 3; i++) {
@@ -623,6 +680,9 @@ void AffGpu_End(void) {
     }
     s_fireCount = 0;
     s_fireSum[0] = s_fireSum[1] = s_fireSum[2] = 0.0f;
+    s_glowCount = 0;
+    s_glowSum[0] = s_glowSum[1] = s_glowSum[2] = 0.0f;
+    s_glowRgb[0] = s_glowRgb[1] = s_glowRgb[2] = 0.0f;
     s_draw = NULL;
     GpuObj_EndDraw();
 }

@@ -354,4 +354,11 @@ const struct MenuLabelRow LocalizedMenuLabels[MENU_LABEL_COUNT] = {
       "Fuego moderno",
       "Fuoco moderno",
       "Fogo moderno"}},
+    {MENU_LABEL_OPT_LAMPS,
+     {"Lamps on models",
+      "Lampes des objets",
+      "Lampen an Objekten",
+      "Lámparas en objetos",
+      "Lampade sugli oggetti",
+      "Lâmpadas nos objetos"}},
 };

@@ -26,6 +26,7 @@ S32 GpuObjDeband = TRUE;
 S32 GpuObjSpecular = TRUE;
 S32 GpuObjUiScale = TRUE;
 S32 GpuObjFire = TRUE;
+S32 GpuObjGlow = TRUE;
 
 const U8 *GpuObjFirePage = NULL;
 T_GPUOBJ_RECT GpuObjFireRects[GPUOBJ_MAX_FIRES];

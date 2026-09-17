@@ -130,6 +130,8 @@ static const T_SETTING BootSettings[] = {
      MENU_STYLE_AUTO, NULL, NULL, NULL, NULL, "Menu look: 0 classic, 1 modern cards, 2 modern with the GPU renderer"},
     {"GpuUiScale", NULL, "gfx_uiscale", &GpuObjUiScale, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: draw 2D (menus, text, sprites, rooms) at the classic size, upscaled"},
+    {"GpuLamps", NULL, "gfx_lamps", &GpuObjGlow, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
+     "GPU renderer: lamp globes on 3D models (street lamps, lanterns) cast light"},
     {"GpuFire", NULL, "gfx_fire", &GpuObjFire, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: procedural flames and flickering firelight on fire textures"},
     {"GpuSpecular", NULL, "gfx_specular", &GpuObjSpecular, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,

@@ -685,6 +685,42 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             nbLights++;
         }
     }
+    /* Lamp globes on models: a steady light in the globe's colour. */
+    if (GpuObjLightsEnabled && GpuObjGlow) {
+        const U32 lampsFrom = nbLights;
+        for (U32 i = 0; i < count && nbLights < GPUOBJ_MAX_LIGHTS; i++) {
+            const T_GPUOBJ_DRAW *draw = draws[i];
+            if (!draw->HasGlow) {
+                continue;
+            }
+            S32 merged = FALSE;
+            for (U32 l = lampsFrom; l < nbLights; l++) {
+                const float dx = lights[l * 4] - draw->GlowPos[0];
+                const float dy = lights[l * 4 + 1] - draw->GlowPos[1];
+                const float dz = lights[l * 4 + 2] - draw->GlowPos[2];
+                if (dx * dx + dy * dy + dz * dz < 600.0f * 600.0f) {
+                    merged = TRUE;
+                    break;
+                }
+            }
+            if (merged) {
+                continue;
+            }
+            float *pos = lights + nbLights * 4;
+            pos[0] = draw->GlowPos[0];
+            pos[1] = draw->GlowPos[1];
+            pos[2] = draw->GlowPos[2];
+            /* Exterior worlds are drawn at a far larger scale than rooms. */
+            pos[3] = draw->HasGlow == 2 ? 9000.0f : 2400.0f;
+            float *colour = lights + GPUOBJ_MAX_LIGHTS * 4 + nbLights * 4;
+            /* Towards white: the light, not the glass's tint. */
+            colour[0] = 0.4f + 0.6f * draw->GlowColor[0];
+            colour[1] = 0.4f + 0.6f * draw->GlowColor[1];
+            colour[2] = 0.4f + 0.6f * draw->GlowColor[2];
+            colour[3] = 1.1f;
+            nbLights++;
+        }
+    }
     lights[GPUOBJ_MAX_LIGHTS * 8] = (float)nbLights;
     SDL_PushGPUFragmentUniformData(cmd, 1, lights, sizeof(lights));
 
