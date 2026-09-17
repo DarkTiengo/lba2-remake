@@ -12,6 +12,7 @@
 /*-------------------------------------------------------------------------*/
 
 #include "C_EXTERN.H"
+#include "GAMEMENU.H" /* Menu_IsModern */
 #include "IMAGE_LOAD.H"
 
 #include "CONSOLE/CONSOLE.H"
@@ -26,8 +27,10 @@
 #include <SYSTEM/KEYBOARD_KEYS.H>
 #include <SYSTEM/LOG.H>
 #include <SYSTEM/STRING.H>
+#include <SYSTEM/UIOVERLAY.H>
 
 #include <dirent.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -1297,6 +1300,118 @@ void GetNextWord(char *ptchaine, char *mot) {
     SizeWord = SizeFont(mot);
 }
 /*-------------------------------------------------------------------------*/
+// --- Modern dialogue box ------------------------------------------------------
+// With the modern menu style the box is a translucent card of the UI overlay and
+// the text is drawn there in Nunito. The engine still lays out lines and pages
+// and types them out; each character it pushes lands in the line it belongs to.
+
+#define DIAL_MODERN_LINES 8
+
+typedef struct {
+    S32 Y;
+    S32 X;
+    S32 Len;
+    char Text[256];
+} T_DIAL_LINE;
+
+static S32 s_dialModern = FALSE;
+static T_DIAL_LINE s_dialLines[DIAL_MODERN_LINES];
+static S32 s_dialNbLines = 0;
+static S32 s_dialArrow = FALSE;
+
+static void DialModern_ResetText(void) {
+    s_dialNbLines = 0;
+    s_dialArrow = FALSE;
+}
+
+static void DialModern_Char(S32 x, S32 y, char c) {
+    T_DIAL_LINE *line = NULL;
+    for (S32 i = 0; i < s_dialNbLines; i++) {
+        if (s_dialLines[i].Y == y) {
+            line = &s_dialLines[i];
+        }
+    }
+    if (line == NULL) {
+        if (s_dialNbLines >= DIAL_MODERN_LINES) {
+            return;
+        }
+        line = &s_dialLines[s_dialNbLines++];
+        line->Y = y;
+        line->X = x;
+        line->Len = 0;
+    }
+    if (line->Len < (S32)sizeof(line->Text) - 1) {
+        line->Text[line->Len++] = c == CODE_HARD_SPACE ? ' ' : c;
+        line->Text[line->Len] = 0;
+    }
+}
+
+static U32 DialModern_TextColor(void) {
+    /* The speaker's colour, the brightest step of its ramp, lifted toward white. */
+    const U8 *rgb = PtrPal + (MaxDegrade & 0xFF) * 3;
+    U32 out = 0xFF000000u;
+    for (S32 i = 0; i < 3; i++) {
+        const S32 v = rgb[i] + (255 - rgb[i]) * 45 / 100;
+        out |= (U32)v << (16 - i * 8);
+    }
+    return out;
+}
+
+static void DialModern_Publish(void) {
+    if (!s_dialModern) {
+        return;
+    }
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_DIALOG);
+
+    const float x0 = (float)Dial_X0, y0 = (float)Dial_Y0, x1 = (float)Dial_X1, y1 = (float)Dial_Y1;
+    const U32 accent = DialModern_TextColor();
+    T_UIOVERLAY_CARD panel;
+    memset(&panel, 0, sizeof(panel));
+    panel.Radius = 16.0f;
+    panel.FillTop = 0xD8182236u;
+    panel.FillBottom = 0xE80C1220u;
+    panel.Border = 0x70A8D0FFu;
+    panel.BorderWidth = 1.5f;
+    panel.Shadow = 0xA0000000u;
+    panel.ShadowY = 6.0f;
+    panel.ShadowBlur = 18.0f;
+    panel.Glow = 0x285AB4FFu;
+    panel.GlowSize = 10.0f;
+    UiOverlay_Card(x0, y0, x1, y1, &panel);
+
+    /* A bar in the speaker's colour down the left edge. */
+    T_UIOVERLAY_CARD bar;
+    memset(&bar, 0, sizeof(bar));
+    bar.Radius = 2.0f;
+    bar.FillTop = (accent & 0x00FFFFFFu) | 0xE0000000u;
+    bar.FillBottom = (accent & 0x00FFFFFFu) | 0x60000000u;
+    UiOverlay_Card(x0 + 7.0f, y0 + 14.0f, x0 + 11.0f, y1 - 14.0f, &bar);
+
+    for (S32 i = 0; i < s_dialNbLines; i++) {
+        const T_DIAL_LINE *line = &s_dialLines[i];
+        /* Engine lines hold a glyph cell's top; the text centres its capitals. */
+        const float ty = (float)line->Y + 17.0f;
+        const float tx = (float)line->X + 10.0f;
+        UiOverlay_Text(tx + 1.0f, ty + 2.0f, line->Text, 27.0f, 0x90000000u, UIOVERLAY_ALIGN_LEFT, TRUE, x1 - tx - 20.0f);
+        UiOverlay_Text(tx, ty, line->Text, 27.0f, accent, UIOVERLAY_ALIGN_LEFT, TRUE, x1 - tx - 20.0f);
+    }
+
+    if (s_dialArrow) {
+        const float bob = 3.0f * (float)sin((double)TimerRefHR / 1000.0 * 6.0);
+        UiOverlay_Chevron(x1 - 26.0f, y1 - 18.0f + bob, 14.0f, 2, 0xF0BFE3FFu);
+    }
+}
+
+static void DialModern_Close(void) {
+    if (s_dialModern) {
+        UiOverlay_ClearLayer(UIOVERLAY_LAYER_DIALOG);
+        BoxStaticAdd(0, 0, 1, 1);
+    }
+    s_dialModern = FALSE;
+    DialModern_ResetText();
+}
+
+/*-------------------------------------------------------------------------*/
 static inline S32 PushCar(S32 x, S32 y, char c) {
     if (NbCar >= MAX_STACK) {
         return FALSE;
@@ -1306,6 +1421,10 @@ static inline S32 PushCar(S32 x, S32 y, char c) {
     StackCar[NbCar].x = x;
     StackCar[NbCar].y = y;
     NbCar++;
+
+    if (s_dialModern) {
+        DialModern_Char(x, y, c);
+    }
 
     return TRUE;
 }
@@ -1323,6 +1442,12 @@ static inline void FlushCar() {
 /*-------------------------------------------------------------------------*/
 void AffOneCar(S32 x, S32 y, char c, S32 coul) {
     S32 x0, y0, x1, y1;
+
+    if (s_dialModern) {
+        /* The overlay draws the text; keep the frame presenting. */
+        BoxStaticAdd(0, 0, 1, 1);
+        return;
+    }
 
     if ((c != 32) AND(c != CODE_HARD_SPACE)) {
 #ifdef LBA_EDITOR
@@ -1373,6 +1498,7 @@ void AffAllCar() {
     }
 
     FlushCar();
+    DialModern_Publish();
 }
 /*-------------------------------------------------------------------------*/
 void TestCoulDial(S32 coul) {
@@ -1562,7 +1688,15 @@ S32 GetText(S32 text) {
 }
 /*-------------------------------------------------------------------------*/
 
-#define AffFleche() DrawAngles(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1, ARROW_ID /*|A_FLIP*/);
+void AffFleche(void) {
+    if (s_dialModern) {
+        s_dialArrow = TRUE;
+        DialModern_Publish();
+        BoxStaticAdd(0, 0, 1, 1);
+        return;
+    }
+    DrawAngles(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1, ARROW_ID /*|A_FLIP*/);
+}
 
 /*-------------------------------------------------------------------------*/
 //----- : incrust vignette Radio
@@ -1610,8 +1744,12 @@ void TestAndDrawRadio(void) {
 /*-------------------------------------------------------------------------*/
 //      Prepare le Screen avec boite message shade et cadre et bulle
 void NewInitDialWindow() {
+    /* Modern style: the box is an overlay card, the frame keeps the scene. */
+    s_dialModern = Menu_IsModern() && FlagMessageShade;
+    DialModern_ResetText();
+
     //----- Cadre et Shade
-    if (FlagMessageShade) {
+    if (FlagMessageShade && !s_dialModern) {
         BackupAngles(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1);
         ShadeBoxBlk(Dial_X0 + 1, Dial_Y0 + 1, Dial_X1 - 1, Dial_Y1 - 1, 8);
     }
@@ -1623,10 +1761,11 @@ void NewInitDialWindow() {
     //----- incrust vignette Radio
     TestAndDrawRadio();
 
-    if (FlagMessageShade) {
+    if (FlagMessageShade && !s_dialModern) {
         DrawCadre(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1, ALL_ANGLES);
         RestoreAngles(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1);
     }
+    DialModern_Publish();
 
     //----- Debug for Editor
     //----- Save Result in Screen ( J'en prends plus car apres, le BoxStaticAdd
@@ -1659,10 +1798,14 @@ void NextDialWindow() {
 
     //----- Reset Char Display
     NbCar = 0;
+
+    DialModern_ResetText();
+    DialModern_Publish();
 }
 /*-------------------------------------------------------------------------*/
 //      Utilise pour HoloGlobe et HoloPlan ( sans AffScene ni clip box )
 void HoloInitDialWindow() {
+    DialModern_Close();
     HoloWinDial();
 
     BackupAngles(Dial_X0, Dial_Y0, Dial_X1, Dial_Y1);
@@ -2276,6 +2419,7 @@ void Dial(S32 text, S32 drawscene) {
             }
     }
 
+    DialModern_Close();
     RestoreClip();
 
     ClearWhoSpeak();
@@ -2404,6 +2548,7 @@ S32 MyDial(S32 nummess) // attends une touche si autre page sinon continue
 
     StopSpeak(); // Security
     CloseDial();
+    DialModern_Close();
 
     InitWaitNoKey();
     InitWaitNoInput(I_FIRE | I_ACTION | I_MENUS);

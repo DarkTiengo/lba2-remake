@@ -1400,7 +1400,7 @@ static void SavePage_Publish(void) {
     const float step = SDL_min(dt * 40.0f, 1.0f);
     const float pulse = 0.5f + 0.5f * (float)sin((double)now / 1000.0 * 3.0);
 
-    UiOverlay_Clear();
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_MENU);
     SavePage_Veil();
     if (s_saveTitle[0]) {
         const float ty = (float)(25 + UI_VCENTER_OFS);
@@ -1845,7 +1845,7 @@ S32 ChoosePlayerName(S32 mess, S32 flagflip, S32 flagnew) {
     const S32 ret = ChoosePlayerNameLoop(mess, flagflip, flagnew);
     s_savePage = FALSE;
     SavePage_Reset();
-    UiOverlay_Clear();
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_MENU);
     return ret;
 }
 
@@ -2998,7 +2998,7 @@ static void DrawGameMenuModern(U16 *ptrmenu) {
     const float step = SDL_min(dt * 40.0f, 1.0f);
     const float pulse = 0.5f + 0.5f * (float)sin((double)now / 1000.0 * 3.0);
 
-    UiOverlay_Clear();
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_MENU);
     if (s_saveConfirm) {
         SavePage_ConfirmDecor();
     }
@@ -3313,7 +3313,7 @@ static S32 DoGameMenuLoop(U16 *ptrmenu);
 S32 DoGameMenu(U16 *ptrmenu) {
     const S32 ret = DoGameMenuLoop(ptrmenu);
     /* The page is gone: its cards must not outlive it. */
-    UiOverlay_Clear();
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_MENU);
     return ret;
 }
 

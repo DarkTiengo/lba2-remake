@@ -1,4 +1,5 @@
 #include "C_EXTERN.H"
+#include "GAMEMENU.H" /* Menu_IsModern */
 #include "CONSOLE/CONSOLE.H"
 #include "CONTROL.H"
 #include "DIRECTORIES.H"
@@ -11,6 +12,8 @@
 #include <SVGA/VIDEO.H>
 #include <SYSTEM/KEYBOARD.H>
 #include <SYSTEM/KEYBOARD_KEYS.H>
+#include <SYSTEM/UIOVERLAY.H>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 #include "AMBIANCE.H"
@@ -637,6 +640,162 @@ void RestoreBackground() {
 /*──────────────────────────────────────────────────────────────────────────*/
 S32 XObj0, YObj0, XObj1, YObj1, LFactor, MemoLFactor;
 /*──────────────────────────────────────────────────────────────────────────*/
+// --- Modern inventory ---------------------------------------------------------
+// With the modern menu style the panel, the slots and the object name are overlay
+// cards. The slots stay open in the middle: the 3D objects are drawn in the frame
+// beneath, over the shaded backdrop the classic look uses.
+
+typedef struct {
+    S32 X0, Y0, X1, Y1;
+    S32 Valid;
+    S32 Selected;
+    S32 Weapon;
+    S32 HasCount;
+    char Count[12];
+    S32 HasValue;
+    S32 Value;
+} T_INV_SLOT;
+
+static S32 s_invModern = FALSE;
+static T_INV_SLOT s_invSlots[MAX_BOX_INVENTORY];
+static char s_invName[256];
+static S32 s_invPanelX1 = 0, s_invPanelY1 = 0; ///< the panel's corner while it opens
+
+static void InvModern_Publish(void) {
+    if (!s_invModern) {
+        return;
+    }
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+
+    if (s_invPanelX1 == INV_END_X) {
+        /* Darken the panel between the slots only: the slots hold 3D objects the
+           overlay must not cover. */
+        const U32 shade = 0x88060A14u;
+        T_UIOVERLAY_CARD band;
+        memset(&band, 0, sizeof(band));
+        band.FillTop = shade;
+        band.FillBottom = shade;
+        const float left = (float)INV_START_X + 4.0f, right = (float)INV_END_X - 4.0f;
+        for (S32 row = 0; row <= INV_NBOBJ_Y; row++) {
+            const float top = row == 0 ? (float)INV_START_Y + 4.0f
+                                       : (float)(INV_START_Y + INV_INTER_Y + (INV_SIZEO_Y + INV_INTER_Y) * row - INV_INTER_Y);
+            const float bottom = row == INV_NBOBJ_Y ? (float)INV_END_Y - 4.0f
+                                                    : (float)(INV_START_Y + INV_INTER_Y + (INV_SIZEO_Y + INV_INTER_Y) * row);
+            if (bottom > top) {
+                UiOverlay_Card(left, top, right, bottom, &band);
+            }
+            if (row == INV_NBOBJ_Y) {
+                break;
+            }
+            const float y0 = (float)(INV_START_Y + INV_INTER_Y + (INV_SIZEO_Y + INV_INTER_Y) * row);
+            const float y1 = y0 + (float)INV_SIZEO_Y;
+            for (S32 col = 0; col <= INV_NBOBJ_X; col++) {
+                const float x0 = col == 0 ? left : (float)(INV_START_X + INV_INTER_X + (INV_SIZEO_X + INV_INTER_X) * col - INV_INTER_X);
+                const float x1 = col == INV_NBOBJ_X ? right : (float)(INV_START_X + INV_INTER_X + (INV_SIZEO_X + INV_INTER_X) * col);
+                if (x1 > x0) {
+                    UiOverlay_Card(x0, y0, x1, y1, &band);
+                }
+            }
+        }
+    }
+
+    T_UIOVERLAY_CARD panel;
+    memset(&panel, 0, sizeof(panel));
+    panel.Radius = 12.0f;
+    panel.FillTop = 0x00000000u;
+    panel.FillBottom = 0x00000000u;
+    panel.Border = 0x70A8D0FFu;
+    panel.BorderWidth = 1.5f;
+    panel.Glow = 0x305AB4FFu;
+    panel.GlowSize = 12.0f;
+    UiOverlay_Card((float)INV_START_X, (float)INV_START_Y, (float)s_invPanelX1, (float)s_invPanelY1, &panel);
+    if (s_invPanelX1 != INV_END_X) {
+        return; /* still opening */
+    }
+    {
+        T_UIOVERLAY_CARD name = panel;
+        name.FillTop = 0xC0182236u;
+        name.FillBottom = 0xD00C1220u;
+        name.Shadow = 0x80000000u;
+        name.ShadowY = 4.0f;
+        name.ShadowBlur = 12.0f;
+        UiOverlay_Card((float)INV_NAME_X0, (float)INV_NAME_Y0, (float)INV_NAME_X1, (float)INV_NAME_Y1, &name);
+    }
+
+    const float pulse = 0.5f + 0.5f * (float)sin((double)TimerRefHR / 1000.0 * 3.0);
+    for (S32 n = 0; n < MAX_BOX_INVENTORY; n++) {
+        const T_INV_SLOT *slot = &s_invSlots[n];
+        if (!slot->Valid) {
+            continue;
+        }
+        T_UIOVERLAY_CARD card;
+        memset(&card, 0, sizeof(card));
+        card.Radius = 6.0f;
+        /* Open middle: only a faint sheen at the top, so the object stays clear. */
+        card.FillTop = 0x18FFFFFFu;
+        card.FillBottom = 0x00FFFFFFu;
+        card.Border = 0x34FFFFFFu;
+        card.BorderWidth = 1.0f;
+        if (slot->Weapon) {
+            card.Border = 0xFFFFB44Au;
+            card.BorderWidth = 2.0f;
+            card.Glow = 0x60FF9A2Au;
+            card.GlowSize = 8.0f;
+        }
+        if (slot->Selected) {
+            card.Border = 0xFF86CCFFu;
+            card.BorderWidth = 2.5f;
+            card.Glow = ((U32)(120.0f + 80.0f * pulse) << 24) | 0x5AB4FFu;
+            card.GlowSize = 12.0f;
+            card.FillTop = 0x285AB4FFu;
+        }
+        UiOverlay_Card((float)slot->X0, (float)slot->Y0, (float)slot->X1, (float)slot->Y1, &card);
+
+        if (slot->HasCount) {
+            const float tx = (float)slot->X1 - 8.0f;
+            const float ty = (float)slot->Y1 - 12.0f;
+            UiOverlay_Text(tx + 1.0f, ty + 1.5f, slot->Count, 18.0f, 0xA0000000u, UIOVERLAY_ALIGN_RIGHT, TRUE, 0.0f);
+            UiOverlay_Text(tx, ty, slot->Count, 18.0f, 0xFFFFFFFFu, UIOVERLAY_ALIGN_RIGHT, TRUE, 0.0f);
+        }
+        if (slot->HasValue) {
+            const float bx0 = (float)slot->X0 + 10.0f, bx1 = (float)slot->X1 - 10.0f;
+            const float by = (float)slot->Y1 - 9.0f;
+            T_UIOVERLAY_CARD track;
+            memset(&track, 0, sizeof(track));
+            track.Radius = 3.0f;
+            track.FillTop = 0x80000000u;
+            track.FillBottom = 0x60202020u;
+            UiOverlay_Card(bx0, by - 3.0f, bx1, by + 3.0f, &track);
+            const float v = (float)slot->Value / (float)INV_MAX_VALUE;
+            if (v > 0.0f) {
+                T_UIOVERLAY_CARD fill;
+                memset(&fill, 0, sizeof(fill));
+                fill.Radius = 3.0f;
+                fill.FillTop = 0xFFFF8A6Au;
+                fill.FillBottom = 0xFFD8302Au;
+                UiOverlay_Card(bx0, by - 3.0f, bx0 + (bx1 - bx0) * (v > 1.0f ? 1.0f : v), by + 3.0f, &fill);
+            }
+        }
+    }
+
+    if (s_invName[0]) {
+        const float cx = (float)(INV_NAME_X0 + INV_NAME_X1) * 0.5f;
+        const float cy = (float)(INV_NAME_Y0 + INV_NAME_Y1) * 0.5f;
+        const float maxW = (float)(INV_NAME_X1 - INV_NAME_X0) - 40.0f;
+        UiOverlay_Text(cx + 1.0f, cy + 2.0f, s_invName, 26.0f, 0x90000000u, UIOVERLAY_ALIGN_CENTER, TRUE, maxW);
+        UiOverlay_Text(cx, cy, s_invName, 26.0f, 0xFFFFF0D0u, UIOVERLAY_ALIGN_CENTER, TRUE, maxW);
+    }
+    BoxStaticAdd(0, 0, 1, 1);
+}
+
+static void InvModern_Close(void) {
+    if (s_invModern) {
+        UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+    }
+    s_invModern = FALSE;
+    memset(s_invSlots, 0, sizeof(s_invSlots));
+    s_invName[0] = 0;
+}
 
 U32 DrawOneInventory(S32 numbox) {
     S32 x, y, x0, y0, x1, y1;
@@ -752,6 +911,20 @@ U32 DrawOneInventory(S32 numbox) {
 
     SetClip(x0, y0, x1, y1);
 
+    if (s_invModern) {
+        /* The slot's dark well, as in the classic look; the overlay draws its frame. */
+        DrawCadreBox(x0, y0, x1, y1, 0);
+        T_INV_SLOT *slot = &s_invSlots[numbox];
+        slot->X0 = x0;
+        slot->Y0 = y0;
+        slot->X1 = x1;
+        slot->Y1 = y1;
+        slot->Valid = TRUE;
+        slot->Selected = numbox == InvSelect;
+        slot->Weapon = numinv == Weapon;
+        slot->HasCount = FALSE;
+        slot->HasValue = FALSE;
+    } else
     //	if( !flagshade )
     {
         DrawCadreBox(x0, y0, x1, y1, coul);
@@ -786,9 +959,14 @@ U32 DrawOneInventory(S32 numbox) {
 #else
             strcpy(string, Itoa(ListVarGame[numinv]));
 #endif
-            xt = x1 - SizeFont(string);
+            if (s_invModern) {
+                SDL_strlcpy(s_invSlots[numbox].Count, string, sizeof(s_invSlots[numbox].Count));
+                s_invSlots[numbox].HasCount = TRUE;
+            } else {
+                xt = x1 - SizeFont(string);
 
-            Font(xt, y1 - 31, string);
+                Font(xt, y1 - 31, string);
+            }
             ColorFont(COUL_PERSO * 16 + 12); //	64+12
         }
 
@@ -799,7 +977,12 @@ U32 DrawOneInventory(S32 numbox) {
 */
         if ((TabInv[numinv].FlagInv & FLAG_INV_VALUE)
                 AND(FlagZoomed < 4)) {
-            AffValueBar(x0, y0, x1, y1, TabInv[numinv].PtMagie);
+            if (s_invModern) {
+                s_invSlots[numbox].HasValue = TRUE;
+                s_invSlots[numbox].Value = TabInv[numinv].PtMagie;
+            } else {
+                AffValueBar(x0, y0, x1, y1, TabInv[numinv].PtMagie);
+            }
         }
     }
 
@@ -816,26 +999,36 @@ U32 DrawOneInventory(S32 numbox) {
 
     flags |= BACKUP_ANGLES;
 
-    DrawCadre(x0, y0, x1, y1, flags);
-
-    if ((numinv == Weapon) AND(FlagZoomed < 2)) {
-        SetClip(x0 - 3, y0 - 3, x1 + 3, y1 + 3);
-
-        DrawCadre(x0 - 0, y0 - 1, x1 + 0, y1 + 1, ALL_ANGLES | CADRE_RED);
-        DrawCadre(x0 - 1, y0 - 1, x1 + 1, y1 + 1, ALL_ANGLES | CADRE_RED);
-        DrawCadre(x0 - 2, y0 - 1, x1 + 2, y1 + 1, ALL_ANGLES | CADRE_RED);
-        DrawCadre(x0 - 2, y0 - 2, x1 + 2, y1 + 2, ALL_ANGLES | CADRE_RED);
-        DrawCadre(x0 - 3, y0 - 2, x1 + 3, y1 + 2, ALL_ANGLES | CADRE_RED);
-        DrawCadre(x0 - 3, y0 - 3, x1 + 3, y1 + 3, ALL_ANGLES | CADRE_RED);
-
+    if (s_invModern) {
+        if ((numinv == Weapon) AND(FlagZoomed < 2)) {
+            x0 -= 3;
+            y0 -= 3;
+            x1 += 3;
+            y1 += 3;
+        }
+        InvModern_Publish();
+    } else {
         DrawCadre(x0, y0, x1, y1, flags);
 
-        x0 -= 3;
-        y0 -= 3;
-        x1 += 3;
-        y1 += 3;
-    } else
-        DrawCadre(x0, y0, x1, y1, flags);
+        if ((numinv == Weapon) AND(FlagZoomed < 2)) {
+            SetClip(x0 - 3, y0 - 3, x1 + 3, y1 + 3);
+
+            DrawCadre(x0 - 0, y0 - 1, x1 + 0, y1 + 1, ALL_ANGLES | CADRE_RED);
+            DrawCadre(x0 - 1, y0 - 1, x1 + 1, y1 + 1, ALL_ANGLES | CADRE_RED);
+            DrawCadre(x0 - 2, y0 - 1, x1 + 2, y1 + 1, ALL_ANGLES | CADRE_RED);
+            DrawCadre(x0 - 2, y0 - 2, x1 + 2, y1 + 2, ALL_ANGLES | CADRE_RED);
+            DrawCadre(x0 - 3, y0 - 2, x1 + 3, y1 + 2, ALL_ANGLES | CADRE_RED);
+            DrawCadre(x0 - 3, y0 - 3, x1 + 3, y1 + 3, ALL_ANGLES | CADRE_RED);
+
+            DrawCadre(x0, y0, x1, y1, flags);
+
+            x0 -= 3;
+            y0 -= 3;
+            x1 += 3;
+            y1 += 3;
+        } else
+            DrawCadre(x0, y0, x1, y1, flags);
+    }
 
     if (FlagZoomed >= 2) {
         if (x0 < OldX0)
@@ -899,6 +1092,10 @@ void OpenInventory() {
     ManageTime();
     savetimer = TimerRefHR;
 
+    s_invModern = Menu_IsModern();
+    memset(s_invSlots, 0, sizeof(s_invSlots));
+    s_invName[0] = 0;
+
     while (x1 != INV_END_X) // Boucle Optimisable Si Necessaire...
     {
         ManageTime();
@@ -907,7 +1104,12 @@ void OpenInventory() {
         x1 = BoundRegleTrois(INV_START_X + 16, INV_END_X, 15 * 20, step);
         y1 = BoundRegleTrois(INV_START_Y + 16, INV_END_Y, 15 * 20, step);
 
-        DrawCadre(x0, y0, x1, y1, ALL_ANGLES | BACKUP_ANGLES);
+        if (s_invModern) {
+            s_invPanelX1 = x1;
+            s_invPanelY1 = y1;
+            InvModern_Publish();
+        } else
+            DrawCadre(x0, y0, x1, y1, ALL_ANGLES | BACKUP_ANGLES);
 
         //------------- Display new position on Phys
         BoxMovingAdd(x0, y0, x1, y0 + 6);
@@ -923,13 +1125,17 @@ void OpenInventory() {
     //	Shade All Inventory
     BackupAngles(INV_START_X, INV_START_Y, INV_END_X, INV_END_Y);
     ShadeBoxBlk(INV_START_X + 1, INV_START_Y + 1, INV_END_X - 1, INV_END_Y - 1, SHADE_INVENT_LVL);
-    DrawCadre(INV_START_X, INV_START_Y, INV_END_X, INV_END_Y, ALL_ANGLES);
+    if (!s_invModern)
+        DrawCadre(INV_START_X, INV_START_Y, INV_END_X, INV_END_Y, ALL_ANGLES);
     RestoreAngles(INV_START_X, INV_START_Y, INV_END_X, INV_END_Y);
 
     //	Shade Message
     BackupAngles(INV_NAME_X0, INV_NAME_Y0, INV_NAME_X1, INV_NAME_Y1);
     ShadeBoxBlk(INV_NAME_X0, INV_NAME_Y0, INV_NAME_X1, INV_NAME_Y1, SHADE_INVENT_LVL);
-    DrawCadre(INV_NAME_X0, INV_NAME_Y0, INV_NAME_X1, INV_NAME_Y1, ALL_ANGLES);
+    if (!s_invModern)
+        DrawCadre(INV_NAME_X0, INV_NAME_Y0, INV_NAME_X1, INV_NAME_Y1, ALL_ANGLES);
+    s_invPanelX1 = INV_END_X;
+    s_invPanelY1 = INV_END_Y;
     RestoreAngles(INV_NAME_X0, INV_NAME_Y0, INV_NAME_X1, INV_NAME_Y1);
 
     CopyScreen(Log, Screen); // Before Draw
@@ -986,7 +1192,15 @@ void AffObjName(S32 num) {
     CopyBlock(INV_NAME_X0, INV_NAME_Y0, INV_NAME_X1, INV_NAME_Y1,
               BufSpeak, INV_NAME_X0, INV_NAME_Y0, Log);
 
-    if (num != -1) {
+    if (s_invModern) {
+        s_invName[0] = 0;
+        if (num != -1) {
+            i = TabIndir[num]; // Indirection
+            t = TabInv[i].TabObj3D[TabInv[i].IdObj3D];
+            GetMultiText(100 + t, s_invName);
+        }
+        InvModern_Publish();
+    } else if (num != -1) {
         i = TabIndir[num]; // Indirection
         t = TabInv[i].TabObj3D[TabInv[i].IdObj3D];
         GetMultiText(100 + t, String);
@@ -1370,6 +1584,7 @@ void MenuInventory(U32 tempo) {
     }
 
     CloseDial();
+    InvModern_Close();
 
     FlagZoomed = 0; // Keep this place clean like you find it.... ;)
 

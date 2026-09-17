@@ -29,6 +29,7 @@ enum { ITEM_CARD,
 
 typedef struct {
     S32 Kind;
+    S32 Layer;
     float X0, Y0, X1, Y1;
     T_UIOVERLAY_CARD Card;
     char Text[MAX_TEXT];
@@ -52,6 +53,7 @@ typedef struct {
 // --- Private state -----------------------------------------------------------
 static T_ITEM s_items[MAX_ITEMS];
 static S32 s_count = 0;
+static S32 s_layer = UIOVERLAY_LAYER_MENU; ///< layer new items go to
 
 static T_FONT_TEXTURE s_fonts[MAX_FONT_TEXTURES];
 
@@ -642,12 +644,28 @@ static T_ITEM *NewItem(S32 kind) {
     T_ITEM *item = &s_items[s_count++];
     memset(item, 0, sizeof(*item));
     item->Kind = kind;
+    item->Layer = s_layer;
     return item;
 }
 
 // --- Interface ---------------------------------------------------------------
 void UiOverlay_Clear(void) {
     s_count = 0;
+    s_layer = UIOVERLAY_LAYER_MENU;
+}
+
+void UiOverlay_ClearLayer(S32 layer) {
+    S32 kept = 0;
+    for (S32 i = 0; i < s_count; i++) {
+        if (s_items[i].Layer != layer) {
+            if (kept != i) {
+                s_items[kept] = s_items[i];
+            }
+            kept++;
+        }
+    }
+    s_count = kept;
+    s_layer = layer;
 }
 
 S32 UiOverlay_Active(void) {
@@ -748,8 +766,11 @@ void UiOverlay_Render(void *sdlRenderer) {
     s_offsetY = rect.y;
 
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    for (S32 i = 0; i < s_count; i++) {
-        const T_ITEM *item = &s_items[i];
+    for (S32 pass = 0; pass < UIOVERLAY_LAYERS * s_count; pass++) {
+        const T_ITEM *item = &s_items[pass % s_count];
+        if (item->Layer != pass / s_count) {
+            continue;
+        }
         switch (item->Kind) {
         case ITEM_CARD:
             DrawCard(renderer, item);

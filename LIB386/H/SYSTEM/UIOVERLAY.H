@@ -34,8 +34,18 @@ typedef struct {
     float ShadowX, ShadowY, ShadowBlur;
 } T_UIOVERLAY_CARD;
 
-/** Empties the list: the next present shows the frame alone. */
+/* Layers, drawn in this order: a page's own cards (inventory), the dialogue
+   box above it, menus on top. Each screen clears and refills only its layer. */
+#define UIOVERLAY_LAYER_PAGE 0
+#define UIOVERLAY_LAYER_DIALOG 1
+#define UIOVERLAY_LAYER_MENU 2
+#define UIOVERLAY_LAYERS 3
+
+/** Empties every layer: the next present shows the frame alone. */
 void UiOverlay_Clear(void);
+
+/** Empties one layer and makes it the one later calls add to. */
+void UiOverlay_ClearLayer(S32 layer);
 
 /** TRUE while the list holds something. */
 S32 UiOverlay_Active(void);
