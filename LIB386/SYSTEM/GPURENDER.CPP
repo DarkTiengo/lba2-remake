@@ -52,6 +52,7 @@ static SDL_GPUShader *s_objFrag = NULL;
 static SDL_GPUShader *s_compositeFrag = NULL;
 static SDL_GPUGraphicsPipeline *s_pipeline = NULL;
 static SDL_GPUGraphicsPipeline *s_pipelinePainter = NULL; ///< depth write, no depth test
+static SDL_GPUGraphicsPipeline *s_pipelineGlass = NULL;   ///< blended over the scene, depth test without write
 static SDL_GPUSampler *s_nearest = NULL;
 static SDL_GPUSampler *s_linear = NULL;
 static bool s_supersample = false;
@@ -101,6 +102,8 @@ typedef struct {
     float FogEnd;
     float FogColor;
     float Pad;
+    float GlassPass;
+    float Pad1, Pad2, Pad3;
 } T_DRAW_UNIFORMS;
 
 static U8 s_lutData[LUT_ROWS * 256];
@@ -436,7 +439,27 @@ static bool CreatePipeline(void) {
     s_pipeline = SDL_CreateGPUGraphicsPipeline(s_device, &info);
     info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
     s_pipelinePainter = SDL_CreateGPUGraphicsPipeline(s_device, &info);
-    if (s_pipeline == NULL || s_pipelinePainter == NULL) {
+
+    /* Lamp glass: colour blended over what is behind it, the id replaced, the
+       light target keeping its colour and taking the glass's glow in alpha. */
+    info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+    info.depth_stencil_state.enable_depth_write = false;
+    targets[0].blend_state.enable_blend = true;
+    targets[0].blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+    targets[0].blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    targets[0].blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    targets[0].blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[0].blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    targets[0].blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    targets[2].blend_state.enable_blend = true;
+    targets[2].blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    targets[2].blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[2].blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    targets[2].blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[2].blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    targets[2].blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    s_pipelineGlass = SDL_CreateGPUGraphicsPipeline(s_device, &info);
+    if (s_pipeline == NULL || s_pipelinePainter == NULL || s_pipelineGlass == NULL) {
         Log_Warn("[GPU] Unable to create object pipeline: %s", SDL_GetError());
         return false;
     }
@@ -497,6 +520,10 @@ static void ReleasePipeline(void) {
     if (s_pipeline) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipeline);
         s_pipeline = NULL;
+    }
+    if (s_pipelineGlass) {
+        SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelineGlass);
+        s_pipelineGlass = NULL;
     }
     if (s_pipelinePainter) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelinePainter);
@@ -590,6 +617,8 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
         u.FogEnd = (float)draw->FogEnd;
         u.FogColor = (float)(draw->FogColor & 0xFF);
         u.Pad = GpuObjSpecular ? 1.0f : 0.0f; /* specular strength */
+        u.GlassPass = 0.0f;
+        u.Pad1 = u.Pad2 = u.Pad3 = 0.0f;
         if (draw->HasLogical) {
             S32 row = LutRows(draw->Logical, 1);
             if (row < 0) {
@@ -798,6 +827,11 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
 
     U32 first = 0;
     S32 slice = -1;
+    U32 glassDraw[64];
+    U32 glassFirst[64];
+    float glassSlice[128];
+    SDL_Rect glassScissor[64];
+    U32 nbGlass = 0;
     for (U32 i = 0; i < count; i++) {
         const T_GPUOBJ_DRAW *draw = draws[i];
 
@@ -843,8 +877,32 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));
             SDL_PushGPUFragmentUniformData(cmd, 0, &uniforms[i], sizeof(T_DRAW_UNIFORMS));
             SDL_DrawGPUPrimitives(pass, draw->Count, 1, first, 0);
+            if (draw->HasGlow && nbGlass < SDL_arraysize(glassDraw)) {
+                glassDraw[nbGlass] = i;
+                glassFirst[nbGlass] = first;
+                glassSlice[nbGlass * 2] = sliceUniform[0];
+                glassSlice[nbGlass * 2 + 1] = sliceUniform[1];
+                glassScissor[nbGlass] = scissor;
+                nbGlass++;
+            }
         }
         first += draw->Count;
+    }
+
+    /* Second pass: lamp glass over everything drawn behind it. */
+    if (nbGlass > 0) {
+        SDL_BindGPUGraphicsPipeline(pass, s_pipelineGlass);
+        SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
+        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
+        for (U32 k = 0; k < nbGlass; k++) {
+            const U32 i = glassDraw[k];
+            T_DRAW_UNIFORMS u = uniforms[i];
+            u.GlassPass = 1.0f;
+            SDL_SetGPUScissor(pass, &glassScissor[k]);
+            SDL_PushGPUVertexUniformData(cmd, 0, glassSlice + k * 2, sizeof(float) * 2);
+            SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(T_DRAW_UNIFORMS));
+            SDL_DrawGPUPrimitives(pass, draws[i]->Count, 1, glassFirst[k], 0);
+        }
     }
 
     SDL_EndGPURenderPass(pass);

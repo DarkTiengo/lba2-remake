@@ -29,6 +29,10 @@ layout(set = 3, binding = 0) uniform Draw {
     float fogEnd;   // and where it is total; <= fogStart disables it
     float fogColor; // palette index fog fades to
     float specular; // specular strength, 0 turns highlights off
+    float glassPass; // 1: the blended pass drawing only lamp glass; 0: everything else
+    float drawPad0;
+    float drawPad1;
+    float drawPad2;
 };
 
 layout(set = 3, binding = 1) uniform Lights {
@@ -286,6 +290,42 @@ void main() {
     if (mode == MODE_PASS) {
         o_color = vec4(0.0);
         o_id = vec4(0.0);
+        return;
+    }
+
+    /* Lamp glass is drawn in its own blended pass, over what lies behind it. */
+    bool glass = (Flags() & FLAG_EMISSIVE) != 0 && (mode == MODE_SOLID || mode == MODE_SHADED || mode == MODE_DISC);
+    if (glass != (glassPass > 0.5)) {
+        discard;
+    }
+    if (glass) {
+        if (mode == MODE_DISC && dot(v_uv.zw, v_uv.zw) > 1.0) {
+            discard;
+        }
+        vec3 n;
+        vec3 view;
+        if (mode == MODE_DISC) {
+            vec2 d = v_uv.zw;
+            n = vec3(d.x, -d.y, sqrt(max(1.0 - dot(d, d), 0.0)));
+            view = vec3(0.0, 0.0, 1.0);
+        } else {
+            n = normalize(v_normal.xyz);
+            view = (Flags() & FLAG_ISO) != 0 ? normalize(vec3(1.0, 0.8, 1.0)) : normalize(-v_vpos.xyz);
+        }
+        float facing = abs(dot(n, view));
+        /* Fresnel: clear where the glass faces the eye, tinted and reflective at the rim. */
+        float fresnel = pow(1.0 - facing, 2.0);
+        /* The bulb inside shows through the middle of the globe. */
+        float bulb = pow(facing, 3.0);
+        vec3 tint = mix(Pal(Logical(int(v_mat.x) | 15)), vec3(1.0, 0.78, 0.35), 0.75);
+        vec3 l = normalize(v_light.xyz);
+        float highlight = pow(max(dot(normalize(l + view), n), 0.0), 40.0);
+        vec3 c = tint * (0.5 + 0.5 * fresnel) + vec3(1.0, 0.82, 0.45) * bulb * 0.9 +
+                 vec3(1.0, 0.95, 0.85) * highlight * 0.35 * specular;
+        float alpha = clamp(0.25 + 0.5 * fresnel + 0.55 * bulb + highlight * 0.3, 0.0, 0.92);
+        o_color = vec4(min(c, vec3(0.97)), alpha);
+        o_id = vec4(id, 0.0, 0.0, 1.0);
+        o_light = vec4(0.0, 0.0, 0.0, 0.6);
         return;
     }
 
