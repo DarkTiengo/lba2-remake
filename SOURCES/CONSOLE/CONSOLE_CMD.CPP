@@ -1898,6 +1898,19 @@ static void cmd_weapon(int argc, const char *argv[]) {
     Console_Print("weapon = %d", (int)Weapon);
 }
 
+/* magiclevel [level] [points]: read or set the hero's magic level (0..4, picks the magic ball's sprite
+   and force) and magic points. For reaching each ball look in a headless test. */
+static void cmd_magic(int argc, const char *argv[]) {
+    if (argc >= 2) {
+        const int level = atoi(argv[1]);
+        MagicLevel = (U8)(level < 0 ? 0 : level > 4 ? 4
+                                                    : level);
+    }
+    if (argc >= 3)
+        MagicPoint = (U8)atoi(argv[2]);
+    Console_Print("magic level = %d, points = %d", (int)MagicLevel, (int)MagicPoint);
+}
+
 /* lifetrace <objN> | off: trace object N's Life script -- its comportement/track/zone state each
    frame and every condition (LF_*) it evaluates. Reveals whether an NPC's script ever reaches a
    given check and what its gating conditions read. */
@@ -2510,6 +2523,8 @@ void Console_RegisterAll(void) {
                               "teleport <x> <y> <z> [beta] | teleport actor <n>",
                               "Sets the hero's coords directly; next frame re-runs zones/collision. "
                               "'actor <n>' jumps onto actor n. Within-cube only.");
+    Console_RegisterCommandEx("magiclevel", cmd_magic, "Read/set hero magic level and points",
+                              "magiclevel [0..4] [points]", "Level picks the magic ball's sprite and force.");
     Console_RegisterCommandEx("behaviour", cmd_behaviour, "Read/set hero behaviour (comportement)",
                               "behaviour [0..13]", "0=Normal 1=Sportif 2=Aggressive 3=Discreet 4=Protopack. Routes through SetComportement.");
     Console_RegisterCommandEx("weapon", cmd_weapon, "Read/set hero active weapon",

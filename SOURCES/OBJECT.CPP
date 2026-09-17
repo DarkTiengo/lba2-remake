@@ -5238,8 +5238,8 @@ S32 AffOneObject(T_SORT *pt) {
             CalculeScaleFactorSprite(ptrextra->PosX, ptrextra->PosY, ptrextra->PosZ, ptrextra->Scale);
 
             /* GPU renderer: the flying magic ball becomes a lit 3D sphere. */
-            const S32 orb = numobj == MagicBall AND !(ptrextra->Flags & EXTRA_SEARCH_OBJ) AND
-                                          AffGpu_OrbBegin(Xp, Yp, 96);
+            /* Not the level 4 fire ball: its sprite is a flame, not a ball. */
+            const S32 orb = numobj == MagicBall AND !(ptrextra->Flags & EXTRA_SEARCH_OBJ) AND num != SPRITE_BALLE_LVL_4 AND AffGpu_OrbBegin(Xp, Yp, 96);
             /* The sphere's size comes from the sprite's own extent. */
             const S32 memoXMin = ScreenXMin, memoYMin = ScreenYMin, memoXMax = ScreenXMax, memoYMax = ScreenYMax;
             if (orb) {
@@ -5858,8 +5858,27 @@ startaffscene:
        rooms a soft warm light following the hero so actors stand out of the bricks. */
     /* Not while the ball flies home: that is an invisible seeker, not the ball. */
     if (MagicBall != -1 AND ListExtra[MagicBall].Sprite != -1 AND !(ListExtra[MagicBall].Flags & EXTRA_SEARCH_OBJ)) {
+        /* The light takes the ball's colour, which follows the magic level. */
+        float r = 1.0f, g = 0.82f, b = 0.4f; // yellow
+        switch (ListExtra[MagicBall].Sprite) {
+        case SPRITE_BALLE_LVL_2: // green
+            r = 0.5f;
+            g = 1.0f;
+            b = 0.55f;
+            break;
+        case SPRITE_BALLE_LVL_3: // red
+            r = 1.0f;
+            g = 0.35f;
+            b = 0.3f;
+            break;
+        case SPRITE_BALLE_LVL_4: // fire
+            r = 1.0f;
+            g = 0.55f;
+            b = 0.2f;
+            break;
+        }
         AffGpu_AddWorldLight(ListExtra[MagicBall].PosX, ListExtra[MagicBall].PosY, ListExtra[MagicBall].PosZ, 2600.0f,
-                             0.7f, 0.85f, 1.0f, 0.8f);
+                             r, g, b, 0.8f);
     }
     if (CubeMode == CUBE_INTERIEUR) {
         GrilleGpu_AddRoomLights();
