@@ -64,6 +64,10 @@ static float s_normal[MAX_LIGHTS][4]; ///< xyz, shade scale
 static float s_light[3];
 static T_GPUOBJ_DRAW *s_draw = NULL;
 
+/* Fire-textured polygons of the body being captured: their centres summed. */
+static float s_fireSum[3];
+static S32 s_fireCount = 0;
+
 // --- Private functions -------------------------------------------------------
 static void RotateNormals(const TYPE_MAT *mat, const TYPE_VT16 *src, S32 n, S32 dst, float lightLen) {
     for (S32 i = 0; i < n && dst + i < MAX_LIGHTS; i++) {
@@ -333,6 +337,8 @@ S32 AffGpu_Begin(void) {
         return FALSE;
     }
     s_pending = FALSE;
+    s_fireCount = 0;
+    s_fireSum[0] = s_fireSum[1] = s_fireSum[2] = 0.0f;
 
     s_light[0] = (float)CameraXLight;
     s_light[1] = (float)CameraYLight;
@@ -469,6 +475,30 @@ void AffGpu_Entity(U32 type, void *poly) {
         }
     }
     EmitPolygon(points, nbPoints, faceNormal, smooth, &m, uvs);
+
+    /* A polygon showing the animated fire texture: remember where it is, so the
+       body casts firelight. */
+    if ((m.Mode == (float)GPUOBJ_MODE_TEX || m.Mode == (float)GPUOBJ_MODE_TEXSHADED) && GpuObjNbFires > 0 &&
+        s_draw->Page == GpuObjFirePage) {
+        float cu = 0.0f, cv = 0.0f;
+        for (S32 i = 0; i < nbPoints; i++) {
+            cu += uvs[i][0];
+            cv += uvs[i][1];
+        }
+        const S32 u = (S32)(cu / (float)nbPoints);
+        const S32 v = (S32)(cv / (float)nbPoints);
+        const S32 index = ((S32)m.TexOffset + ((((v & 255) << 8) | (u & 255)) & (S32)m.TexMask)) & 65535;
+        if (GpuObj_FireAt(index & 255, index >> 8) >= 0) {
+            for (S32 i = 0; i < nbPoints; i++) {
+                T_GPU_PROJ p;
+                Project(points[i], &p);
+                s_fireSum[0] += p.Vx / (float)nbPoints;
+                s_fireSum[1] += p.Vy / (float)nbPoints;
+                s_fireSum[2] += p.Vz / (float)nbPoints;
+            }
+            s_fireCount++;
+        }
+    }
 }
 
 static float MaxF(float a, float b) {
@@ -585,6 +615,14 @@ void AffGpu_End(void) {
         return;
     }
     s_capturing = FALSE;
+    if (s_fireCount > 0 && s_draw != NULL) {
+        s_draw->HasFire = TRUE;
+        for (S32 i = 0; i < 3; i++) {
+            s_draw->FirePos[i] = s_fireSum[i] / (float)s_fireCount;
+        }
+    }
+    s_fireCount = 0;
+    s_fireSum[0] = s_fireSum[1] = s_fireSum[2] = 0.0f;
     s_draw = NULL;
     GpuObj_EndDraw();
 }

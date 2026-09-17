@@ -37,6 +37,11 @@ layout(set = 3, binding = 1) uniform Lights {
     float lightCount;
 };
 
+layout(set = 3, binding = 2) uniform Fire {
+    vec4 fireRects[4]; // texel x, y, w, h in the fire page
+    vec4 fireInfo;     // count, page slot, time in seconds, unused
+};
+
 /* Light reaching a point, soft quadratic falloff; normals shade bodies,
    baked surfaces (terrain, bricks) take it omnidirectionally. */
 vec3 DynamicLight(vec3 pos, vec3 normal, bool useNormal) {
@@ -101,6 +106,71 @@ int Texel(int u, int v) {
     int mask = int(v_mat.z);
     int index = (offset + ((((v & 255) << 8) | (u & 255)) & mask)) & 65535;
     return int(texelFetch(u_pages, ivec3(index & 255, index >> 8, int(page)), 0).r * 255.0 + 0.5);
+}
+
+// --- Procedural fire -----------------------------------------------------------
+float FireHash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float FireNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(FireHash(i), FireHash(i + vec2(1.0, 0.0)), u.x),
+               mix(FireHash(i + vec2(0.0, 1.0)), FireHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float FireFbm(vec2 p) {
+    float sum = 0.0;
+    float amp = 0.5;
+    for (int k = 0; k < 5; k++) {
+        sum += amp * FireNoise(p);
+        p = p * 2.03 + vec2(1.7, 9.2);
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+/* Where this fragment samples a fire region of the page, its position in it
+   (0..1, y down: the flames' roots are at the bottom). */
+bool FireLocal(out vec2 local) {
+    local = vec2(0.0);
+    if (fireInfo.x < 0.5 || int(page) != int(fireInfo.y)) {
+        return false;
+    }
+    int offset = int(v_mat.y);
+    int mask = int(v_mat.z);
+    vec2 t = v_uv.xy;
+    ivec2 i = ivec2(floor(t));
+    int index = (offset + ((((i.y & 255) << 8) | (i.x & 255)) & mask)) & 65535;
+    vec2 texel = vec2(float(index & 255), float(index >> 8)) + fract(t);
+    for (int k = 0; k < int(fireInfo.x); k++) {
+        vec4 r = fireRects[k];
+        if (texel.x >= r.x && texel.x < r.x + r.z && texel.y >= r.y && texel.y < r.y + r.w) {
+            local = (texel - r.xy) / r.zw;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Rising turbulent flames: hot and white at the roots, orange, then red at
+   ragged tips; alpha 0 where the fire gives out. */
+vec4 ProceduralFire(vec2 local) {
+    float time = fireInfo.z;
+    float x = local.x;
+    float rise = local.y; // 1 at the roots
+    float n = FireFbm(vec2(x * 3.2, rise * 2.2 + time * 2.1));
+    float lick = FireFbm(vec2(x * 6.0 - time * 0.7, rise * 4.0 + time * 3.3));
+    float heat = rise * 1.25 + (n - 0.5) * 1.1 + (lick - 0.5) * 0.45 - 0.2;
+    heat -= pow(abs(x - 0.5) * 2.0, 3.0) * 0.35;
+    heat = clamp(heat, 0.0, 1.0);
+    vec3 c = mix(vec3(0.25, 0.02, 0.0), vec3(0.95, 0.18, 0.03), smoothstep(0.08, 0.35, heat));
+    c = mix(c, vec3(1.0, 0.55, 0.08), smoothstep(0.3, 0.6, heat));
+    c = mix(c, vec3(1.0, 0.88, 0.4), smoothstep(0.55, 0.85, heat));
+    c = mix(c, vec3(1.0, 1.0, 0.85), smoothstep(0.85, 1.0, heat));
+    return vec4(c * 1.15, smoothstep(0.06, 0.18, heat));
 }
 
 float ShadeValue(out float spec) {
@@ -219,6 +289,7 @@ void main() {
     }
 
     vec3 color;
+    vec2 fireLocal;
     float spec = 0.0;
     int base = int(v_mat.x);
 
@@ -228,6 +299,13 @@ void main() {
         float shade = ShadeValue(spec);
         color = Ramp(base, shade);
         color += spec * specular * 0.35 * Pal(Logical(base | 15));
+    } else if ((mode == MODE_TEX || mode == MODE_TEXSHADED) && fireInfo.x > 0.5 && FireLocal(fireLocal)) {
+        /* Animated fire texture: flames drawn here, glowing, not shaded. */
+        vec4 fire = ProceduralFire(fireLocal);
+        if (fire.a < 0.5 && (Flags() & FLAG_CHROMAKEY) != 0) {
+            discard;
+        }
+        color = fire.rgb * fire.a;
     } else if (mode == MODE_TEX) {
         color = Textured(0.0, false).rgb;
     } else if (mode == MODE_TEXSHADED) {

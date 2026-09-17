@@ -3,6 +3,8 @@
 #include "PLASMA.H"
 #include "FIRE.H"
 
+#include <SVGA/GPUOBJ.H>
+
 /*══════════════════════════════════════════════════════════════════════════*/
 #define DEF_EFFECT 1
 /*	Les scenes en declarent jusqu'a 10, et InitPlasmaMenu en ajoute un par
@@ -26,6 +28,9 @@ static S32 LastAnimationTimer;
 
 void ScanTextureAnimation(U8 *ptrtex, S32 nbscanlines) {
     S32 x;
+    const U8 *page = ptrtex;
+    T_GPUOBJ_RECT fires[GPUOBJ_MAX_FIRES];
+    U32 nbFires = 0;
 
     nbscanlines *= 256;
     for (x = 0; x < nbscanlines; x++, ptrtex++) {
@@ -59,6 +64,15 @@ void ScanTextureAnimation(U8 *ptrtex, S32 nbscanlines) {
             if (width & (width - 1)) {
                 // erreur taille texture animee pas exposant de 2
                 return;
+            }
+
+            /* The object page's fire regions, for the GPU renderer's flames. */
+            if (effectnum == 1 && nbscanlines == 256 * 256 && nbFires < GPUOBJ_MAX_FIRES) {
+                fires[nbFires].X = (S32)(x & 255);
+                fires[nbFires].Y = (S32)(x >> 8);
+                fires[nbFires].W = width;
+                fires[nbFires].H = width;
+                nbFires++;
             }
 
             switch (effectnum) {
@@ -186,6 +200,10 @@ void ScanTextureAnimation(U8 *ptrtex, S32 nbscanlines) {
 
             NbTexEffects++;
         }
+    }
+
+    if (nbscanlines == 256 * 256) {
+        GpuObj_SetFireRects(page, fires, nbFires);
     }
 }
 

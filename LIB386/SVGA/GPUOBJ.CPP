@@ -25,6 +25,11 @@ S32 GpuObjPixelFilter = TRUE;
 S32 GpuObjDeband = TRUE;
 S32 GpuObjSpecular = TRUE;
 S32 GpuObjUiScale = TRUE;
+S32 GpuObjFire = TRUE;
+
+const U8 *GpuObjFirePage = NULL;
+T_GPUOBJ_RECT GpuObjFireRects[GPUOBJ_MAX_FIRES];
+U32 GpuObjNbFires = 0;
 S32 GpuObjAtlasDirty = FALSE;
 U32 GpuObjTargetHintH = 0;
 
@@ -359,6 +364,24 @@ void GpuObj_EndDraw(void) {
         return;
     }
     Tag(id);
+}
+
+void GpuObj_SetFireRects(const U8 *page, const T_GPUOBJ_RECT *rects, U32 count) {
+    GpuObjFirePage = page;
+    GpuObjNbFires = count < GPUOBJ_MAX_FIRES ? count : GPUOBJ_MAX_FIRES;
+    for (U32 i = 0; i < GpuObjNbFires; i++) {
+        GpuObjFireRects[i] = rects[i];
+    }
+}
+
+S32 GpuObj_FireAt(S32 x, S32 y) {
+    for (U32 i = 0; i < GpuObjNbFires; i++) {
+        const T_GPUOBJ_RECT *r = &GpuObjFireRects[i];
+        if (x >= r->X && x < r->X + r->W && y >= r->Y && y < r->Y + r->H) {
+            return (S32)i;
+        }
+    }
+    return -1;
 }
 
 void GpuObj_ClearLights(void) {

@@ -347,4 +347,11 @@ const struct MenuLabelRow LocalizedMenuLabels[MENU_LABEL_COUNT] = {
       "Volver",
       "Indietro",
       "Voltar"}},
+    {MENU_LABEL_OPT_FIRE,
+     {"Modern fire",
+      "Feu moderne",
+      "Modernes Feuer",
+      "Fuego moderno",
+      "Fuoco moderno",
+      "Fogo moderno"}},
 };

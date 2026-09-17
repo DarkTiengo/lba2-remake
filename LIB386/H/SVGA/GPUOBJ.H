@@ -72,6 +72,8 @@ typedef struct {
     S32 FogStart;       ///< distance fog in view depth; FogEnd <= FogStart disables it
     S32 FogEnd;
     S32 FogColor; ///< palette index the fog fades to
+    S32 HasFire;  ///< some of its polygons show an animated fire texture
+    float FirePos[3]; ///< where they are, in the draw's scene space
     U8 Logical[256];
 } T_GPUOBJ_DRAW;
 
@@ -100,6 +102,23 @@ extern S32 GpuObjPixelFilter; ///< xBR pixel-art upscaler on software pixels (gf
 extern S32 GpuObjDeband;      ///< in-between colours on the palette's ramps (gfx_deband)
 extern S32 GpuObjSpecular;    ///< specular highlights on models (gfx_specular)
 extern S32 GpuObjUiScale;     ///< 2D drawn at its classic size and upscaled (gfx_uiscale)
+extern S32 GpuObjFire;        ///< procedural flames and firelight on fire textures (gfx_fire)
+
+/* The animated fire regions of the object texture page (ANIMTEX.CPP): polygons
+   sampling them get procedural flames and cast flickering light. */
+#define GPUOBJ_MAX_FIRES 4
+typedef struct {
+    S32 X, Y, W, H; ///< texels in the page
+} T_GPUOBJ_RECT;
+
+extern const U8 *GpuObjFirePage;
+extern T_GPUOBJ_RECT GpuObjFireRects[GPUOBJ_MAX_FIRES];
+extern U32 GpuObjNbFires;
+
+void GpuObj_SetFireRects(const U8 *page, const T_GPUOBJ_RECT *rects, U32 count);
+
+/** The fire rect holding texel (x, y) of the fire page, -1 when none. */
+S32 GpuObj_FireAt(S32 x, S32 y);
 
 void GpuObj_ClearLights(void);
 void GpuObj_AddLight(float x, float y, float z, float radius, float r, float g, float b, float intensity);

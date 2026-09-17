@@ -6,6 +6,7 @@
 #include <SYSTEM/LOG.H>
 
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -317,7 +318,7 @@ static bool EnsureVertexBuffer(U32 size) {
 
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 2);
+    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 3);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
     s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 5, 1);
     if (!s_objVert || !s_objFrag || !s_compositeFrag) {
@@ -637,16 +638,76 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     samplers[3].sampler = s_nearest;
     SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
 
+    const double seconds = (double)SDL_GetTicks() / 1000.0;
+
     /* std140: 16 position/radius vec4, 16 colour/intensity vec4, count. */
     float lights[GPUOBJ_MAX_LIGHTS * 8 + 4];
     SDL_zeroa(lights);
-    const U32 nbLights = GpuObjLightsEnabled ? GpuObjNbLights : 0;
+    U32 nbLights = GpuObjLightsEnabled ? GpuObjNbLights : 0;
     for (U32 l = 0; l < nbLights; l++) {
         memcpy(lights + l * 4, GpuObjLights[l].Pos, sizeof(float) * 4);
         memcpy(lights + GPUOBJ_MAX_LIGHTS * 4 + l * 4, GpuObjLights[l].Color, sizeof(float) * 4);
     }
+    /* Firelight: every live body showing flames casts a warm flickering light. */
+    if (GpuObjLightsEnabled && GpuObjFire) {
+        for (U32 i = 0; i < count && nbLights < GPUOBJ_MAX_LIGHTS; i++) {
+            const T_GPUOBJ_DRAW *draw = draws[i];
+            if (!draw->HasFire) {
+                continue;
+            }
+            /* A fire made of many small bodies (a dragon's breath) is one light. */
+            S32 merged = FALSE;
+            for (U32 l = GpuObjLightsEnabled ? GpuObjNbLights : 0; l < nbLights; l++) {
+                const float dx = lights[l * 4] - draw->FirePos[0];
+                const float dy = lights[l * 4 + 1] - draw->FirePos[1];
+                const float dz = lights[l * 4 + 2] - draw->FirePos[2];
+                if (dx * dx + dy * dy + dz * dz < 1200.0f * 1200.0f) {
+                    merged = TRUE;
+                    break;
+                }
+            }
+            if (merged) {
+                continue;
+            }
+            const float phase = draw->FirePos[0] * 0.013f + draw->FirePos[2] * 0.007f;
+            const float flicker = 0.78f + 0.12f * (float)sin(seconds * 9.1 + phase) +
+                                  0.07f * (float)sin(seconds * 23.7 + phase * 3.0) + 0.03f * (float)sin(seconds * 41.3);
+            float *pos = lights + nbLights * 4;
+            pos[0] = draw->FirePos[0];
+            pos[1] = draw->FirePos[1];
+            pos[2] = draw->FirePos[2];
+            pos[3] = 2400.0f;
+            float *colour = lights + GPUOBJ_MAX_LIGHTS * 4 + nbLights * 4;
+            colour[0] = 1.0f;
+            colour[1] = 0.55f;
+            colour[2] = 0.2f;
+            colour[3] = 0.6f * flicker;
+            nbLights++;
+        }
+    }
     lights[GPUOBJ_MAX_LIGHTS * 8] = (float)nbLights;
     SDL_PushGPUFragmentUniformData(cmd, 1, lights, sizeof(lights));
+
+    /* Fire regions of the object page, when that page is among this frame's. */
+    float fire[20];
+    SDL_zeroa(fire);
+    if (GpuObjFire && GpuObjFirePage != NULL) {
+        for (U32 i = 0; i < s_nbPages; i++) {
+            if (s_pagePtrs[i] == GpuObjFirePage) {
+                for (U32 k = 0; k < GpuObjNbFires; k++) {
+                    fire[k * 4 + 0] = (float)GpuObjFireRects[k].X;
+                    fire[k * 4 + 1] = (float)GpuObjFireRects[k].Y;
+                    fire[k * 4 + 2] = (float)GpuObjFireRects[k].W;
+                    fire[k * 4 + 3] = (float)GpuObjFireRects[k].H;
+                }
+                fire[16] = (float)GpuObjNbFires;
+                fire[17] = (float)i;
+                break;
+            }
+        }
+    }
+    fire[18] = (float)fmod(seconds, 1000.0);
+    SDL_PushGPUFragmentUniformData(cmd, 2, fire, sizeof(fire));
 
     U32 first = 0;
     S32 slice = -1;

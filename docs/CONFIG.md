@@ -75,6 +75,7 @@ lba2.cfg stores user preferences and last-save info. Read at startup, written at
 | GpuLights | int | 0–1 | 1 | GPU renderer dynamic lights (magic ball, light over the hero in rooms). Console `gfx_lights`. See [GPU_RENDERER.md](GPU_RENDERER.md) |
 | MenuStyle | int | 0–2 | 2 | Menu look: 0 classic plasma bars, 1 modern cards (UI overlay, Nunito font), 2 modern with the GPU renderer only. Console `gfx_menustyle`. See [MENU.md](MENU.md) |
 | GpuUiScale | int | 0–1 | 1 | GPU renderer draws 2D at the classic size (frame 480–719 lines) and upscales it; 3D stays at full resolution. Console `gfx_uiscale` |
+| GpuFire | int | 0–1 | 1 | GPU renderer: procedural flames and flickering firelight on fire textures. Console `gfx_fire` |
 | GpuPixelFilter | int | 0–1 | 1 | GPU renderer xBR pixel-art filter on upscaled 2D art. Console `gfx_pixelfilter` |
 | GpuDeband | int | 0–1 | 1 | GPU renderer colour smoothing on upscaled 2D art. Console `gfx_deband` |
 | GpuSpecular | int | 0–1 | 1 | GPU renderer specular highlights on 3D models. Console `gfx_specular` |

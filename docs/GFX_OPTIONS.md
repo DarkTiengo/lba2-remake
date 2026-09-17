@@ -14,6 +14,7 @@ All three are off by default, so a stock run renders exactly as before. None of 
 | GPU renderer | `gfx_gpu` | `GpuRenderer` | `LBA2_GPU` | 0 classic, 1 GPU (Display menu: Renderer); see [GPU_RENDERER.md](GPU_RENDERER.md) |
 | Menu style | `gfx_menustyle` | `MenuStyle` | — | 0 classic, 1 modern cards, 2 modern with the GPU renderer (default); see [MENU.md](MENU.md) |
 | GPU 2D scale | `gfx_uiscale` | `GpuUiScale` | — | 1 classic size upscaled, 0 native; GPU renderer only |
+| GPU modern fire | `gfx_fire` | `GpuFire` | — | 1 procedural flames and firelight, 0 classic fire texture; GPU renderer only |
 | GPU dynamic lights | `gfx_lights` | `GpuLights` | — | 1 on, 0 off; GPU renderer only (Display menu: GPU effects) |
 | GPU pixel-art filter | `gfx_pixelfilter` | `GpuPixelFilter` | — | 1 xBR on upscaled 2D art, 0 plain; GPU renderer only |
 | GPU colour smoothing | `gfx_deband` | `GpuDeband` | — | 1 on, 0 off; GPU renderer only |
