@@ -84,11 +84,17 @@ vec3 Flames(vec2 uv) {
         heat = clamp(heat, 0.0, 1.0);
         vec3 c = mix(vec3(0.5, 0.04, 0.0), vec3(1.0, 0.3, 0.02), smoothstep(0.05, 0.35, heat));
         c = mix(c, vec3(1.0, 0.65, 0.12), smoothstep(0.3, 0.6, heat));
-        c = mix(c, vec3(1.0, 0.92, 0.55), smoothstep(0.6, 0.9, heat));
+        c = mix(c, vec3(1.0, 0.85, 0.42), smoothstep(0.6, 0.9, heat));
         float alpha = smoothstep(0.04, 0.45, heat);
-        sum += c * alpha * 1.1;
+        sum += c * alpha * 0.9;
     }
     return sum;
+}
+
+/* Adds light that approaches white instead of clipping at it. */
+vec3 Screen(vec3 base, vec3 add) {
+    base = clamp(base, 0.0, 1.0);
+    return base + add * (1.0 - base) / (1.0 + add * 0.25);
 }
 
 /* Soft halo from the emissive surfaces around this pixel: two rings of taps on
@@ -116,7 +122,7 @@ vec3 Glow(vec2 uv) {
     float e0 = texelFetch(u_objLight, clamp(ivec2(centre), ivec2(0), size - ivec2(1)), 0).a;
     sum += texelFetch(u_objColor, clamp(ivec2(centre), ivec2(0), size - ivec2(1)), 0).rgb * e0 * 2.0;
     total += 2.0;
-    return sum / total * 2.2;
+    return sum / total * 1.6;
 }
 
 // --- Software frame -----------------------------------------------------------
@@ -300,16 +306,18 @@ void main() {
         halo += Flames(v_uv);
     }
     if (!match) {
-        o_color = vec4(SoftwarePixel(v_uv) + halo, 1.0) * v_color;
+        o_color = vec4(Screen(SoftwarePixel(v_uv), halo), 1.0) * v_color;
         return;
     }
 
     vec4 nearest = texelFetch(u_objColor, p, 0);
-    vec3 light = texelFetch(u_objLight, p, 0).rgb * 2.0;
+    vec4 lightTexel = texelFetch(u_objLight, p, 0);
+    /* An emissive surface is the light source: it is not lit again by itself. */
+    vec3 light = lightTexel.rgb * 2.0 * (1.0 - lightTexel.a);
     if (nearest.a < 0.5) {
         /* A surface whose colour is the software frame (interior bricks). */
         vec3 c = SoftwarePixel(v_uv);
-        o_color = vec4(c * (vec3(1.0) + light) + halo, 1.0) * v_color;
+        o_color = vec4(Screen(c * (vec3(1.0) + light), halo), 1.0) * v_color;
         return;
     }
 
@@ -323,7 +331,7 @@ void main() {
         gpu = nearest.rgb;
     }
     gpu *= vec3(1.0) + light;
-    gpu += halo;
+    gpu = Screen(gpu, halo);
     gpu = mix(gpu, vec3(0.0, 1.0, 0.0), min(debugTint, 1.0) * 0.5);
     o_color = vec4(gpu, frame.a);
 }

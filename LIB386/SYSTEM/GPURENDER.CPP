@@ -764,11 +764,11 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             /* Exterior worlds are drawn at a far larger scale than rooms. */
             pos[3] = draw->HasGlow == 2 ? 9000.0f : 2400.0f;
             float *colour = lights + GPUOBJ_MAX_LIGHTS * 4 + nbLights * 4;
-            /* Towards white: the light, not the glass's tint. */
-            colour[0] = 0.4f + 0.6f * draw->GlowColor[0];
-            colour[1] = 0.4f + 0.6f * draw->GlowColor[1];
-            colour[2] = 0.4f + 0.6f * draw->GlowColor[2];
-            colour[3] = 1.1f;
+            /* A warm lamplight tinted by the glass. */
+            colour[0] = 0.5f + 0.5f * draw->GlowColor[0];
+            colour[1] = 0.39f + 0.39f * draw->GlowColor[1];
+            colour[2] = 0.18f + 0.18f * draw->GlowColor[2];
+            colour[3] = 0.9f;
             nbLights++;
         }
     }

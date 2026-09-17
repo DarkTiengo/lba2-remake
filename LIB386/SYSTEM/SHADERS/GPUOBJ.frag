@@ -306,8 +306,8 @@ void main() {
         color += spec * specular * 0.35 * Pal(Logical(base | 15));
         if ((Flags() & FLAG_EMISSIVE) != 0) {
             /* A lamp's glass, lit from inside: the ramp's brightest entry. */
-            color = mix(color, Pal(Logical(base | 15)), 0.55) * 1.1;
-            emissive = 0.65;
+            color = mix(Pal(Logical(base | 15)), vec3(1.0, 0.8, 0.38), 0.5);
+            emissive = 0.6;
         }
     } else if ((mode == MODE_TEX || mode == MODE_TEXSHADED) && fireInfo.x > 0.5 && FireLocal(fireLocal)) {
         /* Animated fire texture: flames drawn here, glowing, not shaded. */
@@ -366,9 +366,10 @@ void main() {
     }
 
     if (emissive > 0.0 && (Flags() & FLAG_EMISSIVE) != 0) {
-        /* A lit globe: a white-hot core fading to the glass colour at the rim. */
-        float centre = mode == MODE_DISC ? 1.0 - dot(v_uv.zw, v_uv.zw) : 0.6;
-        color = mix(color * 1.25, vec3(1.0, 0.98, 0.9), centre * 0.7);
+        /* A lit globe: a warm yellow glass with a paler core, kept below white. */
+        float centre = mode == MODE_DISC ? 1.0 - dot(v_uv.zw, v_uv.zw) : 0.5;
+        color = mix(max(color, vec3(0.95, 0.72, 0.32)), vec3(1.0, 0.9, 0.6), centre * 0.45);
+        color = min(color, vec3(0.97));
     }
 
     if (fogEnd > fogStart) {
