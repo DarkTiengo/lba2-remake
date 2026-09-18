@@ -70,6 +70,7 @@ add_subdirectory(numeric_contract)
 add_subdirectory(ui_layout)
 add_subdirectory(settings)
 add_subdirectory(water)
+add_subdirectory(gpubvh)
 add_subdirectory(user_dirs)
 
 if(LBA2_BUILD_ASM_EQUIV_TESTS)

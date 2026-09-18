@@ -66,8 +66,8 @@ static void UpdateSceneLight(void);
 
 /* The frame's bodies, kept for their shadows: triangles in scene space (x, y, z,
    then 1 and the disc coordinates for sphere impostors, zeros otherwise). */
-#define MAX_CASTERS 96
-#define MAX_CASTER_VERTS 65536
+#define MAX_CASTERS 1024
+#define MAX_CASTER_VERTS 393216
 typedef struct {
     float Origin[3];
     U32 First;
@@ -777,6 +777,10 @@ static void UpdateSceneLight(void) {
     GpuObjSunExterior = TypeProj == TYPE_3D;
     /* Iso: (x - z) * 3 / 64 across, so a unit is about 0.066 pixels. */
     GpuObjFocal = TypeProj == TYPE_3D ? FRatioX : 3.0f / 64.0f * 1.4142f;
+    GpuObjProj[0] = (float)XCentre;
+    GpuObjProj[1] = (float)YCentre;
+    GpuObjProj[2] = FRatioX;
+    GpuObjProj[3] = FRatioY;
     if (TypeProj == TYPE_3D) {
         const S32 savedX = X0;
         const S32 savedY = Y0;
@@ -1063,10 +1067,15 @@ static void EmitSilhouette(const T_CASTER *c, const T_SHADOW_REQUEST *r, const T
 }
 
 void AffGpu_BuildShadows(void) {
+    GpuObjRayScene = FALSE;
     if (!GpuObj_Active() || !GpuObjShadows) {
         return;
     }
     UpdateSceneLight();
+    /* Exteriors under a risen sun: the presenter traces sun rays through every
+       body, so the sun needs no silhouettes. */
+    GpuObjRayScene =
+        GpuObjRayTrace && GpuObjSunlight && TypeProj == TYPE_3D && Dot3(GpuObjSunDir, GpuObjUpDir) > 0.05f;
     /* Lights that can shadow: the scene's own and the lamps and fires on bodies. */
     T_FRAME_LIGHT lights[GPUOBJ_MAX_LIGHTS + MAX_FRAME_LAMPS];
     U32 nbLights = 0;
@@ -1102,7 +1111,7 @@ void AffGpu_BuildShadows(void) {
         if (best == NULL) {
             continue;
         }
-        if (GpuObjSunlight) {
+        if (GpuObjSunlight && !GpuObjRayScene) {
             EmitSilhouette(best, r, NULL);
         }
         /* The two lights reaching the body the most, unless it carries them. */

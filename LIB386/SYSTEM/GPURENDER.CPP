@@ -3,6 +3,7 @@
 #include <3D/CAMERA.H>
 #include <3D/PROJ.H>
 #include <SVGA/GPUOBJ.H>
+#include <SVGA/GPUBVH.H>
 #include <SVGA/GPUWATER.H>
 #include <SVGA/SCREEN.H>
 #include <SVGA/VIDEO.H>
@@ -66,6 +67,9 @@ static bool s_tagsCleared = false; ///< the tag texture holds known contents
 static SDL_GPUTexture *s_objColor = NULL;
 static SDL_GPUTexture *s_objId = NULL;
 static SDL_GPUTexture *s_objLight = NULL; ///< dynamic light reaching each scene surface
+static SDL_GPUBuffer *s_bvhNodes = NULL;  ///< ray-tracing hierarchy (GPUBVH.H)
+static SDL_GPUBuffer *s_bvhTris = NULL;
+static bool s_rayScene = false;                          ///< this present's hierarchy is built: the composite traces sun rays
 static SDL_GPUTexture *s_objShadow = NULL;               ///< soft shadow darkness over each surface
 static SDL_GPUTexture *s_objHeight = NULL;               ///< scene-space height for water contact
 static SDL_GPUGraphicsPipeline *s_pipelineShadow = NULL; ///< shadows: darkness target only, darkest wins
@@ -146,7 +150,7 @@ static SDL_GPUTexture *CreateTexture(SDL_GPUTextureType type, SDL_GPUTextureForm
 }
 
 static SDL_GPUShader *CreateShader(const unsigned char *code, size_t size, SDL_GPUShaderStage stage,
-                                   Uint32 samplers, Uint32 uniformBuffers) {
+                                   Uint32 samplers, Uint32 uniformBuffers, Uint32 storageBuffers = 0) {
     SDL_GPUShaderCreateInfo info;
     SDL_zero(info);
     info.code = code;
@@ -156,6 +160,7 @@ static SDL_GPUShader *CreateShader(const unsigned char *code, size_t size, SDL_G
     info.stage = stage;
     info.num_samplers = samplers;
     info.num_uniform_buffers = uniformBuffers;
+    info.num_storage_buffers = storageBuffers;
     SDL_GPUShader *shader = SDL_CreateGPUShader(s_device, &info);
     if (shader == NULL) {
         Log_Warn("[GPU] Unable to create shader: %s", SDL_GetError());
@@ -282,7 +287,7 @@ static float Daylight(void) {
 
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12];
+    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12];
     SDL_zeroa(params);
     params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
     params[9] = (float)s_nbFlames;
@@ -319,6 +324,23 @@ static void PushCompositeParams(void) {
         sun[9] = GpuObjFocal * (float)s_targetW / (float)ModeDesiredX;
         sun[10] = 320.0f;
         sun[11] = exterior;
+    }
+    /* Sun rays through the frame's bodies: the sun, the projection that turns a
+       pixel and its distance back into a scene point, the target's scale. */
+    if (s_rayScene && GpuObjSunlight) {
+        float *rt = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12;
+        rt[0] = GpuObjSunDir[0];
+        rt[1] = GpuObjSunDir[1];
+        rt[2] = GpuObjSunDir[2];
+        rt[3] = 0.2f + 0.4f * Daylight();
+        rt[4] = GpuObjProj[0];
+        rt[5] = GpuObjProj[1];
+        rt[6] = GpuObjProj[2];
+        rt[7] = GpuObjProj[3];
+        rt[8] = (float)s_targetW / (float)ModeDesiredX;
+        rt[9] = (float)s_targetH / (float)ModeDesiredY;
+        rt[10] = 30.0f;
+        rt[11] = 40000.0f;
     }
     if (!SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params))) {
         Log_Warn("[GPU] Unable to update composite uniforms: %s", SDL_GetError());
@@ -369,6 +391,9 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     stateInfo.fragment_shader = s_compositeFrag;
     stateInfo.num_sampler_bindings = 6;
     stateInfo.sampler_bindings = bindings;
+    SDL_GPUBuffer *storage[2] = {s_bvhNodes, s_bvhTris};
+    stateInfo.num_storage_buffers = 2;
+    stateInfo.storage_buffers = storage;
     s_composite = SDL_CreateGPURenderState(s_renderer, &stateInfo);
     if (s_composite == NULL) {
         Log_Warn("[GPU] Unable to create composite state: %s", SDL_GetError());
@@ -432,8 +457,20 @@ static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
     s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
-    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 1);
+    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 1, 2);
     if (!s_objVert || !s_objFrag || !s_compositeFrag) {
+        return false;
+    }
+    /* The ray-tracing hierarchy, at its largest: filled each frame it is used. */
+    SDL_GPUBufferCreateInfo bvhInfo;
+    SDL_zero(bvhInfo);
+    bvhInfo.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
+    bvhInfo.size = GPUBVH_MAX_NODES * GPUBVH_NODE_FLOATS * sizeof(float);
+    s_bvhNodes = SDL_CreateGPUBuffer(s_device, &bvhInfo);
+    bvhInfo.size = GPUBVH_MAX_TRIS * GPUBVH_TRI_FLOATS * sizeof(float);
+    s_bvhTris = SDL_CreateGPUBuffer(s_device, &bvhInfo);
+    if (!s_bvhNodes || !s_bvhTris) {
+        Log_Warn("[GPU] Unable to create the ray-tracing buffers: %s", SDL_GetError());
         return false;
     }
 
@@ -597,6 +634,14 @@ static void ReleasePipeline(void) {
         SDL_ReleaseGPUBuffer(s_device, s_vertexBuffer);
         s_vertexBuffer = NULL;
     }
+    if (s_bvhNodes) {
+        SDL_ReleaseGPUBuffer(s_device, s_bvhNodes);
+        s_bvhNodes = NULL;
+    }
+    if (s_bvhTris) {
+        SDL_ReleaseGPUBuffer(s_device, s_bvhTris);
+        s_bvhTris = NULL;
+    }
     s_vertexCapacity = 0;
     if (s_transfer) {
         SDL_ReleaseGPUTransferBuffer(s_device, s_transfer);
@@ -642,6 +687,53 @@ static void ReleasePipeline(void) {
 }
 
 /* Uploads size bytes at the start of the transfer buffer into a texture region. */
+/* The live bodies' triangles into the hierarchy sun rays are traced through:
+   not the terrain, sky or sea (their own ground), bricks, or sphere impostors. */
+static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
+    static float tris[GPUBVH_MAX_TRIS * 9];
+    U32 n = 0;
+    const S32 skipFlags = GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_SKY;
+    for (U32 d = 0; d < count && n < GPUBVH_MAX_TRIS; d++) {
+        const T_GPUOBJ_VERTEX *v = GpuObjVerts + draws[d]->First;
+        for (U32 i = 0; i + 2 < draws[d]->Count && n < GPUBVH_MAX_TRIS; i += 3) {
+            const S32 mode = (S32)v[i].light[3];
+            const S32 flags = (S32)(v[i].vpos[3] + 0.5f);
+            if (mode == GPUOBJ_MODE_PASS || mode == GPUOBJ_MODE_BRICK || mode == GPUOBJ_MODE_DISC ||
+                mode == GPUOBJ_MODE_ORB || (flags & skipFlags) != 0) {
+                continue;
+            }
+            float *o = tris + n * 9;
+            for (int k = 0; k < 3; k++) {
+                o[k * 3 + 0] = v[i + k].vpos[0];
+                o[k * 3 + 1] = v[i + k].vpos[1];
+                o[k * 3 + 2] = v[i + k].vpos[2];
+            }
+            n++;
+        }
+    }
+    GpuBvh_Build(tris, n);
+    return GpuBvhNbNodes > 0;
+}
+
+static void UploadBuffer(SDL_GPUCopyPass *pass, SDL_GPUBuffer *buffer, const void *data, U32 size) {
+    void *mapped = SDL_MapGPUTransferBuffer(s_device, s_transfer, true);
+    if (mapped == NULL) {
+        return;
+    }
+    memcpy(mapped, data, size);
+    SDL_UnmapGPUTransferBuffer(s_device, s_transfer);
+
+    SDL_GPUTransferBufferLocation source;
+    SDL_zero(source);
+    source.transfer_buffer = s_transfer;
+
+    SDL_GPUBufferRegion region;
+    SDL_zero(region);
+    region.buffer = buffer;
+    region.size = size;
+    SDL_UploadToGPUBuffer(pass, &source, &region, true);
+}
+
 static void UploadTexture(SDL_GPUCopyPass *pass, SDL_GPUTexture *texture, U32 layer, U32 x, U32 y, U32 w, U32 h,
                           const void *data, U32 size) {
     void *mapped = SDL_MapGPUTransferBuffer(s_device, s_transfer, true);
@@ -1119,6 +1211,7 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     static T_DRAW_UNIFORMS uniforms[8192];
     U32 vertexBytes = 0;
     U32 count = liveCount > 0 ? ResolveDraws(live, liveCount, kept, uniforms, &vertexBytes) : 0;
+    s_rayScene = GpuObjRayScene && count > 0 && BuildRayScene(kept, count);
     if (count > 0 && GpuObjShadows) {
         vertexBytes += GpuObjNbShadowVerts * sizeof(T_GPUOBJ_VERTEX);
     }
@@ -1180,6 +1273,13 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         need = vertexBytes;
     if (tagBytes > need)
         need = tagBytes;
+    const bool rays = s_rayScene;
+    const U32 bvhNodeBytes = rays ? GpuBvhNbNodes * GPUBVH_NODE_FLOATS * (U32)sizeof(float) : 0;
+    const U32 bvhTriBytes = rays ? GpuBvhNbTris * GPUBVH_TRI_FLOATS * (U32)sizeof(float) : 0;
+    if (bvhNodeBytes > need)
+        need = bvhNodeBytes;
+    if (bvhTriBytes > need)
+        need = bvhTriBytes;
 
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_device);
     if (cmd == NULL) {
@@ -1212,6 +1312,10 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     }
     if (vertexBytes > 0) {
         UploadVertices(copy, kept, count, vertexBytes);
+    }
+    if (bvhNodeBytes > 0 && bvhTriBytes > 0) {
+        UploadBuffer(copy, s_bvhNodes, GpuBvhNodes, bvhNodeBytes);
+        UploadBuffer(copy, s_bvhTris, GpuBvhTris, bvhTriBytes);
     }
     if (upW > 0 && upH > 0) {
         UploadTexture(copy, s_tags, 0, (U32)up[0], (U32)up[1], upW, upH, s_tagUpload, tagBytes);

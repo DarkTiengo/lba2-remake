@@ -122,6 +122,9 @@ extern float GpuObjSunDir[3];
 extern float GpuObjUpDir[3];
 extern S32 GpuObjSunExterior;
 extern float GpuObjFocal; ///< frame pixels per scene unit at depth 1 (3D), per unit (iso)
+extern S32 GpuObjRayTrace;  ///< sun shadows ray traced over every body in exteriors (gfx_raytrace)
+extern S32 GpuObjRayScene;  ///< this frame's sun shadows are ray traced (exterior, sun up)
+extern float GpuObjProj[4]; ///< the 3D projection: XCentre, YCentre, FRatioX, FRatioY
 
 /* Soft shadows of the current scene frame, in scene space; set with the lights. */
 #define GPUOBJ_MAX_SHADOWS 96

@@ -78,6 +78,7 @@ lba2.cfg stores user preferences and last-save info. Read at startup, written at
 | GpuUiScale | int | 0–1 | 1 | GPU renderer draws 2D at the classic size (frame 480–719 lines) and upscales it; 3D stays at full resolution. Console `gfx_uiscale` |
 | GpuLamps | int | 0–1 | 1 | GPU renderer: lamp globes on 3D models cast light. Console `gfx_lamps` |
 | GpuSunlight | int | 0–1 | 1 | GPU renderer: global light: sun shadows, sky fill and rim light on bodies, sun/sky colour grading, sun bloom, ambient occlusion outdoors. Console `gfx_sunlight`. See [GPU_RENDERER.md](GPU_RENDERER.md) |
+| GpuRayTrace | int | 0–1 | 1 | GPU renderer: sun shadows ray traced over every body outdoors (houses, trees, characters); needs `GpuSunlight`. Console `gfx_raytrace`. See [GPU_RENDERER.md](GPU_RENDERER.md) |
 | GpuShadows | int | 0–1 | 1 | GPU renderer: soft shadows, also thrown away from lamps, fire and the magic ball. Console `gfx_shadows`. See [GPU_RENDERER.md](GPU_RENDERER.md) |
 | GpuFire | int | 0–1 | 1 | GPU renderer: procedural flames and flickering firelight on fire textures. Console `gfx_fire` |
 | GpuPixelFilter | int | 0–1 | 1 | GPU renderer xBR pixel-art filter on upscaled 2D art. Console `gfx_pixelfilter` |

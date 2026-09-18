@@ -33,6 +33,9 @@ float GpuObjSunDir[3] = {0.0f, 1.0f, 0.0f};
 float GpuObjUpDir[3] = {0.0f, 1.0f, 0.0f};
 S32 GpuObjSunExterior = FALSE;
 float GpuObjFocal = 1.0f;
+S32 GpuObjRayTrace = TRUE;
+S32 GpuObjRayScene = FALSE;
+float GpuObjProj[4] = {0.0f, 0.0f, 1.0f, 1.0f};
 T_GPUOBJ_VERTEX GpuObjShadowVerts[GPUOBJ_SHADOW_CAPACITY];
 U32 GpuObjNbShadowVerts = 0;
 

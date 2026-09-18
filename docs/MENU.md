@@ -66,6 +66,7 @@ Main Menu
 │   │   │   ├── Modern water: < On/Off > [selector, gfx_water]
 │   │   │   ├── Lamps on models: < On/Off > [selector, gfx_lamps]
 │   │   │   ├── Global light: < On/Off > [selector, gfx_sunlight]
+│   │   │   ├── Ray tracing: < On/Off > [selector, gfx_raytrace]
 │   │   │   ├── Soft shadows: < On/Off > [selector, gfx_shadows]
 │   │   │   ├── Modern fire: < On/Off > [selector, gfx_fire]
 │   │   │   ├── Dynamic lights: < On/Off > [selector, gfx_lights]

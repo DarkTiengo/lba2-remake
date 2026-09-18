@@ -17,6 +17,7 @@ All three are off by default, so a stock run renders exactly as before. None of 
 | GPU 2D scale | `gfx_uiscale` | `GpuUiScale` | — | 1 classic size upscaled, 0 native; GPU renderer only |
 | GPU lamps on models | `gfx_lamps` | `GpuLamps` | — | 1 lamp globes on models cast light, 0 off; GPU renderer only |
 | GPU global light | `gfx_sunlight` | `GpuSunlight` | — | 1 sun shadows, sky fill and rim light, sun/sky grading, sun bloom, outdoor ambient occlusion; 0 the palette's lighting alone; GPU renderer only (Display > GPU effects) |
+| GPU ray tracing | `gfx_raytrace` | `GpuRayTrace` | — | 1 sun shadows ray traced over every body outdoors; 0 the shadows under characters only; GPU renderer only, with Global light (Display > GPU effects) |
 | GPU soft shadows | `gfx_shadows` | `GpuShadows` | — | 1 soft shadows that bodies also cast away from dynamic lights, 0 the original shadow; GPU renderer only (Display > GPU effects) |
 | GPU modern fire | `gfx_fire` | `GpuFire` | — | 1 procedural flames and firelight, 0 classic fire texture; GPU renderer only |
 | GPU dynamic lights | `gfx_lights` | `GpuLights` | — | 1 on, 0 off; GPU renderer only (Display menu: GPU effects) |

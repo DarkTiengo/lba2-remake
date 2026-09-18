@@ -18,6 +18,15 @@ layout(set = 2, binding = 4) uniform sampler2D u_objLight; // dynamic light, hal
 layout(set = 2, binding = 5) uniform sampler2D u_objShadow; // soft shadow darkness
 layout(set = 2, binding = 6) uniform sampler2D u_objHeight; // scene-space surface height
 
+/* The frame's bodies for sun rays (GPUBVH.H): nodes are two vec4 (min, first;
+   max, leaf count), triangles three (a vertex, two edges). */
+layout(std430, set = 2, binding = 7) readonly buffer BvhNodes {
+    vec4 bvhNodes[];
+};
+layout(std430, set = 2, binding = 8) readonly buffer BvhTris {
+    vec4 bvhTris[];
+};
+
 layout(set = 3, binding = 0) uniform Params {
     float debugTint;   // > 0: tint GPU pixels green (LBA2_GPU_DEBUG)
     float supersample; // > 0: the GPU targets are larger than the screen area
@@ -36,6 +45,9 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 sunTint;  // lit surfaces lean to the sun's colour; w: grading strength
     vec4 skyTint;  // shaded ones to the sky's; w: sun bloom strength
     vec4 aoParams; // x strength, y pixels per unit (3D: at distance 1), z world radius, w 1 in 3D
+    vec4 rtSun;    // toward the sun, w: ray-traced shadow strength (0: off)
+    vec4 rtProj;   // XCentre, YCentre, FRatioX, FRatioY: pixel and distance back to a scene point
+    vec4 rtInfo;   // target pixels per frame pixel (x, y), ray start, ray length
 };
 
 // --- Flames ----------------------------------------------------------------------
@@ -186,6 +198,88 @@ float AmbientOcclusion(ivec2 p) {
         }
     }
     return 1.0 - aoParams.x * clamp(occ / float(PAIRS * 2) * 2.5, 0.0, 1.0);
+}
+
+/* Whether anything of the frame's bodies lies along o + t d, tMin < t < tMax. */
+bool RayBlocked(vec3 o, vec3 d, float tMin, float tMax) {
+    vec3 inv = 1.0 / (sign(d) * max(abs(d), vec3(1e-6)) + vec3(equal(d, vec3(0.0))) * 1e-6);
+    int stack[40];
+    int sp = 0;
+    stack[sp++] = 0;
+    for (int guard = 0; guard < 400 && sp > 0; guard++) {
+        int node = stack[--sp];
+        vec4 a = bvhNodes[node * 2];
+        vec4 b = bvhNodes[node * 2 + 1];
+        vec3 t0 = (a.xyz - o) * inv;
+        vec3 t1 = (b.xyz - o) * inv;
+        vec3 lo = min(t0, t1);
+        vec3 hi = max(t0, t1);
+        float enter = max(max(lo.x, lo.y), max(lo.z, tMin));
+        float leave = min(min(hi.x, hi.y), min(hi.z, tMax));
+        if (enter > leave) {
+            continue;
+        }
+        int first = int(a.w);
+        int count = int(b.w);
+        if (count == 0) {
+            if (sp < 38) {
+                stack[sp++] = first;
+                stack[sp++] = first + 1;
+            }
+            continue;
+        }
+        for (int i = first; i < first + count; i++) {
+            vec3 v0 = bvhTris[i * 3].xyz;
+            vec3 e1 = bvhTris[i * 3 + 1].xyz;
+            vec3 e2 = bvhTris[i * 3 + 2].xyz;
+            vec3 pv = cross(d, e2);
+            float det = dot(e1, pv);
+            if (abs(det) < 1e-6) {
+                continue;
+            }
+            float id = 1.0 / det;
+            vec3 s = o - v0;
+            float u = dot(s, pv) * id;
+            if (u < 0.0 || u > 1.0) {
+                continue;
+            }
+            vec3 q = cross(s, e1);
+            float v = dot(d, q) * id;
+            if (v < 0.0 || u + v > 1.0) {
+                continue;
+            }
+            float t = dot(e2, q) * id;
+            if (t > tMin && t < tMax) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Sun shadow ray traced from the surface under this pixel through every body of
+   the frame: four rays over the sun's disc, turned per pixel, for a penumbra. */
+float SunShadowRT(ivec2 p) {
+    if (rtSun.w <= 0.0) {
+        return 0.0;
+    }
+    float d = UnpackDistance(p);
+    if (d <= 0.0) {
+        return 0.0;
+    }
+    vec2 frame = (vec2(p) + 0.5) / rtInfo.xy;
+    vec3 pos = vec3((frame.x - rtProj.x) * d / rtProj.z, (frame.y - rtProj.y) * d / (rtProj.z * rtProj.w), -d);
+    vec3 l = normalize(rtSun.xyz);
+    vec3 side = normalize(cross(l, abs(l.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 other = cross(l, side);
+    float turn = fract(sin(dot(vec2(p), vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+    float blocked = 0.0;
+    for (int k = 0; k < 4; k++) {
+        float a = turn + float(k) * 1.5707963;
+        vec3 dir = normalize(l + (side * cos(a) + other * sin(a)) * 0.025);
+        blocked += RayBlocked(pos, dir, rtInfo.z, rtInfo.w) ? 1.0 : 0.0;
+    }
+    return rtSun.w * blocked * 0.25;
 }
 
 /* Lit surfaces lean toward the sun's colour, shaded ones toward the sky's. */
@@ -505,6 +599,11 @@ void main() {
     float tag = texelFetch(u_tags, tp, 0).r;
     float id = texelFetch(u_objId, p, 0).r;
 
+    /* LBA2_GPU_DEBUG=6: the ray-traced sun shadow alone. */
+    if (debugTint > 5.5) {
+        o_color = vec4(vec3(1.0 - SunShadowRT(p) / max(rtSun.w, 0.01)), 1.0);
+        return;
+    }
     /* LBA2_GPU_DEBUG=5: the ambient occlusion alone. */
     if (debugTint > 4.5) {
         o_color = vec4(vec3(AmbientOcclusion(p)), 1.0);
@@ -535,7 +634,7 @@ void main() {
         /* A soft shadow reaches the untouched frame too (an interior room's
            floor) where the GPU knows the surface, so it stays behind walls. */
         if (texelFetch(u_objId, p, 0).r > 0.0) {
-            c *= 1.0 - SoftShadow(v_uv).r;
+            c *= 1.0 - max(SoftShadow(v_uv).r, SunShadowRT(p));
             if (sunlight > 0.0) {
                 c = Grade(c * AmbientOcclusion(p));
             }
@@ -548,7 +647,7 @@ void main() {
     vec4 lightTexel = texelFetch(u_objLight, p, 0);
     /* Soft shadow, filtered at the GPU's resolution. */
     vec2 shadow = SoftShadow(v_uv);
-    float shade = 1.0 - shadow.r;
+    float shade = 1.0 - max(shadow.r, SunShadowRT(p));
     /* An emissive surface is the light source: it is not lit again by itself. */
     float emissive = lightTexel.a > 0.02 ? lightTexel.a : 0.0;
     /* Bodies block the dynamic light behind them. */

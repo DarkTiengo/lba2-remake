@@ -382,4 +382,11 @@ const struct MenuLabelRow LocalizedMenuLabels[MENU_LABEL_COUNT] = {
       "Luz global",
       "Luce globale",
       "Luz global"}},
+    {MENU_LABEL_OPT_RAYTRACE,
+     {"Ray tracing",
+      "Ray tracing",
+      "Raytracing",
+      "Trazado de rayos",
+      "Ray tracing",
+      "Ray tracing"}},
 };

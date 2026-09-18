@@ -1,0 +1,5 @@
+add_executable(test_gpu_bvh test_gpu_bvh.cpp ${CMAKE_SOURCE_DIR}/LIB386/SVGA/GPUBVH.CPP)
+target_include_directories(test_gpu_bvh PRIVATE ${CMAKE_SOURCE_DIR}/LIB386/H)
+set_target_properties(test_gpu_bvh PROPERTIES CXX_STANDARD 11)
+add_test(NAME test_gpu_bvh COMMAND test_gpu_bvh)
+register_host_test(test_gpu_bvh)

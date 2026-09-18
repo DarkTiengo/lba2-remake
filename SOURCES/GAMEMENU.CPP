@@ -110,6 +110,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_WATER 2128
 #define MENU_ID_GPU_SHADOWS 2129
 #define MENU_ID_GPU_SUNLIGHT 2130
+#define MENU_ID_GPU_RAYTRACE 2131
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -183,7 +184,7 @@ S32 MenuStyle = MENU_STYLE_AUTO;
 // on: one selector row per effect.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    11,  // nb entries
+    12,  // nb entries
     260, // y center
     0,   // .dia num
 
@@ -199,6 +200,8 @@ U16 GpuEffectsMenu[] = {
     MENU_ID_GPU_LAMPS,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_SUNLIGHT,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_RAYTRACE,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_SHADOWS,
     MENU_TYPE_DISPLAY_SELECTOR,
@@ -537,6 +540,10 @@ static void Display_CycleOption(S32 id, S32 dir) {
         GpuObjSunlight ^= 1;
         break;
 
+    case MENU_ID_GPU_RAYTRACE:
+        GpuObjRayTrace ^= 1;
+        break;
+
     case MENU_ID_GPU_UI_SCALE:
         /* Takes effect when the page is left (Display_ApplyRenderSize): the
            switch rebuilds every frame buffer. */
@@ -695,6 +702,11 @@ static void BuildCustomMenuText(S32 num, char *string) {
     case MENU_ID_GPU_LAMPS:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_LAMPS),
                        GetLocalizedMenuLabel(GpuObjGlow ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_RAYTRACE:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_RAYTRACE),
+                       GetLocalizedMenuLabel(GpuObjRayTrace ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
         break;
 
     case MENU_ID_GPU_SUNLIGHT:
@@ -4119,6 +4131,7 @@ static S32 GereGpuEffectsMenu(void) {
         case MENU_ID_GPU_LAMPS:
         case MENU_ID_GPU_SHADOWS:
         case MENU_ID_GPU_SUNLIGHT:
+        case MENU_ID_GPU_RAYTRACE:
         case MENU_ID_GPU_WATER:
         case MENU_ID_GPU_LIGHTS:
         case MENU_ID_GPU_PIXEL_FILTER:
