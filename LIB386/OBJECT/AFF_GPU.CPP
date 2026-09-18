@@ -1072,10 +1072,9 @@ void AffGpu_BuildShadows(void) {
         return;
     }
     UpdateSceneLight();
-    /* Exteriors under a risen sun: the presenter traces sun rays through every
-       body, so the sun needs no silhouettes. */
-    GpuObjRayScene =
-        GpuObjRayTrace && GpuObjSunlight && TypeProj == TYPE_3D && Dot3(GpuObjSunDir, GpuObjUpDir) > 0.05f;
+    /* Exteriors: the presenter traces rays toward the sun and the lights through
+       every body and the terrain, so no silhouettes are needed. */
+    GpuObjRayScene = GpuObjRayTrace && TypeProj == TYPE_3D;
     /* Lights that can shadow: the scene's own and the lamps and fires on bodies. */
     T_FRAME_LIGHT lights[GPUOBJ_MAX_LIGHTS + MAX_FRAME_LAMPS];
     U32 nbLights = 0;
@@ -1141,7 +1140,7 @@ void AffGpu_BuildShadows(void) {
                 pickW[1] = w;
             }
         }
-        for (S32 k = 0; k < 2; k++) {
+        for (S32 k = 0; k < 2 && !GpuObjRayScene; k++) {
             if (pick[k] >= 0 && pickW[k] > 0.02f) {
                 EmitSilhouette(best, r, &lights[pick[k]]);
             }

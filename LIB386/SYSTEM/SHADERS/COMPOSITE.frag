@@ -48,6 +48,9 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 rtSun;    // toward the sun, w: ray-traced shadow strength (0: off)
     vec4 rtProj;   // XCentre, YCentre, FRatioX, FRatioY: pixel and distance back to a scene point
     vec4 rtInfo;   // target pixels per frame pixel (x, y), ray start, ray length
+    vec4 rtLightCfg;       // x lights to trace toward, y clearance kept around each
+    vec4 rtLightPos[8];    // scene position, radius
+    vec4 rtLightWeight[2]; // intensity times luma, four a vec4
 };
 
 // --- Flames ----------------------------------------------------------------------
@@ -257,19 +260,55 @@ bool RayBlocked(vec3 o, vec3 d, float tMin, float tMax) {
     return false;
 }
 
-/* Sun shadow ray traced from the surface under this pixel through every body of
-   the frame: four rays over the sun's disc, turned per pixel, for a penumbra. */
-float SunShadowRT(ivec2 p) {
+/* The scene point under target pixel q at view distance d. */
+vec3 ScenePoint(ivec2 q, float d) {
+    vec2 frame = (vec2(q) + 0.5) / rtInfo.xy;
+    return vec3((frame.x - rtProj.x) * d / rtProj.z, (frame.y - rtProj.y) * d / (rtProj.z * rtProj.w), -d);
+}
+
+/* The surface under pixel p: its scene point and a normal from the neighbours
+   on the same surface (the nearer in distance on each axis), facing the camera. */
+bool SurfaceAt(ivec2 p, out vec3 pos, out vec3 n) {
+    float d = UnpackDistance(p);
+    if (d <= 0.0) {
+        return false;
+    }
+    pos = ScenePoint(p, d);
+    ivec2 size = textureSize(u_objShadow, 0);
+    vec3 axis[2];
+    for (int a = 0; a < 2; a++) {
+        ivec2 step = a == 0 ? ivec2(2, 0) : ivec2(0, 2);
+        ivec2 qa = clamp(p + step, ivec2(0), size - ivec2(1));
+        ivec2 qb = clamp(p - step, ivec2(0), size - ivec2(1));
+        float da = UnpackDistance(qa);
+        float db = UnpackDistance(qb);
+        bool useA = da > 0.0 && (db <= 0.0 || abs(da - d) <= abs(db - d));
+        if (!useA && db <= 0.0) {
+            axis[a] = vec3(0.0);
+            continue;
+        }
+        axis[a] = useA ? ScenePoint(qa, da) - pos : pos - ScenePoint(qb, db);
+    }
+    vec3 c = cross(axis[0], axis[1]);
+    n = dot(c, c) > 1e-6 ? normalize(c) : normalize(-pos);
+    if (dot(n, -pos) < 0.0) {
+        n = -n;
+    }
+    return true;
+}
+
+/* Sun shadow ray traced from a surface through every body and the terrain:
+   four rays over the sun's disc, turned per pixel, for a penumbra. A surface
+   turned away from the sun is left to its own shading. */
+float SunShadowRT(ivec2 p, vec3 pos, vec3 n) {
     if (rtSun.w <= 0.0) {
         return 0.0;
     }
-    float d = UnpackDistance(p);
-    if (d <= 0.0) {
+    vec3 l = normalize(rtSun.xyz);
+    if (dot(n, l) < 0.05) {
         return 0.0;
     }
-    vec2 frame = (vec2(p) + 0.5) / rtInfo.xy;
-    vec3 pos = vec3((frame.x - rtProj.x) * d / rtProj.z, (frame.y - rtProj.y) * d / (rtProj.z * rtProj.w), -d);
-    vec3 l = normalize(rtSun.xyz);
+    vec3 o = pos + n * 6.0;
     vec3 side = normalize(cross(l, abs(l.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
     vec3 other = cross(l, side);
     float turn = fract(sin(dot(vec2(p), vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
@@ -277,9 +316,42 @@ float SunShadowRT(ivec2 p) {
     for (int k = 0; k < 4; k++) {
         float a = turn + float(k) * 1.5707963;
         vec3 dir = normalize(l + (side * cos(a) + other * sin(a)) * 0.025);
-        blocked += RayBlocked(pos, dir, rtInfo.z, rtInfo.w) ? 1.0 : 0.0;
+        blocked += RayBlocked(o, dir, rtInfo.z, rtInfo.w) ? 1.0 : 0.0;
     }
     return rtSun.w * blocked * 0.25;
+}
+
+/* The share of the dynamic light a surface loses to what stands between it and
+   each light (lamps, fires, the magic ball): one ray per light in reach, weighed
+   as the shaders weigh the lights, stopping short of the light's own lamp. */
+float LightShadowRT(vec3 pos, vec3 n) {
+    int count = int(rtLightCfg.x);
+    if (count <= 0) {
+        return 0.0;
+    }
+    vec3 o = pos + n * 6.0;
+    float total = 0.0;
+    float blocked = 0.0;
+    for (int k = 0; k < count; k++) {
+        vec3 toLight = rtLightPos[k].xyz - o;
+        float dist2 = dot(toLight, toLight);
+        float range = rtLightPos[k].w;
+        float f = clamp(1.0 - dist2 / (range * range), 0.0, 1.0);
+        float w = f * f * rtLightWeight[k / 4][k % 4];
+        if (w <= 0.0) {
+            continue;
+        }
+        total += w;
+        float dist = sqrt(dist2);
+        vec3 dir = toLight / max(dist, 1.0);
+        if (dot(n, dir) <= 0.0) {
+            continue;
+        }
+        if (dist > rtLightCfg.y + rtInfo.z && RayBlocked(o, dir, rtInfo.z, dist - rtLightCfg.y)) {
+            blocked += w;
+        }
+    }
+    return total > 0.0 ? blocked / total : 0.0;
 }
 
 /* Lit surfaces lean toward the sun's colour, shaded ones toward the sky's. */
@@ -478,7 +550,7 @@ vec2 ShoreFoam(ivec2 p) {
     /* A projected body can sit beside the sea while its feet are well above
        the surface. Require the fragment and the nearby water edge to share a
        world-up height before allowing foam on either side of the boundary. */
-    const float CONTACT_HEIGHT_TOLERANCE = 96.0; // GPUWATER_CONTACT_HEIGHT_TOLERANCE
+    const float CONTACT_HEIGHT_TOLERANCE = 96.0; // scene-space contact tolerance
     const float CONTACT_DEPTH_TOLERANCE = 4096.0;
     float surfaceDepth = UnpackDistance(p);
     float nearest = 30.0;
@@ -599,9 +671,16 @@ void main() {
     float tag = texelFetch(u_tags, tp, 0).r;
     float id = texelFetch(u_objId, p, 0).r;
 
-    /* LBA2_GPU_DEBUG=6: the ray-traced sun shadow alone. */
+    /* Ray-traced shadows of the surface under this pixel (exteriors). */
+    vec3 surfacePos;
+    vec3 surfaceNormal;
+    bool traced = (rtSun.w > 0.0 || rtLightCfg.x > 0.5) && SurfaceAt(p, surfacePos, surfaceNormal);
+    float sunRT = traced ? SunShadowRT(p, surfacePos, surfaceNormal) : 0.0;
+    float lightRT = traced ? LightShadowRT(surfacePos, surfaceNormal) : 0.0;
+
+    /* LBA2_GPU_DEBUG=6: the ray-traced shadows alone: grey the sun's, red the lights'. */
     if (debugTint > 5.5) {
-        o_color = vec4(vec3(1.0 - SunShadowRT(p) / max(rtSun.w, 0.01)), 1.0);
+        o_color = vec4((1.0 - sunRT / max(rtSun.w, 0.01)) * vec3(1.0, 1.0 - lightRT, 1.0 - lightRT), 1.0);
         return;
     }
     /* LBA2_GPU_DEBUG=5: the ambient occlusion alone. */
@@ -634,7 +713,7 @@ void main() {
         /* A soft shadow reaches the untouched frame too (an interior room's
            floor) where the GPU knows the surface, so it stays behind walls. */
         if (texelFetch(u_objId, p, 0).r > 0.0) {
-            c *= 1.0 - max(SoftShadow(v_uv).r, SunShadowRT(p));
+            c *= 1.0 - max(SoftShadow(v_uv).r, sunRT);
             if (sunlight > 0.0) {
                 c = Grade(c * AmbientOcclusion(p));
             }
@@ -647,11 +726,11 @@ void main() {
     vec4 lightTexel = texelFetch(u_objLight, p, 0);
     /* Soft shadow, filtered at the GPU's resolution. */
     vec2 shadow = SoftShadow(v_uv);
-    float shade = 1.0 - max(shadow.r, SunShadowRT(p));
+    float shade = 1.0 - max(shadow.r, sunRT);
     /* An emissive surface is the light source: it is not lit again by itself. */
     float emissive = lightTexel.a > 0.02 ? lightTexel.a : 0.0;
     /* Bodies block the dynamic light behind them. */
-    vec3 light = lightTexel.rgb * 2.0 * (1.0 - emissive) * (1.0 - shadow.g);
+    vec3 light = lightTexel.rgb * 2.0 * (1.0 - emissive) * (1.0 - max(shadow.g, lightRT));
     if (nearest.a < 0.5) {
         /* A surface whose colour is the software frame (interior bricks). */
         vec3 c = SoftwarePixel(v_uv);

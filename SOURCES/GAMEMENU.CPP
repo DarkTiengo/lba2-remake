@@ -111,6 +111,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_SHADOWS 2129
 #define MENU_ID_GPU_SUNLIGHT 2130
 #define MENU_ID_GPU_RAYTRACE 2131
+#define MENU_ID_GPU_LIGHTING 2132
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -181,10 +182,10 @@ U16 DisplayMenu[4 + 7 * 2];
 S32 MenuStyle = MENU_STYLE_AUTO;
 
 // GPU effects submenu, opened from the Display page while the GPU renderer is
-// on: one selector row per effect.
+// on: the image and the effects, and the lighting page.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    12,  // nb entries
+    7,   // nb entries
     260, // y center
     0,   // .dia num
 
@@ -193,11 +194,26 @@ U16 GpuEffectsMenu[] = {
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_UI_SCALE,
     MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_PIXEL_FILTER,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_DEBAND,
+    MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_WATER,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_FIRE,
-    MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_GPU_LAMPS,
+    0,
+    MENU_ID_GPU_LIGHTING,
+};
+
+// Lighting and shadows, opened from the GPU effects page.
+U16 GpuLightingMenu[] = {
+    0,   // selected
+    7,   // nb entries
+    260, // y center
+    0,   // .dia num
+
+    0,
+    26, // menu precedent
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_SUNLIGHT,
     MENU_TYPE_DISPLAY_SELECTOR,
@@ -207,9 +223,7 @@ U16 GpuEffectsMenu[] = {
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_LIGHTS,
     MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_GPU_PIXEL_FILTER,
-    MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_GPU_DEBAND,
+    MENU_ID_GPU_LAMPS,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_SPECULAR,
 };
@@ -670,6 +684,10 @@ static void BuildCustomMenuText(S32 num, char *string) {
 
     case MENU_ID_GPU_EFFECTS:
         CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(MENU_LABEL_GPU_EFFECTS));
+        break;
+
+    case MENU_ID_GPU_LIGHTING:
+        CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(MENU_LABEL_GPU_LIGHTING));
         break;
 
     case MENU_ID_DISPLAY_MENU_STYLE:
@@ -4009,6 +4027,10 @@ void GpuEffects_MainCapture(const char *path) {
     MenuPage_MainCapture(GpuEffectsMenu, path);
 }
 
+void GpuLighting_MainCapture(const char *path) {
+    MenuPage_MainCapture(GpuLightingMenu, path);
+}
+
 void Advanced_MainCapture(const char *path) {
     MenuPage_MainCapture(AdvancedOptionMenu, path);
 }
@@ -4106,6 +4128,30 @@ static void BuildResolutionMenu(void) {
 // Picking a row applies it immediately (ApplyResolutionChoice). Mirrors
 // GereDisplayMenu's backdrop setup so the list draws over the shaded scene
 // (in-game) or the boot-menu image.
+// Lighting and shadows page: selector rows for the GPU renderer's lighting.
+static void GereGpuLightingMenu(void) {
+    S32 flag = 0;
+    while (!flag) {
+        const S32 select = DoGameMenu(GpuLightingMenu);
+        switch (select) {
+        case 26:
+        case 1000:
+            flag = 1;
+            break;
+
+        case MENU_ID_GPU_SUNLIGHT:
+        case MENU_ID_GPU_RAYTRACE:
+        case MENU_ID_GPU_SHADOWS:
+        case MENU_ID_GPU_LIGHTS:
+        case MENU_ID_GPU_LAMPS:
+        case MENU_ID_GPU_SPECULAR:
+            Display_CycleOption(select, 1);
+            break;
+        }
+    }
+    WaitNoInput();
+}
+
 // GPU effects submenu: selector rows for each effect of the GPU renderer.
 static S32 GereGpuEffectsMenu(void) {
     S32 flag = 0;
@@ -4126,17 +4172,15 @@ static S32 GereGpuEffectsMenu(void) {
             flag = 1;
             break;
 
+        case MENU_ID_GPU_LIGHTING:
+            GereGpuLightingMenu();
+            break;
+
         case MENU_ID_GPU_UI_SCALE:
         case MENU_ID_GPU_FIRE:
-        case MENU_ID_GPU_LAMPS:
-        case MENU_ID_GPU_SHADOWS:
-        case MENU_ID_GPU_SUNLIGHT:
-        case MENU_ID_GPU_RAYTRACE:
         case MENU_ID_GPU_WATER:
-        case MENU_ID_GPU_LIGHTS:
         case MENU_ID_GPU_PIXEL_FILTER:
         case MENU_ID_GPU_DEBAND:
-        case MENU_ID_GPU_SPECULAR:
             Display_CycleOption(select, 1);
             break;
         }

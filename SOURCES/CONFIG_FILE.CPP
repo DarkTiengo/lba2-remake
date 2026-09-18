@@ -138,7 +138,7 @@ static const T_SETTING BootSettings[] = {
     {"GpuSunlight", NULL, "gfx_sunlight", &GpuObjSunlight, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: global light: sun shadows, sky fill and rim light on bodies"},
     {"GpuRayTrace", NULL, "gfx_raytrace", &GpuObjRayTrace, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
-     "GPU renderer: sun shadows ray traced over every body outdoors (houses, trees, characters)"},
+     "GPU renderer: shadows ray traced outdoors through bodies and terrain, from the sun and lights"},
     {"GpuFire", NULL, "gfx_fire", &GpuObjFire, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: procedural flames and flickering firelight on fire textures"},
     {"GpuSpecular", NULL, "gfx_specular", &GpuObjSpecular, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,

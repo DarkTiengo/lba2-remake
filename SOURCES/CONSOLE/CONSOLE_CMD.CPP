@@ -652,6 +652,16 @@ static void cmd_ui_dispatch(int argc, const char *argv[]) {
         Console_Print("ui gpu-effects -> %s", argv[2]);
         return;
     }
+    if (argc >= 3 && !strcmp(argv[1], "gpu-lighting")) {
+        /* Lighting and shadows page, opened from GPU effects. */
+        if (Console_GetCaptureBlackBg()) {
+            memset(Log, 0, (size_t)ModeDesiredX * (size_t)ModeDesiredY);
+            memset(Screen, 0, (size_t)ModeDesiredX * (size_t)ModeDesiredY);
+        }
+        GpuLighting_MainCapture(argv[2]);
+        Console_Print("ui gpu-lighting -> %s", argv[2]);
+        return;
+    }
     if (argc >= 3 && !strcmp(argv[1], "resolution")) {
         /* Resolution sub-page (the list opened from the Display submenu's
            Resolution row). Built at runtime, so Resolution_MainCapture

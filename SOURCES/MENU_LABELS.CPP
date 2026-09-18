@@ -389,4 +389,11 @@ const struct MenuLabelRow LocalizedMenuLabels[MENU_LABEL_COUNT] = {
       "Trazado de rayos",
       "Ray tracing",
       "Ray tracing"}},
+    {MENU_LABEL_GPU_LIGHTING,
+     {"Lighting and shadows",
+      "Lumière et ombres",
+      "Licht und Schatten",
+      "Luz y sombras",
+      "Luce e ombre",
+      "Luz e sombras"}},
 };

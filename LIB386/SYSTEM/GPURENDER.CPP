@@ -69,7 +69,12 @@ static SDL_GPUTexture *s_objId = NULL;
 static SDL_GPUTexture *s_objLight = NULL; ///< dynamic light reaching each scene surface
 static SDL_GPUBuffer *s_bvhNodes = NULL;  ///< ray-tracing hierarchy (GPUBVH.H)
 static SDL_GPUBuffer *s_bvhTris = NULL;
-static bool s_rayScene = false;                          ///< this present's hierarchy is built: the composite traces sun rays
+static bool s_rayScene = false; ///< this present's hierarchy is built: the composite traces shadow rays
+/* The lights the composite traces shadow rays toward: the nearest to the camera. */
+#define RT_MAX_LIGHTS 8
+static float s_rtLights[RT_MAX_LIGHTS][4]; ///< scene position, radius
+static float s_rtWeights[RT_MAX_LIGHTS];   ///< intensity times luma, as the shaders weigh lights
+static U32 s_nbRtLights = 0;
 static SDL_GPUTexture *s_objShadow = NULL;               ///< soft shadow darkness over each surface
 static SDL_GPUTexture *s_objHeight = NULL;               ///< scene-space height for water contact
 static SDL_GPUGraphicsPipeline *s_pipelineShadow = NULL; ///< shadows: darkness target only, darkest wins
@@ -287,7 +292,7 @@ static float Daylight(void) {
 
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12];
+    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 4 + 8];
     SDL_zeroa(params);
     params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
     params[9] = (float)s_nbFlames;
@@ -327,12 +332,14 @@ static void PushCompositeParams(void) {
     }
     /* Sun rays through the frame's bodies: the sun, the projection that turns a
        pixel and its distance back into a scene point, the target's scale. */
-    if (s_rayScene && GpuObjSunlight) {
+    if (s_rayScene) {
         float *rt = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12;
+        const float sunUp = GpuObjSunDir[0] * GpuObjUpDir[0] + GpuObjSunDir[1] * GpuObjUpDir[1] +
+                            GpuObjSunDir[2] * GpuObjUpDir[2];
         rt[0] = GpuObjSunDir[0];
         rt[1] = GpuObjSunDir[1];
         rt[2] = GpuObjSunDir[2];
-        rt[3] = 0.2f + 0.4f * Daylight();
+        rt[3] = (GpuObjSunlight && sunUp > 0.05f) ? 0.2f + 0.4f * Daylight() : 0.0f;
         rt[4] = GpuObjProj[0];
         rt[5] = GpuObjProj[1];
         rt[6] = GpuObjProj[2];
@@ -341,6 +348,11 @@ static void PushCompositeParams(void) {
         rt[9] = (float)s_targetH / (float)ModeDesiredY;
         rt[10] = 30.0f;
         rt[11] = 40000.0f;
+        /* Lights: count and the clearance kept around each (its lamp's frame). */
+        rt[12] = GpuObjLightsEnabled ? (float)s_nbRtLights : 0.0f;
+        rt[13] = 450.0f;
+        memcpy(rt + 16, s_rtLights, sizeof(float) * 4 * RT_MAX_LIGHTS);
+        memcpy(rt + 16 + RT_MAX_LIGHTS * 4, s_rtWeights, sizeof(float) * RT_MAX_LIGHTS);
     }
     if (!SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params))) {
         Log_Warn("[GPU] Unable to update composite uniforms: %s", SDL_GetError());
@@ -687,12 +699,13 @@ static void ReleasePipeline(void) {
 }
 
 /* Uploads size bytes at the start of the transfer buffer into a texture region. */
-/* The live bodies' triangles into the hierarchy sun rays are traced through:
-   not the terrain, sky or sea (their own ground), bricks, or sphere impostors. */
+/* The live bodies' and terrain's triangles into the hierarchy shadow rays are
+   traced through: not the sky or sea, bricks, sphere impostors, or lamp glass
+   (the light shines from inside it). */
 static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
     static float tris[GPUBVH_MAX_TRIS * 9];
     U32 n = 0;
-    const S32 skipFlags = GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_SKY;
+    const S32 skipFlags = GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_SKY | GPUOBJ_FLAG_EMISSIVE;
     for (U32 d = 0; d < count && n < GPUBVH_MAX_TRIS; d++) {
         const T_GPUOBJ_VERTEX *v = GpuObjVerts + draws[d]->First;
         for (U32 i = 0; i + 2 < draws[d]->Count && n < GPUBVH_MAX_TRIS; i += 3) {
@@ -1024,6 +1037,35 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         }
     }
     lights[GPUOBJ_MAX_LIGHTS * 8] = (float)nbLights;
+    /* The composite's shadow rays aim at the lights nearest to the camera. */
+    s_nbRtLights = 0;
+    for (U32 l = 0; l < nbLights; l++) {
+        const float *pos = lights + l * 4;
+        const float *colour = lights + GPUOBJ_MAX_LIGHTS * 4 + l * 4;
+        const float d = pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2];
+        U32 slot = s_nbRtLights;
+        if (s_nbRtLights == RT_MAX_LIGHTS) {
+            /* Replace the farthest kept, if this one is nearer. */
+            U32 far = 0;
+            float farD = -1.0f;
+            for (U32 k = 0; k < RT_MAX_LIGHTS; k++) {
+                const float dk = s_rtLights[k][0] * s_rtLights[k][0] + s_rtLights[k][1] * s_rtLights[k][1] +
+                                 s_rtLights[k][2] * s_rtLights[k][2];
+                if (dk > farD) {
+                    farD = dk;
+                    far = k;
+                }
+            }
+            if (d >= farD) {
+                continue;
+            }
+            slot = far;
+        } else {
+            s_nbRtLights++;
+        }
+        memcpy(s_rtLights[slot], pos, sizeof(s_rtLights[slot]));
+        s_rtWeights[slot] = colour[3] * (0.3f * colour[0] + 0.59f * colour[1] + 0.11f * colour[2]);
+    }
     SetSunlight(lights + GPUOBJ_MAX_LIGHTS * 8 + 4);
     SDL_PushGPUFragmentUniformData(cmd, 1, lights, sizeof(lights));
 
@@ -1325,6 +1367,10 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     Uint64 t2 = SDL_GetPerformanceCounter();
     if (count > 0) {
         RenderDraws(cmd, kept, uniforms, count);
+        if (s_rayScene) {
+            /* Now with this present's lights for the shadow rays. */
+            PushCompositeParams();
+        }
     }
     SDL_SubmitGPUCommandBuffer(cmd);
     Uint64 t3 = SDL_GetPerformanceCounter();
