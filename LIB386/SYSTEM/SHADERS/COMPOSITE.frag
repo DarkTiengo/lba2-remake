@@ -1011,26 +1011,46 @@ vec3 SpaceSky(vec3 w) {
     float dust = SkyFbm(vec2(atan(w.z, w.x) * 3.0, w.y * 6.0) + 7.0);
     c += vec3(0.1, 0.1, 0.14) * band * (0.4 + 0.8 * dust);
     c += Stars(w, 0.012 + 0.02 * band, 0.0) * 1.3;
-    /* Twinsun. */
+    /* Twinsun: a sun over each pole warms the two hemispheres (oceans and
+       islands), and between them the equator is a frozen, mountainous band. */
     vec3 planet = normalize(skyPlanet.xyz);
     float radius = skyPlanet.w;
     float cosA = dot(w, planet);
-    float d = sqrt(max(1.0 - cosA * cosA, 0.0));
-    if (cosA > 0.0 && d < radius) {
-        /* The disc as a sphere: its normal from where the ray crosses it. */
-        vec2 local = vec2(dot(w, normalize(cross(planet, vec3(0.0, 1.0, 0.0)))), dot(w, normalize(cross(cross(planet, vec3(0.0, 1.0, 0.0)), planet))));
-        vec2 q = local / radius;
-        vec3 n = vec3(q, sqrt(max(1.0 - dot(q, q), 0.0)));
-        vec3 sunDir = normalize(vec3(0.75, 0.25, 0.6));
-        float lit = smoothstep(-0.1, 0.4, dot(n, sunDir));
-        float land = SkyFbm(q * 3.0 + 1.3);
-        vec3 surface = mix(vec3(0.08, 0.25, 0.55), vec3(0.28, 0.45, 0.2), smoothstep(0.52, 0.6, land));
-        surface = mix(surface, vec3(0.95), smoothstep(0.62, 0.8, SkyFbm(q * 5.0 + 4.0)) * 0.8);
-        vec3 disc = surface * (0.04 + lit) + vec3(0.3, 0.55, 1.0) * pow(1.0 - n.z, 3.0) * lit * 0.8;
-        c = mix(c, disc, smoothstep(radius, radius * 0.985, d));
+    vec3 right = normalize(cross(planet, vec3(0.0, 1.0, 0.0)));
+    vec3 vup = cross(right, planet);
+    vec2 q = vec2(dot(w, right), dot(w, vup)) / radius;
+    /* The poles' poles, a little tilted and toward us, in (right, up, us). */
+    vec3 poles = normalize(vec3(0.62, 0.72, 0.3));
+    float front = step(0.0, cosA);
+    float d = length(q);
+    if (cosA > 0.0 && d < 1.0) {
+        /* The disc as a sphere. */
+        vec3 n = vec3(q, sqrt(max(1.0 - d * d, 0.0)));
+        float lat = dot(n, poles);
+        /* Longitude-like coordinates for the noise, turning with the planet. */
+        vec3 e1 = normalize(cross(poles, vec3(0.0, 0.0, 1.0)));
+        vec3 e2 = cross(poles, e1);
+        vec2 geo = vec2(atan(dot(n, e2), dot(n, e1)) * 1.6 + skySun.w * 0.004, lat * 3.0);
+        float land = SkyFbm(geo * 2.2 + 1.3);
+        vec3 ocean = vec3(0.07, 0.24, 0.55);
+        vec3 ground = mix(vec3(0.3, 0.5, 0.2), vec3(0.72, 0.6, 0.38), smoothstep(0.6, 0.72, land));
+        vec3 surface = mix(ocean, ground, smoothstep(0.55, 0.6, land));
+        /* The frozen equator: ice and snowy ridges, ragged at its edges. */
+        float ridge = SkyFbm(geo * 5.0 + 9.0);
+        float ice = 1.0 - smoothstep(0.2, 0.36, abs(lat) + (ridge - 0.5) * 0.18);
+        vec3 snow = mix(vec3(0.72, 0.8, 0.9), vec3(0.97, 0.98, 1.0), ridge);
+        surface = mix(surface, snow, ice);
+        /* Clouds over the warm hemispheres. */
+        surface = mix(surface, vec3(0.96), smoothstep(0.62, 0.8, SkyFbm(geo * 3.5 + 4.0)) * 0.7 * (1.0 - ice));
+        /* Lit from both poles: the equator gets the least light. */
+        vec3 s1 = normalize(poles + vec3(0.0, 0.0, 0.5));
+        vec3 s2 = normalize(-poles + vec3(0.0, 0.0, 0.5));
+        float lit = max(dot(n, s1), 0.0) + max(dot(n, s2), 0.0);
+        vec3 disc = surface * (0.12 + 0.95 * lit) + vec3(0.3, 0.55, 1.0) * pow(1.0 - n.z, 3.0) * 0.5;
+        c = mix(c, disc, smoothstep(1.0, 0.985, d));
     }
     /* Its atmosphere glowing past the limb. */
-    c += vec3(0.25, 0.45, 1.0) * exp(-max(d - radius, 0.0) / 0.012) * step(0.0, cosA) * 0.35;
+    c += vec3(0.25, 0.45, 1.0) * exp(-max(d - 1.0, 0.0) * radius / 0.012) * front * 0.35;
     return c;
 }
 

@@ -1,5 +1,6 @@
 #include <SVGA/GPUSKY.H>
 
+#include <SVGA/CLIP.H>
 #include <SVGA/GPUOBJ.H>
 
 #include <math.h>
@@ -60,7 +61,7 @@ float GpuSky_Cover(void) {
 
 static S32 s_cube = -1;
 static S32 s_planetCube = -2;
-static float s_planet[4] = {0.0f, 0.1f, -1.0f, 0.16f};
+static float s_planet[4] = {0.0f, 0.2f, -1.0f, 0.26f};
 
 void GpuSky_SetCube(S32 cube) {
     s_cube = cube;
@@ -68,19 +69,26 @@ void GpuSky_SetCube(S32 cube) {
 
 void GpuSky_GetPlanet(float *out4) {
     if (s_planetCube != s_cube) {
-        /* The view's forward in the world's frame, levelled, turned aside. */
-        float fx = -GpuObjWorldX[2], fz = -GpuObjWorldZ[2];
-        const float l = sqrtf(fx * fx + fz * fz);
-        if (l > 1e-4f) {
-            fx /= l;
-            fz /= l;
-            const float a = 0.3f;
-            const float rx = fx * cosf(a) - fz * sinf(a);
-            const float rz = fx * sinf(a) + fz * cosf(a);
-            const float el = 0.05f;
-            s_planet[0] = rx * cosf(el);
-            s_planet[1] = sinf(el);
-            s_planet[2] = rz * cosf(el);
+        /* Where the view shows it: high in the scene's window, right of its
+           middle, turned into the world's frame, and kept above the horizon. */
+        const float sx = (float)ClipWindowXMin + 0.7f * (float)(ClipWindowXMax - ClipWindowXMin);
+        /* Close to the moon: a large disc, its top just inside the window. */
+        const float sy = (float)ClipWindowYMin + s_planet[3] * 0.75f * GpuObjProj[2] * fabsf(GpuObjProj[3]);
+        if (GpuObjProj[2] > 0.0f) {
+            float v[3] = {(sx - GpuObjProj[0]) / GpuObjProj[2], (sy - GpuObjProj[1]) / (GpuObjProj[2] * GpuObjProj[3]),
+                          -1.0f};
+            const float lv = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            float w[3];
+            w[0] = (v[0] * GpuObjWorldX[0] + v[1] * GpuObjWorldX[1] + v[2] * GpuObjWorldX[2]) / lv;
+            w[1] = (v[0] * GpuObjUpDir[0] + v[1] * GpuObjUpDir[1] + v[2] * GpuObjUpDir[2]) / lv;
+            w[2] = (v[0] * GpuObjWorldZ[0] + v[1] * GpuObjWorldZ[1] + v[2] * GpuObjWorldZ[2]) / lv;
+            if (w[1] < 0.02f) {
+                w[1] = 0.02f;
+            }
+            const float lw = sqrtf(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+            s_planet[0] = w[0] / lw;
+            s_planet[1] = w[1] / lw;
+            s_planet[2] = w[2] / lw;
             s_planetCube = s_cube;
         }
     }
