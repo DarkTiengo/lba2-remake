@@ -547,6 +547,21 @@ void GpuObj_RefreshTags(S32 x0, S32 y0, S32 x1, S32 y1) {
     }
 }
 
+void GpuObj_UntagBox(S32 x0, S32 y0, S32 x1, S32 y1) {
+    T_PLANE *plane = PlaneOf(Log, FALSE);
+    if (plane == NULL || !plane->AnyTag) {
+        return;
+    }
+    x1++;
+    y1++;
+    if (!ClipBoxToPlanes(&x0, &y0, &x1, &y1)) {
+        return;
+    }
+    for (S32 y = y0; y < y1; y++) {
+        memset(plane->Tag + (size_t)y * s_planeW + x0, 0, (size_t)(x1 - x0) * sizeof(U32));
+    }
+}
+
 /* Tags every pixel that changed since the snapshot with id, 0 for a body the
    GPU could not take. */
 static void Tag(U32 id) {

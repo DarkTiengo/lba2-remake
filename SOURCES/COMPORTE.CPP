@@ -8,12 +8,17 @@
 
 #include "C_EXTERN.H"
 
+#include "GAMEMENU.H" /* Menu_IsModern */
 #include "INPUT.H"
 #include "UI_LAYOUT.H" /* UI_VCENTER_OFS */
 
 #include <SVGA/SCREEN.H>
 #include <SVGA/VIDEO.H>
+#include <SVGA/GPUOBJ.H>
 #include <SYSTEM/KEYBOARD_KEYS.H>
+#include <SYSTEM/UIOVERLAY.H>
+#include <math.h>
+#include <string.h>
 
 #include <stdint.h>
 #include "AMBIANCE.H"
@@ -169,6 +174,139 @@ S32 GetNextMenuComp() {
 }
 
 /*══════════════════════════════════════════════════════════════════════════*/
+// --- Modern behaviour menu ---------------------------------------------------
+// With the modern menu style the panel, the tiles, the behaviour's name and the
+// status bar are overlay cards. The tiles stay open: the turning Twinsens are
+// drawn in the frame beneath, like the status icons.
+
+static S32 s_compModern = FALSE;
+
+static void TileBox(S32 num, S32 *x0, S32 *y0, S32 *x1, S32 *y1) {
+    *x0 = CTRL_X0 + DebComportement + num * 110 - 1;
+    *y0 = CTRL_Y0 + 10 - 1;
+    *x1 = *x0 + 99 + 1;
+    *y1 = *y0 + 119 + 1;
+}
+
+static T_UIOVERLAY_CARD Card(float radius, U32 top, U32 bottom, U32 border, float borderWidth) {
+    T_UIOVERLAY_CARD card;
+    memset(&card, 0, sizeof(card));
+    card.Radius = radius;
+    card.FillTop = top;
+    card.FillBottom = bottom;
+    card.Border = border;
+    card.BorderWidth = borderWidth;
+    return card;
+}
+
+/* A rounded bar: its track, then the filled part in a vertical gradient. */
+static void Bar(float x0, float y0, float x1, float y1, float fill, U32 top, U32 bottom) {
+    T_UIOVERLAY_CARD track = Card((y1 - y0) * 0.5f, 0xB0000000u, 0x90202630u, 0x40FFFFFFu, 1.0f);
+    UiOverlay_Card(x0, y0, x1, y1, &track);
+    if (fill > 0.0f) {
+        if (fill > 1.0f) {
+            fill = 1.0f;
+        }
+        T_UIOVERLAY_CARD bar = Card((y1 - y0) * 0.5f - 1.0f, top, bottom, 0, 0.0f);
+        bar.Glow = (top & 0x00FFFFFFu) | 0x50000000u;
+        bar.GlowSize = 6.0f;
+        UiOverlay_Card(x0 + 1.5f, y0 + 1.5f, x0 + 1.5f + (x1 - x0 - 3.0f) * fill, y1 - 1.5f, &bar);
+    }
+}
+
+static void CompModern_Publish(void) {
+    S32 n, x0, y0, x1, y1;
+    const T_MENU_COMP *menu = &ListMenuComp[ComportementMenu];
+    const float pulse = 0.5f + 0.5f * (float)sin((double)TimerRefHR / 1000.0 * 3.0);
+    T_UIOVERLAY_CARD card;
+    char text[256];
+
+    if (!s_compModern) {
+        return;
+    }
+    UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+
+    /* The panel: the frame beneath is already shaded. */
+    card = Card(14.0f, 0x30101828u, 0x50060A14u, 0x70A8D0FFu, 1.5f);
+    card.Glow = 0x305AB4FFu;
+    card.GlowSize = 12.0f;
+    UiOverlay_Card((float)CTRL_X0, (float)CTRL_Y0, (float)CTRL_X1, (float)CTRL_Y1, &card);
+
+    /* The tiles, open in the middle for the turning Twinsens. */
+    for (n = 0; n < menu->NbComps; n++) {
+        TileBox(n, &x0, &y0, &x1, &y1);
+        card = Card(10.0f, 0x20FFFFFFu, 0x00FFFFFFu, 0x34FFFFFFu, 1.0f);
+        if (menu->Comps[n] == Comportement) {
+            card.Border = 0xFF86CCFFu;
+            card.BorderWidth = 2.5f;
+            card.Glow = ((U32)(120.0f + 80.0f * pulse) << 24) | 0x5AB4FFu;
+            card.GlowSize = 14.0f;
+            card.FillTop = 0x405AB4FFu;
+            card.FillBottom = 0x105AB4FFu;
+        }
+        UiOverlay_Card((float)x0, (float)y0, (float)x1, (float)y1, &card);
+    }
+
+    /* The behaviour's name, with chevrons when Up/Down reach other sets. */
+    x0 = CTRL_X0 + 10;
+    y0 = CTRL_Y0 + 139;
+    x1 = CTRL_X1 - 10;
+    y1 = CTRL_Y0 + 139 + 40;
+    card = Card(10.0f, 0xD0182236u, 0xE00C1220u, 0x70A8D0FFu, 1.5f);
+    card.Shadow = 0x80000000u;
+    card.ShadowY = 4.0f;
+    card.ShadowBlur = 12.0f;
+    UiOverlay_Card((float)x0, (float)y0, (float)x1, (float)y1, &card);
+    GetMultiText(Comportement + START_TEXT_COMPORTEMENT, text);
+    {
+        const float cx = (float)(x0 + x1) * 0.5f;
+        const float cy = (float)(y0 + y1) * 0.5f;
+        const float maxW = (float)(x1 - x0) - 70.0f;
+        UiOverlay_Text(cx + 1.0f, cy + 2.0f, text, 26.0f, 0x90000000u, UIOVERLAY_ALIGN_CENTER, TRUE, maxW);
+        UiOverlay_Text(cx, cy, text, 26.0f, 0xFFFFF0D0u, UIOVERLAY_ALIGN_CENTER, TRUE, maxW);
+        if (GetPreviousMenuComp() != ComportementMenu) {
+            UiOverlay_Chevron((float)x1 - 22.0f, cy - 7.0f, 10.0f, -2, 0xD0A8D0FFu);
+        }
+        if (GetNextMenuComp() != ComportementMenu) {
+            UiOverlay_Chevron((float)x1 - 22.0f, cy + 7.0f, 10.0f, 2, 0xD0A8D0FFu);
+        }
+    }
+
+    /* The status bar: life, magic, coins and keys over the frame's icons. */
+    x0 = CTRL_X0;
+    y0 = CTRL_Y1 + 10;
+    card = Card(12.0f, 0x28182236u, 0x400C1220u, 0x70A8D0FFu, 1.5f);
+    card.Glow = 0x205AB4FFu;
+    card.GlowSize = 10.0f;
+    UiOverlay_Card((float)x0, (float)y0, (float)(x0 + 450), (float)(y0 + 80), &card);
+    {
+        S32 life = ListObjet[NUM_PERSO].LifePoint;
+        if (life > MAX_LIFE_POINTS) {
+            life = MAX_LIFE_POINTS;
+        }
+        Bar((float)(x0 + 25), (float)(y0 + 10), (float)(x0 + 325), (float)(y0 + 25),
+            (float)life / (float)MAX_LIFE_POINTS, 0xFFFF7A6Au, 0xFFC0282Au);
+        if (MagicLevel) {
+            const float cap = (float)(x0 + 25) + 300.0f * (float)(MagicLevel * 10) / 40.0f;
+            Bar((float)(x0 + 25), (float)(y0 + 35), cap, (float)(y0 + 50), (float)MagicPoint / (float)(MagicLevel * 20),
+                0xFF7AC8FFu, 0xFF2A6AD8u);
+        }
+        UiOverlay_Text((float)(x0 + 372), (float)(y0 + 20), Itoa(Planet >= 2 ? NbZlitosPieces : NbGoldPieces), 24.0f,
+                       0xFFFFE08Au, UIOVERLAY_ALIGN_LEFT, TRUE, 70.0f);
+        UiOverlay_Text((float)(x0 + 372), (float)(y0 + 57), Itoa(NbLittleKeys), 24.0f, 0xFFE8F0FFu,
+                       UIOVERLAY_ALIGN_LEFT, TRUE, 70.0f);
+    }
+    BoxStaticAdd(0, 0, 1, 1);
+}
+
+static void CompModern_Close(void) {
+    if (s_compModern) {
+        UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+    }
+    s_compModern = FALSE;
+}
+
+/*══════════════════════════════════════════════════════════════════════════*/
 void DrawObjComportement(S32 x0, S32 y0, S32 x1, S32 y1,
                          S32 y3d, S32 betaflag,
                          T_OBJ_3D *ptrobj3d) {
@@ -204,7 +342,7 @@ void DrawComportement(S32 num, S32 comportement, S32 beta, S32 copyblock) {
 
     ObjectSetInterAnim(&InvObjTwinsen[comportement]);
 
-    if (!copyblock) /* init */
+    if (!copyblock && !s_compModern) /* init */
     {
         // cadre des comportements
         DrawCadre(x0, y0, x1, y1, ALL_ANGLES | BACKUP_ANGLES);
@@ -217,7 +355,13 @@ void DrawComportement(S32 num, S32 comportement, S32 beta, S32 copyblock) {
     MemoClip();
     UnsetClip();
 
-    if (comportement != Comportement) {
+    if (s_compModern) {
+        /* Cleared for the next turn of the Twinsen; the overlay draws the rest. */
+        Box(x0 + 1, y0 + 1, x1 - 1, y1 - 1, 0);
+        if (comportement == Comportement) {
+            Box(CTRL_X0 + 11, CTRL_Y0 + 140, CTRL_X1 - 11, CTRL_Y0 + 139 + 39, 0);
+        }
+    } else if (comportement != Comportement) {
         DrawCadreBox(x0, y0, x1, y1, 0);
     } else {
         U32 arrows = 0;
@@ -252,6 +396,7 @@ void DrawComportement(S32 num, S32 comportement, S32 beta, S32 copyblock) {
     if (copyblock) {
         BoxStaticAdd(x0, y0, x1, y1);
         BoxStaticAdd(CTRL_X0 + 10, CTRL_Y0 + 139, CTRL_X1 - 10, CTRL_Y0 + 139 + 40);
+        CompModern_Publish();
         BoxUpdate();
     }
 
@@ -267,6 +412,32 @@ void DrawInfoMenu(S32 x0, S32 y0) {
     S32 lifepoint;
 
     UnsetClip();
+
+    if (s_compModern) {
+        /* The overlay draws the card, the bars and the numbers; the frame keeps
+           the icons. */
+        Box(x0, y0, x0 + 450, y0 + 80, 0);
+        GpuObj_UntagBox(x0, y0, x0 + 450, y0 + 80);
+        ScaleFactorSprite = DEF_SCALE_FACTOR;
+        PtrAffGraph(x0 + 9, y0 + 13, SPRITE_COEUR);
+        PtrAffGraph(x0 + 9, y0 + 36, SPRITE_MAGIE);
+        PtrAffGraph(x0 + 340, y0 + 15, SPRITE_PIECE);
+        PtrAffGraph(x0 + 340, y0 + 55, SPRITE_CLE);
+#ifdef LBA_EDITOR
+        for (l = 0; l < NbCloverBox; l++) {
+            x1 = RegleTrois(x0 + 25, x0 + 325, MAX_CLOVER_BOX, l);
+            PtrAffGraph(x1, y0 + 58, l < ListVarGame[FLAG_CLOVER].Value ? SPRITE_FULL_CLOVER_BOX : SPRITE_CLOVER_BOX);
+        }
+#else
+        for (l = 0; l < NbCloverBox; l++) {
+            x1 = RegleTrois(x0 + 25, x0 + 325, MAX_CLOVER_BOX, l);
+            PtrAffGraph(x1, y0 + 58, l < ListVarGame[FLAG_CLOVER] ? SPRITE_FULL_CLOVER_BOX : SPRITE_CLOVER_BOX);
+        }
+#endif
+        BoxStaticAdd(x0, y0, x0 + 450, y0 + 80);
+        BoxUpdate();
+        return;
+    }
 
     BackupAngles(x0, y0, x0 + 450, y0 + 80);
     DrawCadre(x0, y0, x0 + 450, y0 + 80, 0);
@@ -372,9 +543,15 @@ void DrawMenuComportement(S32 beta) {
     SetLightVector(AlphaLight, BetaLight, 0);
 
     BackupAngles(CTRL_X0, CTRL_Y0, CTRL_X1, CTRL_Y1);
-    DrawCadre(CTRL_X0, CTRL_Y0, CTRL_X1, CTRL_Y1, ALL_ANGLES);
-    ShadeBoxBlk(CTRL_X0 + 1, CTRL_Y0 + 1, CTRL_X1 - 1, CTRL_Y1 - 1, 8);
+    if (!s_compModern) {
+        DrawCadre(CTRL_X0, CTRL_Y0, CTRL_X1, CTRL_Y1, ALL_ANGLES);
+    }
+    /* The modern panel is dark glass: the scene barely shows through. */
+    ShadeBoxBlk(CTRL_X0 + 1, CTRL_Y0 + 1, CTRL_X1 - 1, CTRL_Y1 - 1, s_compModern ? 13 : 8);
     RestoreAngles(CTRL_X0, CTRL_Y0, CTRL_X1, CTRL_Y1);
+    /* Shading leaves the darkest pixels as they were: with the GPU renderer
+       they would still show the scene's colours through the panel. */
+    GpuObj_UntagBox(CTRL_X0, CTRL_Y0, CTRL_X1, CTRL_Y1);
 
     for (n = 0; n < ptrmcomp->NbComps; n++) {
         if (ptrmcomp->Comps[n] == Comportement)
@@ -386,6 +563,7 @@ void DrawMenuComportement(S32 beta) {
     DrawInfoMenu(CTRL_X0, CTRL_Y1 + 10);
 
     BoxStaticAdd(CTRL_X0, CTRL_Y0, CTRL_X1, CTRL_Y1);
+    CompModern_Publish();
     BoxUpdate();
 }
 
@@ -507,6 +685,8 @@ void MenuComportement(S32 affone) {
 
     InitMove(&RealRot, -1024);
 
+    s_compModern = Menu_IsModern();
+
     BackupScreen(TRUE); // Screen => ScreenAux
 
     memoisland = Island;
@@ -614,6 +794,8 @@ void MenuComportement(S32 affone) {
         }
         DrawComportement(IndexComportement, Comportement, -1, TRUE);
     }
+
+    CompModern_Close();
 
     InitWaitNoInput(I_COMPORTEMENT | I_RETURN | I_MENUS); // fait dans la boucle du jeu
     InitWaitNoKey();

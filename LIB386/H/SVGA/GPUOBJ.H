@@ -222,6 +222,12 @@ void GpuObj_OnCopyMask(const void *src, S32 x0, S32 y0, S32 x1, S32 y1);
  *  keep their tags and take the new palette indices as what they show. */
 void GpuObj_RefreshTags(S32 x0, S32 y0, S32 x1, S32 y1);
 
+/** The box [x0, x1] x [y0, y1] of the frame being drawn shows its software
+ *  pixels from now on, whatever GPU draw owned them: a modal panel drawn over
+ *  the scene (its fills and shading can leave pixels unchanged, which would
+ *  keep the scene's GPU colour over them). Later draws tag it again. */
+void GpuObj_UntagBox(S32 x0, S32 y0, S32 x1, S32 y1);
+
 // --- Pixel copies between frame buffers --------------------------------------
 /** Box [x0,x1) x [y0,y1) copied from src to dst at the same place. */
 void GpuObj_OnCopyArea(const void *dst, const void *src, S32 x0, S32 y0, S32 x1, S32 y1);

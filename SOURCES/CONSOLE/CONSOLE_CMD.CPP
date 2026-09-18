@@ -2225,6 +2225,7 @@ static bool parse_input_flags(const char *s, U32 *out) {
         {"esquive", I_ESQUIVE},
         {"inventory", I_INVENTORY},
         {"holomap", I_HOLOMAP},
+        {"behaviour", I_COMPORTEMENT},
     };
     char *end = NULL;
     long v = strtol(s, &end, 0);

@@ -1,6 +1,5 @@
 #include <SVGA/GPUBVH.H>
 
-#include <algorithm>
 #include <math.h>
 #include <string.h>
 
@@ -18,12 +17,40 @@ static U32 s_order[GPUBVH_MAX_TRIS];
 
 #define LEAF_TRIS 4
 
-struct CentreLess {
-    int Axis;
-    bool operator()(U32 a, U32 b) const {
-        return s_centre[a][Axis] < s_centre[b][Axis];
+/* Reorders order[0..count) so the element at k is the one a sort by centroid
+   on axis would put there, smaller ones before it, larger after (quickselect). */
+static void SelectNth(U32 *order, U32 count, U32 k, int axis) {
+    U32 lo = 0, hi = count - 1;
+    while (lo < hi) {
+        const float pivot = s_centre[order[(lo + hi) / 2]][axis];
+        U32 i = lo, j = hi;
+        while (i <= j) {
+            while (s_centre[order[i]][axis] < pivot) {
+                i++;
+            }
+            while (s_centre[order[j]][axis] > pivot) {
+                j--;
+            }
+            if (i <= j) {
+                const U32 t = order[i];
+                order[i] = order[j];
+                order[j] = t;
+                i++;
+                if (j == 0) {
+                    break;
+                }
+                j--;
+            }
+        }
+        if (k <= j) {
+            hi = j;
+        } else if (k >= i) {
+            lo = i;
+        } else {
+            return;
+        }
     }
-};
+}
 
 typedef struct {
     U32 Node;
@@ -96,16 +123,15 @@ void GpuBvh_Build(const float *triangles, U32 count) {
                 hi[k] = s_centre[t][k] > hi[k] ? s_centre[t][k] : hi[k];
             }
         }
-        CentreLess less;
-        less.Axis = 0;
-        if (hi[1] - lo[1] > hi[less.Axis] - lo[less.Axis]) {
-            less.Axis = 1;
+        int axis = 0;
+        if (hi[1] - lo[1] > hi[axis] - lo[axis]) {
+            axis = 1;
         }
-        if (hi[2] - lo[2] > hi[less.Axis] - lo[less.Axis]) {
-            less.Axis = 2;
+        if (hi[2] - lo[2] > hi[axis] - lo[axis]) {
+            axis = 2;
         }
         const U32 half = task.Count / 2;
-        std::nth_element(s_order + task.First, s_order + task.First + half, s_order + task.First + task.Count, less);
+        SelectNth(s_order + task.First, task.Count, half, axis);
 
         const U32 left = GpuBvhNbNodes;
         GpuBvhNbNodes += 2;
