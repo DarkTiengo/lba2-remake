@@ -1,4 +1,5 @@
 #include "../AUDIO_CONSOLE.H"
+#include <SVGA/GPUSTORM.H>
 #include <SYSTEM/INPUT_FLOW.H>
 #include "CONSOLE.H"
 #include "CONSOLE_STATE.H"
@@ -1887,6 +1888,17 @@ static void cmd_flags(int argc, const char *argv[]) {
    3=Discreet 4=Protopack ...). Routes through SetComportement so the weapon/body side-effects match a
    real in-game switch. Lets a headless test reach the melee (Aggressive), jump (Sportif) and hide
    (Discreet) input paths without a save fixture in that behaviour. */
+static void cmd_lightning(int argc, const char *argv[]) {
+    (void)argc;
+    (void)argv;
+    if (!GpuStorm_Modern()) {
+        Console_Print("lightning: needs the GPU renderer with gfx_storm on");
+        return;
+    }
+    GpuStorm_Strike();
+    Console_Print("lightning: strike at the next scene frame");
+}
+
 static void cmd_behaviour(int argc, const char *argv[]) {
     if (argc >= 2) {
         S32 n = atoi(argv[1]);
@@ -2536,6 +2548,8 @@ void Console_RegisterAll(void) {
                               "'actor <n>' jumps onto actor n. Within-cube only.");
     Console_RegisterCommandEx("magiclevel", cmd_magic, "Read/set hero magic level and points",
                               "magiclevel [0..4] [points]", "Level picks the magic ball's sprite and force.");
+    Console_RegisterCommandEx("lightning", cmd_lightning, "Strike a lightning bolt (GPU renderer, gfx_storm)",
+                              "lightning", "Visual only: the bolt, its flash and the scene it lights.");
     Console_RegisterCommandEx("behaviour", cmd_behaviour, "Read/set hero behaviour (comportement)",
                               "behaviour [0..13]", "0=Normal 1=Sportif 2=Aggressive 3=Discreet 4=Protopack. Routes through SetComportement.");
     Console_RegisterCommandEx("weapon", cmd_weapon, "Read/set hero active weapon",

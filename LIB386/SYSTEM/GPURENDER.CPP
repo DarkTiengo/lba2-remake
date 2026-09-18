@@ -4,6 +4,7 @@
 #include <3D/PROJ.H>
 #include <SVGA/GPUOBJ.H>
 #include <SVGA/GPUBVH.H>
+#include <SVGA/GPUSTORM.H>
 #include <SVGA/GPUWATER.H>
 #include <SVGA/SCREEN.H>
 #include <SVGA/VIDEO.H>
@@ -292,7 +293,8 @@ static float Daylight(void) {
 
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 4 + 8];
+    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 4 + 8 +
+                 GPUSTORM_UNIFORM_FLOATS];
     SDL_zeroa(params);
     params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
     params[9] = (float)s_nbFlames;
@@ -354,6 +356,20 @@ static void PushCompositeParams(void) {
         memcpy(rt + 16, s_rtLights, sizeof(float) * 4 * RT_MAX_LIGHTS);
         memcpy(rt + 16 + RT_MAX_LIGHTS * 4, s_rtWeights, sizeof(float) * RT_MAX_LIGHTS);
     }
+    /* Rain, lightning bolts and their flash: the storm needs the projection
+       even when no ray is traced. */
+    if (!s_rayScene && GpuStorm_Active() && GpuObjSunExterior) {
+        float *rt = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12;
+        rt[4] = GpuObjProj[0];
+        rt[5] = GpuObjProj[1];
+        rt[6] = GpuObjProj[2];
+        rt[7] = GpuObjProj[3];
+        rt[8] = (float)s_targetW / (float)ModeDesiredX;
+        rt[9] = (float)s_targetH / (float)ModeDesiredY;
+    }
+    GpuStorm_GetUniforms(params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12 + 12 + 4 +
+                             RT_MAX_LIGHTS * 4 + 8,
+                         (float)ModeDesiredX, (float)ModeDesiredY);
     if (!SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params))) {
         Log_Warn("[GPU] Unable to update composite uniforms: %s", SDL_GetError());
     }
@@ -1272,7 +1288,7 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
        upscaled: the pixel art filter runs there. */
     const bool boxEmpty = box[2] <= box[0] || box[3] <= box[1];
     const bool lastEmpty = s_tagBox[2] <= s_tagBox[0] || s_tagBox[3] <= s_tagBox[1];
-    if (count == 0 && !s_upscale && lastEmpty && s_tagsCleared) {
+    if (count == 0 && !s_upscale && lastEmpty && s_tagsCleared && !GpuStorm_Active()) {
         return false;
     }
 

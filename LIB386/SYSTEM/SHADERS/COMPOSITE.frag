@@ -51,6 +51,11 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 rtLightCfg;       // x lights to trace toward, y clearance kept around each
     vec4 rtLightPos[8];    // scene position, radius
     vec4 rtLightWeight[2]; // intensity times luma, four a vec4
+    vec4 stormRain;  // x rain falls in view, y seconds, z density, w flash brightness
+    vec4 stormBolt;  // x bolt and y horizon in frame uv, z seed, w bolt visibility
+    vec4 stormLight; // xyz toward the flash in scene space, w exterior
+    vec4 stormUp;    // xyz world up, w seconds since the strike
+    vec4 stormView;  // the scene's window in frame uv (x0, y0, x1, y1): cinema bars outside
 };
 
 // --- Flames ----------------------------------------------------------------------
@@ -658,6 +663,179 @@ vec3 WaterSpray(vec2 uv) {
 }
 
 // -----------------------------------------------------------------------------
+// --- Storm ---------------------------------------------------------------------
+float StormHash(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+/* Rain streaks over target pixel q: three layers at increasing depth, slanted
+   by the wind and blurred along their fall, each hidden behind a nearer surface
+   (d, the surface's view distance, <= 0 for the sky). s scales to 1080 lines. */
+float RainStreaks(vec2 q, float d, float s, float t) {
+    float sum = 0.0;
+    for (int i = 0; i < 3; i++) {
+        float depth = i == 0 ? 700.0 : (i == 1 ? 2200.0 : 6000.0);
+        if (d > 0.0 && d < depth) {
+            continue;
+        }
+        float cell = (i == 0 ? 34.0 : (i == 1 ? 20.0 : 12.0)) * s;
+        float speed = (i == 0 ? 2600.0 : (i == 1 ? 1800.0 : 1200.0)) * s;
+        float len = (i == 0 ? 120.0 : (i == 1 ? 66.0 : 36.0)) * s;
+        float width = (i == 0 ? 1.4 : (i == 1 ? 1.0 : 0.8)) * s;
+        float period = (i == 0 ? 560.0 : (i == 1 ? 380.0 : 250.0)) * s;
+        float bright = i == 0 ? 0.42 : (i == 1 ? 0.3 : 0.2);
+        float x = q.x - q.y * 0.14;
+        float col = floor(x / cell);
+        float r1 = StormHash(vec2(col, float(i) * 7.1));
+        float r2 = StormHash(vec2(col * 1.7, float(i) * 3.3 + 1.0));
+        if (StormHash(vec2(col * 0.7, float(i) * 5.9 + 2.0)) > 0.9) {
+            continue;
+        }
+        float xc = (col + 0.15 + 0.7 * r2) * cell;
+        float across = 1.0 - smoothstep(width * 0.5, width * 1.5, abs(x - xc));
+        if (across <= 0.0) {
+            continue;
+        }
+        float head = mod(t * speed * (0.85 + 0.3 * r1) + r1 * period, period);
+        float v = mod(head - q.y, period);
+        float along = v < len ? 1.0 - v / len : 0.0;
+        sum += bright * across * along * along;
+    }
+    return sum;
+}
+
+/* Raindrops hitting ground turned up: rings spreading on a grid of the ground
+   plane (scene units), two drops a cell at their own pace. */
+float RainSplash(vec3 pos, vec3 n, float t) {
+    vec3 up = normalize(stormUp.xyz);
+    if (dot(n, up) < 0.75) {
+        return 0.0;
+    }
+    vec3 a = normalize(cross(up, abs(up.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 b = cross(up, a);
+    vec2 g = vec2(dot(pos, a), dot(pos, b));
+    const float CELL = 300.0;
+    vec2 cell = floor(g / CELL);
+    float sum = 0.0;
+    for (int k = 0; k < 2; k++) {
+        vec2 id = cell + vec2(float(k) * 37.0, float(k) * 11.0);
+        float r1 = StormHash(id);
+        float r2 = StormHash(id + 11.3);
+        float r3 = StormHash(id + 23.7);
+        vec2 c = (cell + 0.3 + 0.4 * vec2(r1, r2)) * CELL;
+        float period = 0.6 + 0.6 * r3;
+        float age = fract(t / period + r1 * 5.0);
+        float dist = length(g - c);
+        float radius = 8.0 + age * 80.0;
+        float fade = (1.0 - age) * (1.0 - age);
+        sum += exp(-abs(dist - radius) / 6.0) * fade * 0.55;
+        if (age < 0.12) {
+            sum += exp(-dist / 9.0) * (1.0 - age / 0.12) * 0.7;
+        }
+    }
+    return sum;
+}
+
+float SegmentDist2D(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-4), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+/* Distance from target pixel q to the bolt's main channel (x) and its branches
+   (y): a jagged line from the top of the frame down to the horizon. */
+vec2 Bolt(vec2 q, vec2 size) {
+    float seed = stormBolt.z;
+    /* Down past the horizon: the terrain hides what is below it. */
+    float bottom = size.y * 0.95;
+    const int N = 14;
+    float step = bottom / float(N);
+    vec2 pts[N + 1];
+    pts[0] = vec2(stormBolt.x * size.x, -step * 0.5);
+    for (int k = 1; k <= N; k++) {
+        float jit = (StormHash(vec2(seed, float(k))) - 0.5) * 1.1 * step;
+        pts[k] = vec2(pts[k - 1].x + jit, float(k) * step);
+    }
+    float d = 1e9;
+    for (int k = 0; k < N; k++) {
+        d = min(d, SegmentDist2D(q, pts[k], pts[k + 1]));
+    }
+    float db = 1e9;
+    for (int br = 0; br < 3; br++) {
+        int k0 = 2 + int(StormHash(vec2(seed + 5.0, float(br))) * 9.0);
+        float dir = StormHash(vec2(seed + 9.0, float(br))) < 0.5 ? -1.0 : 1.0;
+        vec2 a = pts[k0];
+        for (int j = 0; j < 4; j++) {
+            float r = StormHash(vec2(seed + float(br) * 13.0, float(j)));
+            vec2 b = a + vec2(dir * (0.3 + 0.7 * r) * step, step * (0.6 + 0.3 * r));
+            db = min(db, SegmentDist2D(q, a, b));
+            a = b;
+        }
+    }
+    return vec2(d, db);
+}
+
+/* The storm over a finished colour: the flash lighting the scene from the
+   strike (with shadows when rays are traced), the lit clouds and the bolt in
+   the sky, the rain streaks and the splashes. lit: the surface takes light;
+   scene: the pixel shows the GPU's surface (not the frame's letterbox or HUD
+   over it), so rain falls on it. */
+vec3 Storm(vec3 c, ivec2 p, bool lit, bool scene) {
+    float flash = stormRain.w;
+    bool raining = stormRain.x > 0.5;
+    if (!raining && flash < 0.001 && stormBolt.w <= 0.0) {
+        return c;
+    }
+    vec2 size = vec2(textureSize(u_objShadow, 0));
+    float s = size.y / 1080.0;
+    vec2 q = vec2(p) + 0.5;
+    float d = UnpackDistance(p);
+    bool exterior = stormLight.w > 0.5;
+    vec3 pos = vec3(0.0);
+    vec3 n = vec3(0.0, 0.0, 1.0);
+    bool surf = exterior && d > 0.0 && rtProj.z > 0.0 && SurfaceAt(p, pos, n);
+    vec3 tint = vec3(0.78, 0.86, 1.0);
+
+    if (flash > 0.001 && lit && d > 0.0) {
+        /* A room lit through its windows takes less. */
+        float gain = exterior ? 0.7 : 0.45;
+        if (surf) {
+            vec3 l = normalize(stormLight.xyz);
+            float direct = max(dot(n, l), 0.0);
+            if (direct > 0.0 && rtInfo.w > 0.0 && RayBlocked(pos + n * 6.0, l, rtInfo.z, rtInfo.w)) {
+                direct = 0.0;
+            }
+            gain = 0.3 + 1.3 * direct;
+        }
+        c *= vec3(1.0) + tint * flash * gain;
+    }
+    /* The sky, or land far enough for the strike to stand in front of it. */
+    if (exterior && (d <= 0.0 || d > 45000.0) && scene) {
+        /* Clouds lit around the strike, then the bolt itself. */
+        vec2 top = vec2(stormBolt.x * size.x, 0.0);
+        float cloud = 0.2 + 0.7 * exp(-length(q - top) / (0.35 * size.x));
+        c = Screen(c, vec3(0.6, 0.68, 0.88) * flash * cloud);
+        if (stormBolt.w > 0.0) {
+            vec2 bd = Bolt(q, size);
+            float core = exp(-bd.x / (2.0 * s)) + 0.7 * exp(-bd.y / (1.3 * s));
+            float halo = 0.9 * exp(-bd.x / (26.0 * s)) + 0.4 * exp(-bd.y / (14.0 * s));
+            float vis = stormBolt.w * clamp(flash * 1.4, 0.25, 1.0);
+            c = Screen(c, (vec3(1.0) * min(core, 1.0) + vec3(0.55, 0.65, 1.0) * halo) * vis);
+        }
+    }
+    if (raining && scene) {
+        float streak = RainStreaks(q, d, s, stormRain.y) * stormRain.z;
+        vec3 drop = vec3(0.62, 0.68, 0.78) * (1.0 + 2.5 * flash);
+        c = Screen(c, drop * streak);
+        if (surf && d < 12000.0) {
+            float splash = RainSplash(pos, n, stormRain.y) * (1.0 - smoothstep(5000.0, 12000.0, d));
+            c = Screen(c, vec3(0.7, 0.76, 0.86) * splash * 0.45 * (1.0 + 2.0 * flash));
+        }
+    }
+    return c;
+}
+
 void main() {
     g_frameSize = textureSize(u_frame, 0);
     vec4 frame = texture(u_frame, v_uv) * v_color;
@@ -720,6 +898,11 @@ void main() {
             if (sunlight > 0.0) {
                 c = Grade(c * (scenePixel ? AmbientOcclusion(p) : 1.0));
             }
+            c = Storm(c, p, true, false);
+        } else if (stormLight.w > 0.5 && all(greaterThanEqual(v_uv, stormView.xy)) &&
+                   all(lessThan(v_uv, stormView.zw))) {
+            /* No GPU surface in the scene's window outdoors: the software sky. */
+            c = Storm(c, p, true, true);
         }
         o_color = vec4(Screen(c, halo), 1.0) * v_color;
         return;
@@ -740,7 +923,7 @@ void main() {
         if (sunlight > 0.0) {
             c = Grade(c * (scenePixel ? AmbientOcclusion(p) : 1.0));
         }
-        o_color = vec4(Screen(c * (vec3(1.0) + light) * shade, halo), 1.0) * v_color;
+        o_color = vec4(Screen(Storm(c * (vec3(1.0) + light) * shade, p, true, true), halo), 1.0) * v_color;
         return;
     }
 
@@ -763,6 +946,7 @@ void main() {
     float waterFoam = shore.x * mix(0.72, 0.94, waterStorm);
     float landWash = shore.y * mix(0.24, 0.78, waterStorm);
     gpu = mix(gpu, foamColor, clamp(waterFoam + landWash, 0.0, 0.96));
+    gpu = Storm(gpu, p, emissive <= 0.0, true);
     gpu = Screen(gpu, halo);
     gpu = mix(gpu, vec3(0.0, 1.0, 0.0), min(debugTint, 1.0) * 0.5);
     o_color = vec4(gpu, frame.a);

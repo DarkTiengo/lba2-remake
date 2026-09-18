@@ -396,4 +396,11 @@ const struct MenuLabelRow LocalizedMenuLabels[MENU_LABEL_COUNT] = {
       "Luz y sombras",
       "Luce e ombre",
       "Luz e sombras"}},
+    {MENU_LABEL_OPT_STORM,
+     {"Rain and lightning",
+      "Pluie et éclairs",
+      "Regen und Blitze",
+      "Lluvia y rayos",
+      "Pioggia e fulmini",
+      "Chuva e raios"}},
 };

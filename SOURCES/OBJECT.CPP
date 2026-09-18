@@ -20,6 +20,7 @@
 #endif
 
 #include <OBJECT/AFF_GPU.H>
+#include <SVGA/GPUSTORM.H>
 #include <SVGA/GPUWATER.H>
 #include "GRILLE_GPU.H"
 #include <SVGA/SCREEN.H>
@@ -5475,6 +5476,8 @@ startaffscene:
     GpuWater_SetTime(TimerRefHR);
     GpuWater_SetWeather(CubeMode == CUBE_EXTERIEUR && Island == 0
                         && TEMPETE_ACTIVE && RainEnable);
+    GpuStorm_SetScene(TimerRefHR, CubeMode == CUBE_EXTERIEUR && Island == 0 && TEMPETE_ACTIVE && RainEnable,
+                      CubeMode == CUBE_EXTERIEUR);
 
 #ifdef ENABLE_POLY_RECORDING
     // Polygon call recording (Alt+F9) — start recording before ANY rendering
@@ -5910,7 +5913,8 @@ startaffscene:
 
     /*------------------------------------------------------------------------*/
     if (CubeMode == CUBE_EXTERIEUR) {
-        if (Island == 0 AND TEMPETE_ACTIVE AND RainEnable)
+        /* The GPU renderer draws its own rain (gfx_storm). */
+        if (Island == 0 AND TEMPETE_ACTIVE AND RainEnable AND !GpuStorm_Modern())
             AffRain();
 
         SetCLUT(PalLevel);
@@ -6226,6 +6230,18 @@ startaffscene:
         } break;
 
         case INCRUST_ECLAIR:
+            /* The GPU renderer strikes lightning and lights the scene itself
+               (gfx_storm) instead of flashing the whole palette. */
+            if (GpuStorm_Modern()) {
+                if (!FlagAnimWhoSpeak) {
+                    GpuStorm_Eclair();
+                }
+                if (ptrdisp->Info) {
+                    changepal = PtrPal;
+                    ptrdisp->Info = 0;
+                }
+                break;
+            }
             // pas de gestion pendant un message
             if (!FlagAnimWhoSpeak) {
                 if ((TimerRefHR & 0xFF) > 100) {

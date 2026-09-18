@@ -67,6 +67,7 @@ Main Menu
 │   │   │   ├── Smooth colours: < On/Off > [selector, gfx_deband]
 │   │   │   ├── Modern water: < On/Off > [selector, gfx_water]
 │   │   │   ├── Modern fire: < On/Off > [selector, gfx_fire]
+│   │   │   ├── Rain and lightning: < On/Off > [selector, gfx_storm]
 │   │   │   └── Lighting and shadows
 │   │   │       ├── Global light: < On/Off > [selector, gfx_sunlight]
 │   │   │       ├── Ray tracing: < On/Off > [selector, gfx_raytrace]

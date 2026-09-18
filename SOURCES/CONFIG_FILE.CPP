@@ -1,3 +1,4 @@
+#include <SVGA/GPUSTORM.H>
 #include "C_EXTERN.H"
 
 #include "CONFIG_FILE.H"
@@ -139,6 +140,8 @@ static const T_SETTING BootSettings[] = {
      "GPU renderer: global light: sun shadows, sky fill and rim light on bodies"},
     {"GpuRayTrace", NULL, "gfx_raytrace", &GpuObjRayTrace, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: shadows ray traced outdoors through bodies and terrain, from the sun and lights"},
+    {"GpuStorm", NULL, "gfx_storm", &GpuStormEnabled, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
+     "GPU renderer: modern rain, lightning bolts and flashes lighting the scene"},
     {"GpuFire", NULL, "gfx_fire", &GpuObjFire, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: procedural flames and flickering firelight on fire textures"},
     {"GpuSpecular", NULL, "gfx_specular", &GpuObjSpecular, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
