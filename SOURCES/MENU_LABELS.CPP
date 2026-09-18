@@ -403,4 +403,11 @@ const struct MenuLabelRow LocalizedMenuLabels[MENU_LABEL_COUNT] = {
       "Lluvia y rayos",
       "Pioggia e fulmini",
       "Chuva e raios"}},
+    {MENU_LABEL_OPT_SKY,
+     {"Modern sky",
+      "Ciel moderne",
+      "Moderner Himmel",
+      "Cielo moderno",
+      "Cielo moderno",
+      "Céu moderno"}},
 };

@@ -792,6 +792,15 @@ static void UpdateSceneLight(void) {
         const S32 savedX = X0;
         const S32 savedY = Y0;
         const S32 savedZ = Z0;
+        /* The world's axes too: the sky is anchored to them. */
+        LongRotatePoint(&MatriceWorld, 4096, 0, 0);
+        GpuObjWorldX[0] = (float)X0 / 4096.0f;
+        GpuObjWorldX[1] = (float)Y0 / 4096.0f;
+        GpuObjWorldX[2] = (float)Z0 / 4096.0f;
+        LongRotatePoint(&MatriceWorld, 0, 0, 4096);
+        GpuObjWorldZ[0] = (float)X0 / 4096.0f;
+        GpuObjWorldZ[1] = (float)Y0 / 4096.0f;
+        GpuObjWorldZ[2] = (float)Z0 / 4096.0f;
         LongRotatePoint(&MatriceWorld, 0, 4096, 0);
         const float ux = (float)X0, uy = (float)Y0, uz = (float)Z0;
         X0 = savedX;

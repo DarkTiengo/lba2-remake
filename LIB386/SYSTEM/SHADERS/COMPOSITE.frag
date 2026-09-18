@@ -56,6 +56,12 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 stormLight; // xyz toward the flash in scene space, w exterior
     vec4 stormUp;    // xyz world up, w seconds since the strike
     vec4 stormView;  // the scene's window in frame uv (x0, y0, x1, y1): cinema bars outside
+    vec4 skyFog;     // rgb the fog colour at the horizon, w: 1 the GPU draws the sky, 2 above the clouds
+    vec4 skyUp;      // xyz world up in scene space, w daylight
+    vec4 skyX;       // xyz the world's X axis, w cloud cover
+    vec4 skyZ;       // xyz the world's Z axis, w storm
+    vec4 skySun;     // xyz toward the sun, w seconds
+    vec4 skyFogRange; // x view depth where the fog starts, y where it is total
 };
 
 // --- Flames ----------------------------------------------------------------------
@@ -836,6 +842,168 @@ vec3 Storm(vec3 c, ivec2 p, bool lit, bool scene) {
     return c;
 }
 
+// --- Sky -----------------------------------------------------------------------
+/* A hash that stays even for large cell numbers (the sky's far cells). */
+float SkyHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float SkyNoise(vec2 x) {
+    vec2 i = floor(x);
+    vec2 f = fract(x);
+    /* Quintic: its slope is continuous too, so the shading of the clouds
+       (a difference of two samples) shows no creases along the cells. */
+    f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float a = SkyHash(i);
+    float b = SkyHash(i + vec2(1.0, 0.0));
+    float c = SkyHash(i + vec2(0.0, 1.0));
+    float d = SkyHash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float SkyFbm(vec2 x) {
+    float v = 0.0;
+    float a = 0.5;
+    const mat2 turn = mat2(1.6, 1.2, -1.2, 1.6);
+    for (int i = 0; i < 5; i++) {
+        v += a * SkyNoise(x);
+        x = turn * x;
+        a *= 0.5;
+    }
+    return v;
+}
+
+/* The view ray through target pixel p, in the world's frame (y up). */
+vec3 SkyRay(ivec2 p) {
+    vec2 frame = (vec2(p) + 0.5) / rtInfo.xy;
+    vec3 v = normalize(vec3((frame.x - rtProj.x) / rtProj.z, (frame.y - rtProj.y) / (rtProj.z * rtProj.w), -1.0));
+    return vec3(dot(v, skyX.xyz), dot(v, skyUp.xyz), dot(v, skyZ.xyz));
+}
+
+/* Whether target pixel p shows the sky: the textured ceiling, or the fog-
+   coloured background inside the scene's window. */
+bool IsSky(ivec2 p, bool match) {
+    if (skyFog.w < 0.5 || rtProj.z <= 0.0 || UnpackDistance(p) > 0.0) {
+        return false;
+    }
+    /* Not over the cinema bars. */
+    if (any(lessThan(v_uv, stormView.xy)) || any(greaterThanEqual(v_uv, stormView.zw))) {
+        return false;
+    }
+    /* The GPU drew the cloud ceiling there (the software may have fogged it). */
+    if (match || texelFetch(u_objId, p, 0).r > 0.0) {
+        return SkyMarker(texelFetch(u_objLight, p, 0).a);
+    }
+    ivec2 fs = textureSize(u_frame, 0);
+    vec3 f = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
+    vec3 diff = abs(f - skyFog.rgb);
+    return max(max(diff.r, diff.g), diff.b) < 0.07;
+}
+
+
+/* The sky along the ray through p: the island's fog at the horizon deepening
+   toward the zenith, the sun, clouds drifting on a dome anchored to the world
+   (lit from the sun's side, dark underneath, closed in the storm), stars at
+   night. The islands are flat and bounded: the background seen above the
+   land lies a little below the true horizon, so the sky's horizon is lowered
+   to where the land ends. Below it the sky stays the fog the land fades into,
+   or, on an island above the clouds, becomes a sea of clouds. */
+vec3 CloudSea(vec3 w) {
+    float down = -w.y;
+    vec3 fog = skyFog.rgb;
+    float day = skyUp.w;
+    float t = skySun.w;
+    vec2 uv = w.xz / (down + 0.05) * 0.3 + vec2(t * 0.006, t * 0.002);
+    float n = SkyFbm(uv * 1.3);
+    float n2 = SkyFbm(uv * 1.3 + vec2(0.11, 0.06));
+    /* Billowing tops: bright where they rise toward the sun, blue in the dips. */
+    float top = clamp(0.55 + (n - n2) * 2.5, 0.0, 1.0);
+    vec3 lit = mix(vec3(1.0, 0.99, 0.96), fog, 0.12) * (0.4 + 0.7 * day);
+    vec3 shade = mix(fog, vec3(0.55, 0.66, 0.82), 0.5) * (0.45 + 0.55 * day);
+    vec3 c = mix(shade, lit, smoothstep(0.3, 0.75, n) * (0.55 + 0.45 * top));
+    /* Haze toward the horizon. */
+    return mix(fog * 1.05, c, smoothstep(0.0, 0.2, down));
+}
+
+vec3 Sky(ivec2 p) {
+    vec3 w = SkyRay(p);
+    bool above = skyFog.w > 1.5;
+    if (above && w.y < 0.0) {
+        return CloudSea(w);
+    }
+    float el = above ? w.y : w.y + 0.11;
+    float day = skyUp.w;
+    float storm = skyZ.w;
+    float t = skySun.w;
+    vec3 fog = skyFog.rgb;
+    if (el <= 0.0) {
+        return fog;
+    }
+    vec3 zenith = fog * mix(vec3(0.5), vec3(0.62, 0.78, 1.05) * 0.88, day);
+    /* A pale, warm haze on the horizon, deepening fast: little of the sky is
+       seen above these islands. */
+    vec3 haze = mix(fog, vec3(1.0, 0.97, 0.9), 0.18 * day) * 1.05;
+    vec3 sky = mix(haze, zenith, smoothstep(0.0, 0.35, el));
+
+    vec3 sunW = normalize(vec3(dot(skySun.xyz, skyX.xyz), dot(skySun.xyz, skyUp.xyz), dot(skySun.xyz, skyZ.xyz)));
+    float mu = max(dot(normalize(w), sunW), 0.0);
+    float sunUp = smoothstep(-0.05, 0.1, sunW.y) * day * (1.0 - storm);
+    vec3 sunColor = vec3(1.0, 0.94, 0.82);
+
+    /* Clouds on a dome: compressed toward the horizon, carried by the wind. */
+    vec2 uv = w.xz / (el + 0.08) * 0.45 + vec2(t * 0.012, t * 0.005);
+    float cover = skyX.w;
+    float n = SkyFbm(uv * 2.2);
+    float dens = smoothstep(1.0 - cover, 1.0 - cover + 0.3, n);
+    vec2 toSun = length(sunW.xz) > 1e-3 ? normalize(sunW.xz) : vec2(1.0, 0.0);
+    float n2 = SkyFbm(uv * 2.2 + toSun * 0.18);
+    float shade = clamp(0.55 + (n - n2) * 2.5, 0.0, 1.0) * (1.0 - 0.6 * storm);
+    vec3 lit = mix(vec3(1.0), fog, 0.25) * (0.25 + 0.85 * day);
+    vec3 dark = mix(fog * 0.65, zenith * 0.7, 0.5) * (1.0 - 0.4 * storm) + vec3(0.02, 0.024, 0.032);
+    vec3 cloud = mix(dark, lit, shade);
+    /* Thin edges glow when the sun is behind them. */
+    cloud += sunColor * pow(mu, 8.0) * dens * (1.0 - dens) * 2.0 * sunUp;
+
+    /* Stars in the gaps at night. */
+    if (day < 0.5) {
+        vec2 g = vec2(atan(w.z, w.x) * 160.0, el * 160.0);
+        vec2 cell = floor(g);
+        float h = StormHash(cell);
+        if (h > 0.985) {
+            vec2 at = cell + 0.5 + 0.35 * (vec2(StormHash(cell + 3.1), StormHash(cell + 7.7)) - 0.5);
+            float twinkle = 0.6 + 0.4 * sin(t * (2.0 + 4.0 * h) + h * 50.0);
+            float star = exp(-length(g - at) * 6.0) * twinkle * (1.0 - day * 2.0);
+            sky += vec3(0.9, 0.93, 1.0) * star * (1.0 - storm);
+        }
+    }
+
+    /* The sun and its glow, veiled by the clouds. */
+    sky += sunColor * (smoothstep(0.9994, 0.9997, mu) * 2.5 + pow(mu, 24.0) * 0.35 + pow(mu, 4.0) * 0.06) * sunUp *
+           (1.0 - dens * 0.9);
+    /* Clouds thin into the haze toward the horizon. */
+    return mix(sky, cloud, dens * smoothstep(0.0, 0.12, el) * 0.95);
+}
+
+/* A scene surface fades into the fog with distance; with the GPU's sky it
+   fades into the sky behind it instead (aerial perspective), so the land meets
+   the sky without a seam. */
+vec3 FogToSky(vec3 c, ivec2 p) {
+    if (skyFog.w < 0.5 || rtProj.z <= 0.0 || skyFogRange.y <= skyFogRange.x) {
+        return c;
+    }
+    float d = UnpackDistance(p);
+    if (d <= 0.0) {
+        return c;
+    }
+    float f = clamp((d - skyFogRange.x) / (skyFogRange.y - skyFogRange.x), 0.0, 1.0);
+    if (f <= 0.0) {
+        return c;
+    }
+    return c + (Sky(p) - skyFog.rgb) * f;
+}
+
 void main() {
     g_frameSize = textureSize(u_frame, 0);
     vec4 frame = texture(u_frame, v_uv) * v_color;
@@ -889,6 +1057,11 @@ void main() {
         halo += Flames(v_uv);
     }
     halo += WaterSpray(v_uv);
+    /* The GPU's sky over the sky pixels outdoors, then the storm over it. */
+    if (IsSky(p, match)) {
+        o_color = vec4(Screen(Storm(Sky(p), p, true, true), halo), 1.0) * v_color;
+        return;
+    }
     if (!match) {
         vec3 c = SoftwarePixel(v_uv);
         /* A soft shadow reaches the untouched frame too (an interior room's
@@ -898,7 +1071,7 @@ void main() {
             if (sunlight > 0.0) {
                 c = Grade(c * (scenePixel ? AmbientOcclusion(p) : 1.0));
             }
-            c = Storm(c, p, true, false);
+            c = Storm(FogToSky(c, p), p, true, false);
         } else if (stormLight.w > 0.5 && all(greaterThanEqual(v_uv, stormView.xy)) &&
                    all(lessThan(v_uv, stormView.zw))) {
             /* No GPU surface in the scene's window outdoors: the software sky. */
@@ -923,7 +1096,7 @@ void main() {
         if (sunlight > 0.0) {
             c = Grade(c * (scenePixel ? AmbientOcclusion(p) : 1.0));
         }
-        o_color = vec4(Screen(Storm(c * (vec3(1.0) + light) * shade, p, true, true), halo), 1.0) * v_color;
+        o_color = vec4(Screen(Storm(FogToSky(c * (vec3(1.0) + light) * shade, p), p, true, true), halo), 1.0) * v_color;
         return;
     }
 
@@ -946,7 +1119,7 @@ void main() {
     float waterFoam = shore.x * mix(0.72, 0.94, waterStorm);
     float landWash = shore.y * mix(0.24, 0.78, waterStorm);
     gpu = mix(gpu, foamColor, clamp(waterFoam + landWash, 0.0, 0.96));
-    gpu = Storm(gpu, p, emissive <= 0.0, true);
+    gpu = Storm(scenePixel ? FogToSky(gpu, p) : gpu, p, emissive <= 0.0, true);
     gpu = Screen(gpu, halo);
     gpu = mix(gpu, vec3(0.0, 1.0, 0.0), min(debugTint, 1.0) * 0.5);
     o_color = vec4(gpu, frame.a);

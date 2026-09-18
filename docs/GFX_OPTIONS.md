@@ -16,6 +16,7 @@ All three are off by default, so a stock run renders exactly as before. None of 
 | Menu style | `gfx_menustyle` | `MenuStyle` | — | 0 classic, 1 modern cards, 2 modern with the GPU renderer (default); see [MENU.md](MENU.md) |
 | GPU 2D scale | `gfx_uiscale` | `GpuUiScale` | — | 1 classic size upscaled, 0 native; GPU renderer only |
 | GPU lamps on models | `gfx_lamps` | `GpuLamps` | — | 1 lamp globes on models cast light, 0 off; GPU renderer only |
+| GPU modern sky | `gfx_sky` | `GpuSky` | — | 1 procedural sky with sun, clouds and stars, distant land fading into it; 0 the original sky texture and fog colour; GPU renderer only (Display > GPU effects) |
 | GPU rain and lightning | `gfx_storm` | `GpuStorm` | — | 1 layered rain with splashes, lightning bolts and flashes lighting the scene; 0 the original rain lines and lightning palette; GPU renderer only (Display > GPU effects) |
 | GPU global light | `gfx_sunlight` | `GpuSunlight` | — | 1 sun shadows, sky fill and rim light, sun/sky grading, sun bloom, outdoor ambient occlusion; 0 the palette's lighting alone; GPU renderer only (Display > GPU effects > Lighting and shadows) |
 | GPU ray tracing | `gfx_raytrace` | `GpuRayTrace` | — | 1 shadows ray traced outdoors through every body and the terrain, from the sun and the lights; 0 the characters' silhouettes only; GPU renderer only (Display > GPU effects > Lighting and shadows) |

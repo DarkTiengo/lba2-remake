@@ -118,6 +118,13 @@ void GpuStorm_GetUniforms(float *out, float frameW, float frameH) {
     for (int i = 0; i < GPUSTORM_UNIFORM_FLOATS; i++) {
         out[i] = 0.0f;
     }
+    /* The scene's window, which the sky uses too. */
+    if (frameW > 0.0f && frameH > 0.0f) {
+        out[16] = (float)s_window[0] / frameW;
+        out[17] = (float)s_window[1] / frameH;
+        out[18] = (float)(s_window[2] + 1) / frameW;
+        out[19] = (float)(s_window[3] + 1) / frameH;
+    }
     if (!GpuStorm_Modern()) {
         return;
     }
@@ -175,10 +182,4 @@ void GpuStorm_GetUniforms(float *out, float frameW, float frameH) {
     out[13] = up[1];
     out[14] = up[2];
     out[15] = age;
-    if (frameW > 0.0f && frameH > 0.0f) {
-        out[16] = (float)s_window[0] / frameW;
-        out[17] = (float)s_window[1] / frameH;
-        out[18] = (float)(s_window[2] + 1) / frameW;
-        out[19] = (float)(s_window[3] + 1) / frameH;
-    }
 }

@@ -20,6 +20,9 @@
 #endif
 
 #include <OBJECT/AFF_GPU.H>
+#include "3DEXT/TERRAIN.H" /* Sky_Y */
+#include <3D/CAMERA.H>
+#include <SVGA/GPUSKY.H>
 #include <SVGA/GPUSTORM.H>
 #include <SVGA/GPUWATER.H>
 #include "GRILLE_GPU.H"
@@ -5478,6 +5481,10 @@ startaffscene:
                         && TEMPETE_ACTIVE && RainEnable);
     GpuStorm_SetScene(TimerRefHR, CubeMode == CUBE_EXTERIEUR && Island == 0 && TEMPETE_ACTIVE && RainEnable,
                       CubeMode == CUBE_EXTERIEUR);
+    GpuSky_SetScene(FogCoul, CubeMode == CUBE_EXTERIEUR,
+                    CubeMode == CUBE_EXTERIEUR && Island == 0 && TEMPETE_ACTIVE ? 1.0f : 0.0f,
+                    CubeMode == CUBE_EXTERIEUR && Sky_Y < CameraY);
+    GpuSky_SetFog(StartZFog, ClipZFar);
 
 #ifdef ENABLE_POLY_RECORDING
     // Polygon call recording (Alt+F9) — start recording before ANY rendering

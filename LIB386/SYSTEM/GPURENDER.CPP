@@ -4,6 +4,7 @@
 #include <3D/PROJ.H>
 #include <SVGA/GPUOBJ.H>
 #include <SVGA/GPUBVH.H>
+#include <SVGA/GPUSKY.H>
 #include <SVGA/GPUSTORM.H>
 #include <SVGA/GPUWATER.H>
 #include <SVGA/SCREEN.H>
@@ -294,7 +295,7 @@ static float Daylight(void) {
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
     float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 4 + 8 +
-                 GPUSTORM_UNIFORM_FLOATS];
+                 GPUSTORM_UNIFORM_FLOATS + 24];
     SDL_zeroa(params);
     params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
     params[9] = (float)s_nbFlames;
@@ -358,7 +359,7 @@ static void PushCompositeParams(void) {
     }
     /* Rain, lightning bolts and their flash: the storm needs the projection
        even when no ray is traced. */
-    if (!s_rayScene && GpuStorm_Active() && GpuObjSunExterior) {
+    if (!s_rayScene && (GpuStorm_Active() || GpuSky_FogIndex() >= 0) && GpuObjSunExterior) {
         float *rt = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12;
         rt[4] = GpuObjProj[0];
         rt[5] = GpuObjProj[1];
@@ -370,6 +371,31 @@ static void PushCompositeParams(void) {
     GpuStorm_GetUniforms(params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12 + 12 + 4 +
                              RT_MAX_LIGHTS * 4 + 8,
                          (float)ModeDesiredX, (float)ModeDesiredY);
+    /* The sky: the fog colour at the horizon (w on), up (w daylight), the
+       world's X (w cloud cover) and Z (w storm) axes, toward the sun (w
+       seconds). */
+    {
+        float *sky = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12 + 12 + 4 +
+                     RT_MAX_LIGHTS * 4 + 8 + GPUSTORM_UNIFORM_FLOATS;
+        const S32 fog = GpuSky_FogIndex();
+        if (fog >= 0 && GpuObjSunExterior) {
+            const U32 c = GetVideoPaletteLUT()[fog];
+            const float storm = GpuSky_Storm();
+            sky[0] = (float)((c >> 16) & 255) / 255.0f;
+            sky[1] = (float)((c >> 8) & 255) / 255.0f;
+            sky[2] = (float)(c & 255) / 255.0f;
+            sky[3] = GpuSky_CloudsBelow() ? 2.0f : 1.0f;
+            memcpy(sky + 4, GpuObjUpDir, sizeof(float) * 3);
+            sky[7] = Daylight();
+            memcpy(sky + 8, GpuObjWorldX, sizeof(float) * 3);
+            sky[11] = 0.42f + 0.53f * storm;
+            memcpy(sky + 12, GpuObjWorldZ, sizeof(float) * 3);
+            sky[15] = storm;
+            memcpy(sky + 16, GpuObjSunDir, sizeof(float) * 3);
+            sky[19] = GpuWater_GetTime();
+            GpuSky_GetFog(sky + 20, sky + 21);
+        }
+    }
     if (!SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params))) {
         Log_Warn("[GPU] Unable to update composite uniforms: %s", SDL_GetError());
     }
