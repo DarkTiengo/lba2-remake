@@ -2,11 +2,13 @@
 
 #include <3D/CAMERA.H>
 #include <3D/DATAMAT.H>
+#include <3D/LIGHT.H>
 #include <3D/PROJ.H>
 #include <OBJECT/AFF_GPU.H>
 #include <POLYGON/POLY.H>
 #include <SVGA/CLIP.H>
 #include <SVGA/GPUOBJ.H>
+#include <SVGA/GPUWATER.H>
 
 #include <string.h>
 
@@ -24,6 +26,10 @@ static T_GPUOBJ_DRAW *s_draw = NULL;
 /* Texel addressing of the plane being drawn (sea, sky). */
 static float s_planeTexOffset = 0.0f;
 static float s_planeTexMask = 65535.0f;
+static S32 s_waterPlane = FALSE;
+static S32 s_skyPlane = FALSE;
+static float s_waterCameraX = 0.0f;
+static float s_waterCameraZ = 0.0f;
 
 /* Camera-space position of every vertex of the cube being drawn. */
 static float s_grid[GRID_SIDE * GRID_SIDE][3];
@@ -140,8 +146,46 @@ void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S3
     }
 }
 
-void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S32 fogEnd, S32 fogColor) {
+void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ) {
+    s_waterCameraX = (float)CameraX + (float)cubeX * 32768.0f;
+    s_waterCameraZ = (float)CameraZ + (float)cubeZ * 32768.0f;
+    const TYPE_MAT *m = &MatriceWorld;
+    const float x[3] = {m->F.M11, m->F.M21, m->F.M31};
+    const float y[3] = {m->F.M12, m->F.M22, m->F.M32};
+    const float z[3] = {m->F.M13, m->F.M23, m->F.M33};
+    GpuWater_SetScene(island);
+    GpuWater_SetView(x, y, z);
+
+    /* Project the same island-global impacts for the compositor's spray. */
+    for (S32 i = 0; i < GPUWATER_MAX_IMPACTS; i++) {
+        float impact[5];
+        if (!GpuWater_GetImpactWorld(i, impact)) {
+            GpuWater_SetImpactScreen(i, 0.0f, 0.0f, FALSE);
+            continue;
+        }
+        const float px = impact[0] - (float)cubeX * 32768.0f;
+        const float py = impact[1];
+        const float pz = impact[2] - (float)cubeZ * 32768.0f;
+        const float vx = px * m->F.M11 + py * m->F.M12 + pz * m->F.M13 - (float)CameraXr;
+        const float vy = px * m->F.M21 + py * m->F.M22 + pz * m->F.M23 - (float)CameraYr;
+        const float depth = (float)CameraZr - (px * m->F.M31 + py * m->F.M32 + pz * m->F.M33);
+        if (depth <= 1.0f || ClipXMax < 1 || ClipYMax < 1) {
+            GpuWater_SetImpactScreen(i, 0.0f, 0.0f, FALSE);
+            continue;
+        }
+        const float sx = (float)XCentre + vx * FRatioX / depth;
+        const float sy = (float)YCentre + vy * FRatioX * FRatioY / depth;
+        const float u = sx / (float)(ClipXMax + 1);
+        const float v = sy / (float)(ClipYMax + 1);
+        GpuWater_SetImpactScreen(i, u, v, u > -0.1f && u < 1.1f && v > -0.2f && v < 1.1f);
+    }
+}
+
+void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S32 fogEnd, S32 fogColor,
+                           S32 sea) {
     s_draw = NULL;
+    s_waterPlane = sea;
+    s_skyPlane = !sea;
     if (!GpuObj_Active() || TypeProj != TYPE_3D) {
         return;
     }
@@ -168,6 +212,21 @@ void TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]) {
         v[i].mat[2] = s_planeTexMask;
         v[i].uv[0] = (float)p->V_MapU / 256.0f;
         v[i].uv[1] = (float)p->V_MapV / 256.0f;
+        if (s_waterPlane) {
+            v[i].vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_WATER);
+            v[i].light[0] = (float)CameraXLight;
+            v[i].light[1] = (float)CameraYLight;
+            v[i].light[2] = (float)CameraZLight;
+            /* Undo the view rotation, then add the island-space main camera.
+               Horizon cubes use shifted cameras but share this reference. */
+            const TYPE_MAT *m = &MatriceWorld;
+            v[i].uv[2] = (p->V_X0 * m->F.M11 + p->V_Y0 * m->F.M21 - p->V_Z0 * m->F.M31 +
+                           s_waterCameraX) / 512.0f;
+            v[i].uv[3] = (p->V_X0 * m->F.M13 + p->V_Y0 * m->F.M23 - p->V_Z0 * m->F.M33 +
+                           s_waterCameraZ) / 512.0f;
+        } else if (s_skyPlane) {
+            v[i].vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_SKY);
+        }
     }
 }
 

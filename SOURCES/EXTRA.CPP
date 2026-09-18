@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include "AMBIANCE.H"
+#include "WATER.H"
 
 #define	CONE_GANT	2048
 #define	RND_BETA_BONUS	300	// Angle aléatoire rajouter
@@ -1820,6 +1821,24 @@ void	GereExtras()
 				else
 				{
 					ptrextra->PosZ = oldz - (SIZE_BRICK_XZ-1) ;
+				}
+			}
+
+			/* A flying extra crossing the coded water surface drives the same
+			   ripple and spray used by actors. The flag prevents a contact every
+			   frame while a hook, fish or projectile remains submerged. */
+			{
+				S32 sampleY = ptrextra->PosY < 0 ? 0 : ptrextra->PosY ;
+				S32 inWater = Water_IsGameCode( PtrWorldCodeBrick( ptrextra->PosX, sampleY, ptrextra->PosZ ) >> 4 ) ;
+				S32 wasWater = (ptrextra->Flags & EXTRA_WATER_EFFECT) != 0 ;
+				if( inWater != wasWater )
+				{
+					S32 verticalStep = abs( ptrextra->PosY-oldy ) ;
+					if( verticalStep > 1024 ) verticalStep = 1024 ;
+					Water_Impact( ptrextra->PosX, ptrextra->PosZ, TimerRefHR,
+						(inWater ? 0.65f : 0.5f) + (float)verticalStep/1024.0f ) ;
+					if( inWater ) ptrextra->Flags |= EXTRA_WATER_EFFECT ;
+					else          ptrextra->Flags &= ~EXTRA_WATER_EFFECT ;
 				}
 			}
 

@@ -48,6 +48,8 @@ extern "C" {
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
 #define GPUOBJ_FLAG_BAKED 4     ///< shade comes from normal.w as authored, not from lighting
 #define GPUOBJ_FLAG_EMISSIVE 8  ///< glows: a lamp's globe (bloom halo, brighter core)
+#define GPUOBJ_FLAG_WATER 16    ///< eligible sea plane; shader toggle keeps the original texture available
+#define GPUOBJ_FLAG_SKY 32      ///< sky plane marker used to keep shoreline foam off the horizon
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
 typedef struct {

@@ -50,7 +50,7 @@ void DrawSky(S32 y) {
     src[3].V_MapU = 127 * 256 + 255;
     src[3].V_MapV = 0;
 
-    TerrainGpu_BeginPlane(SkySeaTexture, 128, 0x7F7F, StartZFog, ClipZFar, FogCoul);
+    TerrainGpu_BeginPlane(SkySeaTexture, 128, 0x7F7F, StartZFog, ClipZFar, FogCoul, FALSE);
 
     zz = -WORLD_SIZE;
     for (i = 0; i < NB_POLYS_COTE * 3; i++, zz += WORLD_SIZE / NB_POLYS_COTE) {
@@ -106,7 +106,7 @@ void DrawOneSea(S32 y) // Si on souhaite que l'eau ne soit pas au niveau 0 :)
     src[3].V_MapU = 127 * 256 + 255; // xt3
     src[3].V_MapV = 0;               // yt3
 
-    TerrainGpu_BeginPlane(SkySeaTexture, 0, 0x7F7F, StartZFog, ClipZFar, FogCoul);
+    TerrainGpu_BeginPlane(SkySeaTexture, 0, 0x7F7F, StartZFog, ClipZFar, FogCoul, TRUE);
 
     zz = 0;
     for (i = 0; i < NB_POLYS_COTE; i++, zz += WORLD_SIZE / NB_POLYS_COTE) {

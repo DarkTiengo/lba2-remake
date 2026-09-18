@@ -361,4 +361,11 @@ const struct MenuLabelRow LocalizedMenuLabels[MENU_LABEL_COUNT] = {
       "Lámparas en objetos",
       "Lampade sugli oggetti",
       "Lâmpadas nos objetos"}},
+    {MENU_LABEL_OPT_WATER,
+     {"Modern water",
+      "Eau moderne",
+      "Modernes Wasser",
+      "Agua moderna",
+      "Acqua moderna",
+      "Água moderna"}},
 };

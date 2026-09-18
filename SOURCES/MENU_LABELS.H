@@ -77,6 +77,7 @@ enum MenuLocalizedLabel {
     MENU_LABEL_HINT_BACK,
     MENU_LABEL_OPT_FIRE,
     MENU_LABEL_OPT_LAMPS,
+    MENU_LABEL_OPT_WATER,
     MENU_LABEL_COUNT,
 };
 

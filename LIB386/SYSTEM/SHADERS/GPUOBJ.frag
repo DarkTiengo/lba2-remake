@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 /* 3D body fragment: the original palette ramps and CLUTs stay the source of
    colour, but the shade index is computed per pixel from interpolated normals
    and blended between neighbouring ramp entries, then lifted with a specular
@@ -86,6 +87,8 @@ const int FLAG_CHROMAKEY = 1;
 const int FLAG_ISO = 2;
 const int FLAG_BAKED = 4;
 const int FLAG_EMISSIVE = 8;
+const int FLAG_WATER = 16;
+const int FLAG_SKY = 32;
 
 vec3 Pal(int i) {
     return texelFetch(u_palette, ivec2(i & 255, 0), 0).rgb;
@@ -271,6 +274,8 @@ float BrickDepth(out vec3 surface) {
     return v_slice.x + d * 0.999 * v_slice.y;
 }
 
+#include "WATER.glsl"
+
 void main() {
     int mode = int(v_light.w);
     float id = drawId;
@@ -334,8 +339,13 @@ void main() {
     vec2 fireLocal;
     float spec = 0.0;
     int base = int(v_mat.x);
+    bool water = (Flags() & FLAG_WATER) != 0 && waterInfo.y > 0.5;
+    bool sky = (Flags() & FLAG_SKY) != 0;
+    vec3 surfaceNormal = v_normal.xyz;
 
-    if (mode == MODE_SOLID) {
+    if (water) {
+        color = WaterColor(surfaceNormal);
+    } else if (mode == MODE_SOLID) {
         color = Pal(Logical(base));
         if ((Flags() & FLAG_EMISSIVE) != 0) {
             emissive = 1.0;
@@ -418,7 +428,10 @@ void main() {
     }
 
     o_color = vec4(clamp(color, 0.0, 1.0), 1.0);
-    bool baked = (Flags() & FLAG_BAKED) != 0;
-    o_light = vec4(min(DynamicLight(v_vpos.xyz, v_normal.xyz, !baked), vec3(2.0)) * 0.5, clamp(emissive, 0.0, 1.0));
+    bool baked = (Flags() & FLAG_BAKED) != 0 && !water;
+    /* One- and two-step R8 alpha markers let the composite find water edges
+       without another full-resolution render target. */
+    float material = water ? (1.0 / 255.0) : (sky ? (2.0 / 255.0) : clamp(emissive, 0.0, 1.0));
+    o_light = vec4(min(DynamicLight(v_vpos.xyz, surfaceNormal, !baked), vec3(2.0)) * 0.5, material);
     o_id = vec4(id, 0.0, 0.0, 1.0);
 }

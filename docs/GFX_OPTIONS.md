@@ -12,6 +12,7 @@ All three are off by default, so a stock run renders exactly as before. None of 
 | Dithered shading | `gfx_dither` | `DitherShading` | (none) | 0 off, 1 on |
 | Interior render scaling | (none) | (none) | `LBA2_ISO_DIV` | 1 off, 2 to 4; unset = follows the frame scaling below |
 | GPU renderer | `gfx_gpu` | `GpuRenderer` | `LBA2_GPU` | 0 classic, 1 GPU (Display menu: Renderer); see [GPU_RENDERER.md](GPU_RENDERER.md) |
+| GPU modern water | `gfx_water` | `GpuWater` | — | 1 procedural waves, rain-driven rough seas, beach/pier breakers and contact splashes on every exterior sea; 0 original material; GPU renderer only (Display > GPU effects) |
 | Menu style | `gfx_menustyle` | `MenuStyle` | — | 0 classic, 1 modern cards, 2 modern with the GPU renderer (default); see [MENU.md](MENU.md) |
 | GPU 2D scale | `gfx_uiscale` | `GpuUiScale` | — | 1 classic size upscaled, 0 native; GPU renderer only |
 | GPU lamps on models | `gfx_lamps` | `GpuLamps` | — | 1 lamp globes on models cast light, 0 off; GPU renderer only |

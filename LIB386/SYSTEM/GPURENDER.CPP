@@ -1,6 +1,7 @@
 #include <SYSTEM/GPURENDER.H>
 
 #include <SVGA/GPUOBJ.H>
+#include <SVGA/GPUWATER.H>
 #include <SVGA/SCREEN.H>
 #include <SVGA/VIDEO.H>
 #include <SYSTEM/LOG.H>
@@ -261,17 +262,23 @@ static void CollectFlames(const T_GPUOBJ_DRAW *const *draws, U32 count, U32 fram
 /* Composite switches: the player's GPU effects can change at any present. */
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[12 + MAX_FLAME_SPRITES * 4];
+    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4];
     SDL_zeroa(params);
     params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
     params[9] = (float)s_nbFlames;
+    params[10] = GpuWater_GetTime();
+    params[11] = GpuWaterEnabled ? 1.0f : 0.0f;
+    params[6] = GpuWater_GetWeather();
     SDL_memcpy(params + 12, s_flames, sizeof(s_flames));
+    GpuWater_GetCompositeImpacts(params + 12 + MAX_FLAME_SPRITES * 4);
     params[0] = (debug != NULL) ? (float)SDL_atoi(debug) : 0.0f;
     params[1] = s_supersample ? 1.0f : 0.0f;
     params[2] = (s_upscale && GpuObjPixelFilter) ? 1.0f : 0.0f;
     params[3] = (s_upscale && GpuObjDeband) ? 1.0f : 0.0f;
     params[4] = (GpuObjFire || GpuObjGlow) ? 1.0f : 0.0f;
-    SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params));
+    if (!SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params))) {
+        Log_Warn("[GPU] Unable to update composite uniforms: %s", SDL_GetError());
+    }
 }
 
 static bool EnsureFrameResources(U32 w, U32 h) {
@@ -372,7 +379,7 @@ static bool EnsureVertexBuffer(U32 size) {
 
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 3);
+    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
     s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 5, 1);
     if (!s_objVert || !s_objFrag || !s_compositeFrag) {
@@ -824,6 +831,9 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     }
     fire[18] = (float)fmod(seconds, 1000.0);
     SDL_PushGPUFragmentUniformData(cmd, 2, fire, sizeof(fire));
+    float water[GPUWATER_UNIFORM_FLOATS];
+    GpuWater_GetUniforms(water);
+    SDL_PushGPUFragmentUniformData(cmd, 3, water, sizeof(water));
 
     U32 first = 0;
     S32 slice = -1;

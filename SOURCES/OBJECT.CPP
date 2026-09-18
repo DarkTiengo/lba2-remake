@@ -6,6 +6,7 @@
 #include "FOLLOWCAM.H" /* FollowCamera: camera zones re-aim the Auto camera */
 #include "RECORD.H"    /* Record_SeedHook: the boot scene load's seed on a replay */
 #include "SAVEGAME.H"
+#include "WATER.H"
 #include "ZONE_GEOM.H" // ZonePointInBox -- single source of truth for the zone box test
 
 #include <SYSTEM/LOG.H> // cubetrace
@@ -18,6 +19,7 @@
 #endif
 
 #include <OBJECT/AFF_GPU.H>
+#include <SVGA/GPUWATER.H>
 #include "GRILLE_GPU.H"
 #include <SVGA/SCREEN.H>
 #include <SVGA/VIDEO.H>
@@ -3046,6 +3048,7 @@ S32 GereCodesJeu(U8 numobj) {
             AND((numobj != NUM_PERSO)
                     OR !(PtrComportement->Flags & CF_WALK_ON_CODES_JEU)
                         OR(APtObj->GenAnim != GEN_ANIM_MARCHE))) {
+        S32 oldWater = Water_IsGameCode(APtObj->CodeJeu >> 4);
         if (APtObj->WorkFlags & DONT_PICK_CODE_JEU) {
             // Magouille Tapis Roulant
             CodeJeu = APtObj->CodeJeu;
@@ -3071,6 +3074,39 @@ S32 GereCodesJeu(U8 numobj) {
             }
         }
 
+        S32 newWater = Water_IsGameCode(APtObj->CodeJeu >> 4);
+        S32 contactEmitted = FALSE;
+        if (CubeMode == CUBE_EXTERIEUR
+                AND ((OldY > Y_SEA AND Nyw <= Y_SEA)
+                     OR (OldY <= Y_SEA AND Nyw > Y_SEA))
+                AND (oldWater || newWater
+                     || Water_IsGameCode(PtrWorldCodeBrick(Nxw, 0, Nzw) >> 4))) {
+            S32 verticalStep = abs(Nyw - OldY);
+            if (verticalStep > 1024) {
+                verticalStep = 1024;
+            }
+            S32 entering = OldY > Y_SEA;
+            float strength = entering ? 1.35f + (float)verticalStep / 768.0f : 0.85f;
+            if (entering && numobj == NUM_PERSO && StartYFalling > Y_SEA) {
+                S32 fallHeight = StartYFalling - Y_SEA;
+                if (fallHeight > 8192) {
+                    fallHeight = 8192;
+                }
+                strength += (float)fallHeight / 16384.0f;
+            }
+            Water_Impact(Nxw, Nzw, TimerRefHR, strength);
+            contactEmitted = TRUE;
+        }
+        if (!contactEmitted && oldWater != newWater) {
+            S32 verticalStep = abs(Nyw - APtObj->Obj.Y);
+            if (verticalStep > 1024) {
+                verticalStep = 1024;
+            }
+            float strength = (newWater ? 0.8f : 0.55f) + (float)verticalStep / 1024.0f;
+            Water_Impact(Nxw, Nzw, TimerRefHR, strength);
+            contactEmitted = TRUE;
+        }
+
         APtObj->Flags &= ~(OBJ_IN_WATER);
 
         switch (APtObj->CodeJeu >> 4) {
@@ -3085,6 +3121,16 @@ S32 GereCodesJeu(U8 numobj) {
                 validepos = FALSE;
 
                 if (!FlagWater) {
+                    if (!contactEmitted
+                            && (APtObj->CodeJeu >> 4) != CJ_LAVE
+                            && (APtObj->CodeJeu >> 4) != CJ_ANIMATED_LAVE
+                            && (APtObj->CodeJeu >> 4) != CJ_GAZ
+                            && (APtObj->CodeJeu >> 4) != CJ_ANIMATED_GAZ) {
+                        /* Some deep-water bricks kill the hero before their
+                           collision code reports a clean edge transition. */
+                        Water_Impact(Nxw, Nzw, TimerRefHR, 1.85f);
+                        contactEmitted = TRUE;
+                    }
                     switch (APtObj->CodeJeu >> 4) {
                     case CJ_LAVE:
                     case CJ_ANIMATED_LAVE:
@@ -5410,6 +5456,9 @@ startaffscene:
        it share the GPU's real depth. */
     GpuObj_SetSceneDepth(TRUE);
     GpuObj_ClearLights();
+    GpuWater_SetTime(TimerRefHR);
+    GpuWater_SetWeather(CubeMode == CUBE_EXTERIEUR && Island == 0
+                        && TEMPETE_ACTIVE && RainEnable);
 
 #ifdef ENABLE_POLY_RECORDING
     // Polygon call recording (Alt+F9) — start recording before ANY rendering

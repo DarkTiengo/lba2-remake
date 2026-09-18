@@ -22,6 +22,7 @@ extern S32 GfxDitherShading;
 #include "EXIT_SCREEN.H"
 #include "PERFTRACE.H"
 #include "TOUCH_INPUT.H"
+#include "WATER.H"
 #include <SYSTEM/CUE.H>
 #include <SYSTEM/DISCIMG.H>
 #include <SYSTEM/LOG.H>
@@ -1758,6 +1759,11 @@ restartloop:
 
             if (!FirstLoop)
                 PtrDoAnim(i);
+
+            if (ptrobj->WorkFlags & NEW_FRAME) {
+                Water_AnimationContact(ptrobj->Obj.Anim.Num, ptrobj->Obj.NextFrame,
+                                       ptrobj->Obj.X, ptrobj->Obj.Z, TimerRefHR);
+            }
 
             if (ptrobj->Flags & CHECK_ZONE) {
                 CheckZoneSce(ptrobj, i);

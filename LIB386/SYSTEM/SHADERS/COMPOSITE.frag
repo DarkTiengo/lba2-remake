@@ -23,13 +23,14 @@ layout(set = 3, binding = 0) uniform Params {
     float deband;      // > 0: upscaled software pixels are debanded
     float glow;        // > 0: bloom halo around emissive surfaces (fire, lamp globes)
     float glowPad0;
-    float glowPad1;
+    float waterStorm;  // > 0: wider, faster breakers while visible rain is active
     float glowPad2;
-    float flameTime;  // seconds
-    float flameCount; // boxes in flameBoxes
-    float flamePad0;
-    float flamePad1;
+    float flameTime;   // seconds
+    float flameCount;  // boxes in flameBoxes
+    float waterTime;   // game seconds, frozen with the simulation
+    float waterEnabled;
     vec4 flameBoxes[16]; // burning polygons' screen boxes in frame uv (x0, y0, x1, y1)
+    vec4 waterImpacts[8]; // screen x/y, start time, strength
 };
 
 // --- Flames ----------------------------------------------------------------------
@@ -113,14 +114,16 @@ vec3 Glow(vec2 uv) {
             float a = (float(k) + float(ring) * 0.5) * 6.2831853 / float(TAPS);
             ivec2 q = clamp(ivec2(centre + vec2(cos(a), sin(a)) * radius), ivec2(0), size - ivec2(1));
             float e = texelFetch(u_objLight, q, 0).a;
-            if (e > 0.0) {
+            if (e > 0.02) {
                 sum += texelFetch(u_objColor, q, 0).rgb * e * weight;
             }
             total += weight;
         }
     }
     float e0 = texelFetch(u_objLight, clamp(ivec2(centre), ivec2(0), size - ivec2(1)), 0).a;
-    sum += texelFetch(u_objColor, clamp(ivec2(centre), ivec2(0), size - ivec2(1)), 0).rgb * e0 * 2.0;
+    if (e0 > 0.02) {
+        sum += texelFetch(u_objColor, clamp(ivec2(centre), ivec2(0), size - ivec2(1)), 0).rgb * e0 * 2.0;
+    }
     total += 2.0;
     return sum / total * 1.6;
 }
@@ -278,6 +281,120 @@ vec3 SoftwarePixel(vec2 uv) {
     return deband > 0.0 ? Deband(uv, c) : c;
 }
 
+bool WaterMarker(float alpha) {
+    return alpha > 0.002 && alpha < 0.006;
+}
+
+bool SkyMarker(float alpha) {
+    return alpha >= 0.006 && alpha < 0.012;
+}
+
+/* Distance to the actual visible water boundary. Sky markers exclude the
+   horizon; terrain, beaches and 3D pier geometry produce the breaking edge. */
+vec2 ShoreFoam(ivec2 p) {
+    if (waterEnabled < 0.5) {
+        return vec2(0.0);
+    }
+    ivec2 size = textureSize(u_objLight, 0);
+    float current = texelFetch(u_objLight, p, 0).a;
+    bool onWater = WaterMarker(current);
+    if (SkyMarker(current)) {
+        return vec2(0.0);
+    }
+    float nearest = 30.0;
+    for (int ring = 1; ring <= 5; ring++) {
+        float radius = float(ring * ring);
+        int r = ring * ring;
+        for (int k = 0; k < 4; k++) {
+            ivec2 offset = k == 0 ? ivec2(r, 0) :
+                           k == 1 ? ivec2(-r, 0) :
+                           k == 2 ? ivec2(0, r) : ivec2(0, -r);
+            ivec2 q = clamp(p + offset, ivec2(0), size - ivec2(1));
+            float marker = texelFetch(u_objLight, q, 0).a;
+            bool boundary = onWater ? (!WaterMarker(marker) && !SkyMarker(marker))
+                                    : WaterMarker(marker);
+            if (boundary) {
+                nearest = min(nearest, radius);
+            }
+        }
+    }
+    float reach = mix(13.0, 26.0, waterStorm);
+    if (nearest > reach) {
+        return vec2(0.0);
+    }
+    float envelope = 1.0 - smoothstep(1.0, reach, nearest);
+    float signedDistance = onWater ? nearest : -nearest;
+    float phase = signedDistance * (1.08 + waterStorm * 0.18)
+                - waterTime * (4.2 + waterStorm * 3.6)
+                + float(p.x + p.y) * 0.035;
+    float breaker = smoothstep(0.28, 0.86, 0.5 + 0.5 * sin(phase));
+    float backwash = smoothstep(0.58, 0.92, 0.5 + 0.5 * sin(phase * 0.47 + 1.7));
+    float foam = envelope * (0.22 + breaker * 0.68 + backwash * 0.22 * waterStorm);
+    return onWater ? vec2(foam, 0.0) : vec2(0.0, foam);
+}
+
+float WaterImpactAge(float start) {
+    return mod(waterTime - start + 256.0, 256.0);
+}
+
+/* Short crown and ballistic droplets above a contact. The expanding rings
+   themselves live in WATER.glsl and therefore follow the water surface. */
+vec3 WaterSpray(vec2 uv) {
+    if (waterEnabled < 0.5) {
+        return vec3(0.0);
+    }
+    ivec2 size = textureSize(u_objColor, 0);
+    vec2 pixel = uv * vec2(size);
+    vec3 sum = vec3(0.0);
+    for (int k = 0; k < 8; k++) {
+        vec4 impact = waterImpacts[k];
+        if (impact.w <= 0.0) {
+            continue;
+        }
+        float age = WaterImpactAge(impact.z);
+        if (age >= 1.75) {
+            continue;
+        }
+        float scale = (6.0 + impact.w * 6.5) * float(size.y) / 540.0;
+        vec2 base = impact.xy * vec2(size);
+        vec2 local = pixel - base;
+        if (abs(local.x) > scale * 8.0 || local.y < -scale * 8.0 || local.y > scale * 3.5) {
+            continue;
+        }
+        ivec2 bp = clamp(ivec2(base), ivec2(0), size - ivec2(1));
+        vec3 waterColor = texelFetch(u_objColor, bp, 0).rgb;
+        float waterCrest = max(max(waterColor.r, waterColor.g), waterColor.b);
+        vec3 sprayColor = min(waterColor * 1.25 + vec3(waterCrest) * 0.08, vec3(0.9));
+        float crownRadius = age * scale * 5.0;
+        float crown = exp(-pow((length(vec2(local.x, local.y * 2.2)) - crownRadius) / max(scale * 0.55, 1.0), 2.0));
+        crown *= 1.0 - smoothstep(0.25, 0.8, age);
+        float churnRadius = max(scale * (0.72 + age * 3.6), 1.0);
+        float churn = 1.0 - smoothstep(0.48, 1.0,
+                                     length(vec2(local.x, local.y * 2.6)) / churnRadius);
+        churn *= (1.0 - smoothstep(0.68, 1.5, age)) * smoothstep(0.35, 0.9, impact.w);
+        float plumeAge = min(age, 0.72);
+        vec2 plumeCentre = vec2(0.0, -scale * (0.7 + plumeAge * (4.2 + impact.w)));
+        vec2 plumeShape = vec2(max(scale * (0.72 - plumeAge * 0.35), 1.0),
+                               max(scale * (1.15 + plumeAge * 1.4), 1.0));
+        float plume = 1.0 - smoothstep(0.55, 1.0, length((local - plumeCentre) / plumeShape));
+        plume *= (1.0 - smoothstep(0.32, 0.82, age)) * smoothstep(0.7, 1.4, impact.w);
+        float drops = 0.0;
+        for (int j = 0; j < 12; j++) {
+            float seed = fract(sin(float(k * 17 + j * 31) * 12.9898) * 43758.5453);
+            float vx = (seed * 2.0 - 1.0) * (2.6 + impact.w * 1.25);
+            float vy = 3.5 + fract(seed * 7.13) * (2.8 + impact.w * 1.15);
+            vec2 centre = vec2(vx * age, -vy * age + 4.15 * age * age) * scale;
+            float radius = max(1.0, scale * (0.13 + seed * 0.08));
+            drops += 1.0 - smoothstep(radius * 0.35, radius, length(local - centre));
+        }
+        float fade = 1.0 - smoothstep(0.9, 1.75, age);
+        float spray = clamp(churn * 0.42 + crown * 0.58 + plume * 0.5
+                            + drops * fade * 0.65, 0.0, 0.85);
+        sum += sprayColor * spray * 0.55;
+    }
+    return sum;
+}
+
 // -----------------------------------------------------------------------------
 void main() {
     g_frameSize = textureSize(u_frame, 0);
@@ -305,6 +422,7 @@ void main() {
     if (flameCount > 0.5) {
         halo += Flames(v_uv);
     }
+    halo += WaterSpray(v_uv);
     if (!match) {
         o_color = vec4(Screen(SoftwarePixel(v_uv), halo), 1.0) * v_color;
         return;
@@ -313,7 +431,8 @@ void main() {
     vec4 nearest = texelFetch(u_objColor, p, 0);
     vec4 lightTexel = texelFetch(u_objLight, p, 0);
     /* An emissive surface is the light source: it is not lit again by itself. */
-    vec3 light = lightTexel.rgb * 2.0 * (1.0 - lightTexel.a);
+    float emissive = lightTexel.a > 0.02 ? lightTexel.a : 0.0;
+    vec3 light = lightTexel.rgb * 2.0 * (1.0 - emissive);
     if (nearest.a < 0.5) {
         /* A surface whose colour is the software frame (interior bricks). */
         vec3 c = SoftwarePixel(v_uv);
@@ -331,6 +450,12 @@ void main() {
         gpu = nearest.rgb;
     }
     gpu *= vec3(1.0) + light;
+    vec2 shore = ShoreFoam(p);
+    float crest = max(max(gpu.r, gpu.g), gpu.b);
+    vec3 foamColor = min(gpu * 1.45 + vec3(crest) * 0.22, vec3(1.0));
+    float waterFoam = shore.x * mix(0.72, 0.94, waterStorm);
+    float landWash = shore.y * mix(0.24, 0.78, waterStorm);
+    gpu = mix(gpu, foamColor, clamp(waterFoam + landWash, 0.0, 0.96));
     gpu = Screen(gpu, halo);
     gpu = mix(gpu, vec3(0.0, 1.0, 0.0), min(debugTint, 1.0) * 0.5);
     o_color = vec4(gpu, frame.a);

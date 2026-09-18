@@ -667,6 +667,7 @@ typedef	struct	{
 #define	EXTRA_FOUDRE_STEP1	(1L<<27L)	// Foudre etape 1
 #define	EXTRA_FOUDRE_STEP2	(1L<<28L)	// Foudre etape 2
 #define	EXTRA_FOUDRE_STEP3	(1L<<29L)	// Foudre etape 3
+#define EXTRA_WATER_EFFECT      (1L<<30L)      // contact visual avec la surface de l'eau
 
 #define	EXTRA_NO_SHADOW		(1L<<31L)	// Ne pas Afficher l'ombre de l'extra
 
@@ -1429,5 +1430,4 @@ typedef	struct
 
 #define	NB_PCX_EFFECTS	2
 #endif	/* COMMON_H */
-
 

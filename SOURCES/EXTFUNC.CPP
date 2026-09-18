@@ -21,7 +21,9 @@
 #include "FOLLOWCAM_CFG.H"
 #include "FOLLOWCAM_MATH.H"
 #include "JOYSTICK.H"
+#include "3DEXT/TERRAIN_GPU.H"
 #include "BOOT_EXIT.H"
+#include "WATER.H"
 
 extern S32 Nxw, Nyw, Nzw;
 extern S32 SaveNxw, SaveNzw;
@@ -330,6 +332,8 @@ void AffGrilleExt() {
     SetFollowCamera(VueOffsetX, VueOffsetY, VueOffsetZ,
                     AlphaCam, BetaCam, GammaCam,
                     VueDistance);
+    Water_SetScene(Island, CurrentCubeX, CurrentCubeY);
+    TerrainGpu_SetWaterScene(Island, CurrentCubeX, CurrentCubeY);
 
     SetLightVector(AlphaLight, BetaLight, 0);
 

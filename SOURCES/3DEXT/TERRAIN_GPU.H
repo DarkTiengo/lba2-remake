@@ -31,8 +31,12 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
 void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
                     const U16 *uv);
 
-/** Opens the draw for a textured plane (sea, sky) on page + texOffset. */
-void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S32 fogEnd, S32 fogColor);
+/** Captures the main cube's camera before horizon cubes shift it. */
+void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ);
+
+/** Opens a sea or sky plane and marks the material for the GPU compositor. */
+void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S32 fogEnd, S32 fogColor,
+                           S32 sea);
 
 /** One plane quad in camera space, as handed to Draw_Poly. */
 void TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]);

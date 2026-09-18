@@ -2,6 +2,7 @@
 
 #include "CONFIG_FILE.H"
 #include "SETTINGS.H"
+#include "WATER.H"
 #include "CONSOLE/CONSOLE.H" /* Console_SetToggleScancode */
 #include "CONTROL.H"         /* Control_Has* / Control_Get*: the per-run overrides */
 #include "DIRECTORIES.H"     /* the cfg's path */
@@ -142,6 +143,7 @@ static const T_SETTING BootSettings[] = {
 #define BOOT_SETTING_COUNT ((S32)(sizeof(BootSettings) / sizeof(BootSettings[0])))
 
 void ConfigFile_RegisterCvars(void) {
+    Water_RegisterCvars();
     Settings_RegisterCvars(BootSettings, BOOT_SETTING_COUNT);
 }
 
@@ -320,6 +322,7 @@ void ReadConfigFile(void) {
         ManualCameraSmoothing = 16;
 
     FollowCam_ReadConfig();
+    Water_ReadConfig();
 }
 
 /*──────────────────────────────────────────────────────────────────────────*/
@@ -403,6 +406,7 @@ void WriteConfigFile(void) {
     DefFileBufferWriteValue("ManualCameraSmoothing", ManualCameraSmoothing);
     DefFileBufferWriteValue("FollowCamOrbitGlide", FollowCamOrbitGlide);
     FollowCam_WriteConfig();
+    Water_WriteConfig();
 
     if (batched) {
         DefFileBufferEndBatch();

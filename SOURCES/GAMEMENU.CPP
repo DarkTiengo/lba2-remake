@@ -15,6 +15,7 @@
 #include "MESSAGE.H"
 #include "IMAGE_LOAD.H"
 #include "MENU_LABELS.H"
+#include <SVGA/GPUWATER.H>
 
 #include <FILEIO/SAVEPNG.H>
 #include <SVGA/SCREEN.H>
@@ -106,6 +107,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_DISPLAY_MENU_STYLE 2125
 #define MENU_ID_GPU_FIRE 2126
 #define MENU_ID_GPU_LAMPS 2127
+#define MENU_ID_GPU_WATER 2128
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -179,7 +181,7 @@ S32 MenuStyle = MENU_STYLE_AUTO;
 // on: one selector row per effect.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    8,   // nb entries
+    9,   // nb entries
     260, // y center
     0,   // .dia num
 
@@ -187,6 +189,8 @@ U16 GpuEffectsMenu[] = {
     26, // menu precedent
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_UI_SCALE,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_WATER,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_FIRE,
     MENU_TYPE_DISPLAY_SELECTOR,
@@ -511,6 +515,10 @@ static void Display_CycleOption(S32 id, S32 dir) {
         GpuObjFire ^= 1;
         break;
 
+    case MENU_ID_GPU_WATER:
+        GpuWaterEnabled ^= 1;
+        break;
+
     case MENU_ID_GPU_LAMPS:
         GpuObjGlow ^= 1;
         break;
@@ -678,6 +686,11 @@ static void BuildCustomMenuText(S32 num, char *string) {
     case MENU_ID_GPU_FIRE:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_FIRE),
                        GetLocalizedMenuLabel(GpuObjFire ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_WATER:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_WATER),
+                       GetLocalizedMenuLabel(GpuWaterEnabled ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
         break;
 
     case MENU_ID_GPU_UI_SCALE:
@@ -4080,6 +4093,7 @@ static S32 GereGpuEffectsMenu(void) {
         case MENU_ID_GPU_UI_SCALE:
         case MENU_ID_GPU_FIRE:
         case MENU_ID_GPU_LAMPS:
+        case MENU_ID_GPU_WATER:
         case MENU_ID_GPU_LIGHTS:
         case MENU_ID_GPU_PIXEL_FILTER:
         case MENU_ID_GPU_DEBAND:
