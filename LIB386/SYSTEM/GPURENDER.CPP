@@ -707,6 +707,10 @@ static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
     U32 n = 0;
     const S32 skipFlags = GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_SKY | GPUOBJ_FLAG_EMISSIVE;
     for (U32 d = 0; d < count && n < GPUBVH_MAX_TRIS; d++) {
+        /* Only the scene: a menu's bodies live in their own projection. */
+        if (!draws[d]->Scene) {
+            continue;
+        }
         const T_GPUOBJ_VERTEX *v = GpuObjVerts + draws[d]->First;
         for (U32 i = 0; i + 2 < draws[d]->Count && n < GPUBVH_MAX_TRIS; i += 3) {
             const S32 mode = (S32)v[i].light[3];

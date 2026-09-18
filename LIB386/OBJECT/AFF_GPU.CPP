@@ -63,6 +63,7 @@ static T_OBJ_POINT s_rot[MAX_NB_POINTS];
 static float s_normal[MAX_LIGHTS][4]; ///< xyz, shade scale
 static float s_light[3];
 static void UpdateSceneLight(void);
+static S32 s_inScene = FALSE; ///< between AffGpu_BeginScene and AffGpu_BuildShadows
 
 /* The frame's bodies, kept for their shadows: triangles in scene space (x, y, z,
    then 1 and the disc coordinates for sphere impostors, zeros otherwise). */
@@ -767,6 +768,12 @@ void AffGpu_OrbEnd(S32 cx, S32 cy, const U8 *palette) {
 /* The global light of the scene being captured: toward the light that shades
    bodies, and the world's up, both in scene space. */
 static void UpdateSceneLight(void) {
+    /* Bodies drawn outside the scene (the behaviour menu's Twinsens, the
+       inventory's objects) have their own projection and light: they must not
+       change the scene's, which the presenter keeps using behind them. */
+    if (!s_inScene) {
+        return;
+    }
     const float lx = (float)CameraXLight, ly = (float)CameraYLight, lz = (float)CameraZLight;
     const float len = sqrtf(lx * lx + ly * ly + lz * lz);
     if (len > 0.0f) {
@@ -961,6 +968,7 @@ static void KeepCaster(const T_GPUOBJ_DRAW *draw) {
 }
 
 void AffGpu_BeginScene(void) {
+    s_inScene = TRUE;
     s_nbCasters = 0;
     s_nbCasterVerts = 0;
     s_nbRequests = 0;
@@ -1069,9 +1077,11 @@ static void EmitSilhouette(const T_CASTER *c, const T_SHADOW_REQUEST *r, const T
 void AffGpu_BuildShadows(void) {
     GpuObjRayScene = FALSE;
     if (!GpuObj_Active() || !GpuObjShadows) {
+        s_inScene = FALSE;
         return;
     }
     UpdateSceneLight();
+    s_inScene = FALSE;
     /* Exteriors: the presenter traces rays toward the sun and the lights through
        every body and the terrain, so no silhouettes are needed. */
     GpuObjRayScene = GpuObjRayTrace && TypeProj == TYPE_3D;

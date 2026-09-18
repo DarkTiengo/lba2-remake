@@ -674,7 +674,10 @@ void main() {
     /* Ray-traced shadows of the surface under this pixel (exteriors). */
     vec3 surfacePos;
     vec3 surfaceNormal;
-    bool traced = (rtSun.w > 0.0 || rtLightCfg.x > 0.5) && SurfaceAt(p, surfacePos, surfaceNormal);
+    /* Only scene surfaces: a menu's bodies (the behaviour menu's Twinsens) have
+       their own projection, their distances are not scene points. */
+    bool scenePixel = id >= 8388608.0;
+    bool traced = scenePixel && (rtSun.w > 0.0 || rtLightCfg.x > 0.5) && SurfaceAt(p, surfacePos, surfaceNormal);
     float sunRT = traced ? SunShadowRT(p, surfacePos, surfaceNormal) : 0.0;
     float lightRT = traced ? LightShadowRT(surfacePos, surfaceNormal) : 0.0;
 
@@ -715,7 +718,7 @@ void main() {
         if (texelFetch(u_objId, p, 0).r > 0.0) {
             c *= 1.0 - max(SoftShadow(v_uv).r, sunRT);
             if (sunlight > 0.0) {
-                c = Grade(c * AmbientOcclusion(p));
+                c = Grade(c * (scenePixel ? AmbientOcclusion(p) : 1.0));
             }
         }
         o_color = vec4(Screen(c, halo), 1.0) * v_color;
@@ -735,7 +738,7 @@ void main() {
         /* A surface whose colour is the software frame (interior bricks). */
         vec3 c = SoftwarePixel(v_uv);
         if (sunlight > 0.0) {
-            c = Grade(c * AmbientOcclusion(p));
+            c = Grade(c * (scenePixel ? AmbientOcclusion(p) : 1.0));
         }
         o_color = vec4(Screen(c * (vec3(1.0) + light) * shade, halo), 1.0) * v_color;
         return;
@@ -751,7 +754,7 @@ void main() {
         gpu = nearest.rgb;
     }
     if (sunlight > 0.0 && emissive <= 0.0) {
-        gpu = Grade(gpu * AmbientOcclusion(p));
+        gpu = Grade(gpu * (scenePixel ? AmbientOcclusion(p) : 1.0));
     }
     gpu *= (vec3(1.0) + light) * shade;
     vec2 shore = ShoreFoam(p);
