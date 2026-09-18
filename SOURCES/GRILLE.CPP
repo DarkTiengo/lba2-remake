@@ -1,4 +1,5 @@
 #include "C_EXTERN.H"
+#include "BEZIER.H" /* ShadowCorner */
 #include "DIRECTORIES.H"
 #include "GRILLE_GPU.H"
 
@@ -440,6 +441,7 @@ S32 ProjectShadow(T_SORT *ptrs, S32 beta) {
 
     // inclure ici la gestion des objets du decors
     altitude_ref = AdjustShadowObjects(xw, zw, yw, yw);
+    ShadowGround = altitude_ref;
 
     Rotate(demix, zmin, beta);
 
@@ -455,6 +457,9 @@ S32 ProjectShadow(T_SORT *ptrs, S32 beta) {
     else if (cy > altitude_ref + ALTITUDE_MAX)
         cy = altitude_ref + ALTITUDE_MAX;
 
+    ShadowCorner[0][0] = X0;
+    ShadowCorner[0][1] = cy;
+    ShadowCorner[0][2] = Z0;
     if (!LongProjectPoint(X0, cy, Z0))
         return FALSE;
     XS0 = Xp;
@@ -474,6 +479,9 @@ S32 ProjectShadow(T_SORT *ptrs, S32 beta) {
     else if (cy > altitude_ref + ALTITUDE_MAX)
         cy = altitude_ref + ALTITUDE_MAX;
 
+    ShadowCorner[1][0] = X0;
+    ShadowCorner[1][1] = cy;
+    ShadowCorner[1][2] = Z0;
     if (!LongProjectPoint(X0, cy, Z0))
         return FALSE;
     XS1 = Xp;
@@ -493,6 +501,9 @@ S32 ProjectShadow(T_SORT *ptrs, S32 beta) {
     else if (cy > altitude_ref + ALTITUDE_MAX)
         cy = altitude_ref + ALTITUDE_MAX;
 
+    ShadowCorner[2][0] = X0;
+    ShadowCorner[2][1] = cy;
+    ShadowCorner[2][2] = Z0;
     if (!LongProjectPoint(X0, cy, Z0))
         return FALSE;
     XS2 = Xp;
@@ -512,6 +523,9 @@ S32 ProjectShadow(T_SORT *ptrs, S32 beta) {
     else if (cy > altitude_ref + ALTITUDE_MAX)
         cy = altitude_ref + ALTITUDE_MAX;
 
+    ShadowCorner[3][0] = X0;
+    ShadowCorner[3][1] = cy;
+    ShadowCorner[3][2] = Z0;
     if (!LongProjectPoint(X0, cy, Z0))
         return FALSE;
     XS3 = Xp;

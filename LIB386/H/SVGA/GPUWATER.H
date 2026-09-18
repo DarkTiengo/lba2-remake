@@ -10,6 +10,7 @@ extern S32 GpuWaterEnabled;
 
 #define GPUWATER_MAX_IMPACTS 8
 #define GPUWATER_UNIFORM_FLOATS (16 + GPUWATER_MAX_IMPACTS * 4)
+#define GPUWATER_CONTACT_HEIGHT_TOLERANCE 96.0f
 
 /* Scene time is supplied by the game, never advanced by menu presents. */
 void GpuWater_SetTime(U32 milliseconds);
@@ -29,6 +30,9 @@ void GpuWater_SetImpactScreen(S32 index, float x, float y, S32 visible);
 void GpuWater_GetCompositeImpacts(float out[GPUWATER_MAX_IMPACTS * 4]);
 /* std140: time/enable/padding, axes, then impact x/z/start/strength. */
 void GpuWater_GetUniforms(float out[GPUWATER_UNIFORM_FLOATS]);
+/* Shared definition of the geometric contact predicate used by shoreline
+   compositing; heights are projected onto the scene's world-up axis. */
+S32 GpuWater_ContactHeight(float surfaceHeight, float waterHeight);
 
 #ifdef __cplusplus
 }

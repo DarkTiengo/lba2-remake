@@ -43,6 +43,8 @@ extern "C" {
 #define GPUOBJ_MODE_CLUT 6      ///< CLUT[shade][color]: the terrain's Gouraud table fill
 #define GPUOBJ_MODE_BRICK 7     ///< interior brick sprite from the atlas, depth from its grid cell
 #define GPUOBJ_MODE_ORB 8       ///< lit glossy sphere inside the unit disc, colour in mat.yzw
+#define GPUOBJ_MODE_SHADOW 9    ///< soft ground shadow: ellipse coords in uv.zw, strength and softness in mat.yz
+#define GPUOBJ_MODE_SILHOUETTE 10 ///< a body's shadow projected on the ground from the sun or a light
 
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
@@ -110,6 +112,33 @@ extern S32 GpuObjPixelFilter; ///< xBR pixel-art upscaler on software pixels (gf
 extern S32 GpuObjDeband;      ///< in-between colours on the palette's ramps (gfx_deband)
 extern S32 GpuObjSpecular;    ///< specular highlights on models (gfx_specular)
 extern S32 GpuObjUiScale;     ///< 2D drawn at its classic size and upscaled (gfx_uiscale)
+extern S32 GpuObjShadows;     ///< soft shadows on the real ground (gfx_shadows)
+extern S32 GpuObjSunlight;    ///< global light: sun shadows, sky fill, rim light (gfx_sunlight)
+
+/* The scene's global light, in the scene space lights use: the direction toward
+   the sun (the light that shades bodies), the world's up, and whether the scene
+   is an exterior (a real sky) or a room. Set while the frame is captured. */
+extern float GpuObjSunDir[3];
+extern float GpuObjUpDir[3];
+extern S32 GpuObjSunExterior;
+extern float GpuObjFocal; ///< frame pixels per scene unit at depth 1 (3D), per unit (iso)
+
+/* Soft shadows of the current scene frame, in scene space; set with the lights. */
+#define GPUOBJ_MAX_SHADOWS 96
+/* A shadow is a grid of cells: its depth is linear in view depth, which the GPU
+   interpolates linearly on screen, so large triangles would sink under the ground. */
+#define GPUOBJ_SHADOW_CELLS 8
+#define GPUOBJ_SHADOW_VERTS (GPUOBJ_SHADOW_CELLS * GPUOBJ_SHADOW_CELLS * 6)
+/* Contact shadows and the bodies' projected silhouettes share one list. */
+#define GPUOBJ_SHADOW_CAPACITY 98304
+extern T_GPUOBJ_VERTEX GpuObjShadowVerts[GPUOBJ_SHADOW_CAPACITY];
+extern U32 GpuObjNbShadowVerts;
+void GpuObj_ClearShadows(void);
+/** GPUOBJ_SHADOW_VERTS vertices for one shadow, NULL when the list is full. */
+T_GPUOBJ_VERTEX *GpuObj_AllocShadow(void);
+/** n more shadow vertices, NULL when they do not fit. */
+T_GPUOBJ_VERTEX *GpuObj_AllocShadowVerts(U32 n);
+
 extern S32 GpuObjGlow;        ///< lamp globes on 3D models cast light (gfx_lamps)
 extern S32 GpuObjLampModel;   ///< set by the caller while it draws a lamp model
 extern const U8 *GpuObjLampPalette; ///< the scene's 768-byte RGB palette, for the lamp glass

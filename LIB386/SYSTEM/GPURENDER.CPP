@@ -1,5 +1,7 @@
 #include <SYSTEM/GPURENDER.H>
 
+#include <3D/CAMERA.H>
+#include <3D/PROJ.H>
 #include <SVGA/GPUOBJ.H>
 #include <SVGA/GPUWATER.H>
 #include <SVGA/SCREEN.H>
@@ -64,6 +66,9 @@ static bool s_tagsCleared = false; ///< the tag texture holds known contents
 static SDL_GPUTexture *s_objColor = NULL;
 static SDL_GPUTexture *s_objId = NULL;
 static SDL_GPUTexture *s_objLight = NULL; ///< dynamic light reaching each scene surface
+static SDL_GPUTexture *s_objShadow = NULL;               ///< soft shadow darkness over each surface
+static SDL_GPUTexture *s_objHeight = NULL;               ///< scene-space height for water contact
+static SDL_GPUGraphicsPipeline *s_pipelineShadow = NULL; ///< shadows: darkness target only, darkest wins
 static SDL_GPUTexture *s_depth = NULL;
 static SDL_GPUTexture *s_tags = NULL;
 static U32 s_frameW = 0; ///< software frame (tags)
@@ -166,6 +171,8 @@ static void ReleaseFrameResources(void) {
     ReleaseTexture(&s_objColor);
     ReleaseTexture(&s_objId);
     ReleaseTexture(&s_objLight);
+    ReleaseTexture(&s_objShadow);
+    ReleaseTexture(&s_objHeight);
     ReleaseTexture(&s_depth);
     ReleaseTexture(&s_tags);
     free(s_tagScratch);
@@ -260,9 +267,22 @@ static void CollectFlames(const T_GPUOBJ_DRAW *const *draws, U32 count, U32 fram
 }
 
 /* Composite switches: the player's GPU effects can change at any present. */
+/* How bright the scene's palette is: 1 in daylight, 0 at night. */
+static float Daylight(void) {
+    const U32 *lut = GetVideoPaletteLUT();
+    float luma = 0.0f;
+    for (int i = 0; i < 256; i++) {
+        luma += 0.3f * (float)((lut[i] >> 16) & 255) + 0.59f * (float)((lut[i] >> 8) & 255) +
+                0.11f * (float)(lut[i] & 255);
+    }
+    luma /= 256.0f * 255.0f;
+    const float day = (luma - 0.12f) / (0.32f - 0.12f);
+    return day < 0.0f ? 0.0f : (day > 1.0f ? 1.0f : day);
+}
+
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4];
+    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12];
     SDL_zeroa(params);
     params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
     params[9] = (float)s_nbFlames;
@@ -276,6 +296,30 @@ static void PushCompositeParams(void) {
     params[2] = (s_upscale && GpuObjPixelFilter) ? 1.0f : 0.0f;
     params[3] = (s_upscale && GpuObjDeband) ? 1.0f : 0.0f;
     params[4] = (GpuObjFire || GpuObjGlow) ? 1.0f : 0.0f;
+    float *sun = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4;
+    /* Shoreline depth gating is geometric and must remain active when optional
+       sunlight/AO grading is disabled. */
+    sun[11] = TypeProj == TYPE_3D ? 1.0f : 0.0f;
+    if (GpuObjSunlight) {
+        const float day = Daylight();
+        const float exterior = GpuObjSunExterior ? 1.0f : 0.0f;
+        params[5] = 1.0f;
+        /* Sunlit: warm; shaded: the sky's blue. Moonlit: silver over deep blue. */
+        sun[0] = 1.0f + 0.08f * day;
+        sun[1] = 1.0f + 0.02f * day;
+        sun[2] = 0.9f + 0.1f * (1.0f - day);
+        sun[3] = 0.35f + 0.15f * exterior;
+        sun[4] = 0.9f - 0.08f * (1.0f - day);
+        sun[5] = 0.96f;
+        sun[6] = 1.08f + 0.06f * (1.0f - day);
+        sun[7] = 0.16f * exterior * day + 0.05f;
+        /* Rooms: their furniture is bricks, whose depth is the brick's box, so
+           occlusion would come out blocky; the art already shades them. */
+        sun[8] = 0.55f * exterior;
+        sun[9] = GpuObjFocal * (float)s_targetW / (float)ModeDesiredX;
+        sun[10] = 320.0f;
+        sun[11] = exterior;
+    }
     if (!SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params))) {
         Log_Warn("[GPU] Unable to update composite uniforms: %s", SDL_GetError());
     }
@@ -294,16 +338,19 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     s_objColor = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, tw, th, 1);
     s_objId = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, targetUsage, tw, th, 1);
     s_objLight = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, tw, th, 1);
+    s_objShadow = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, tw, th, 1);
+    s_objHeight = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, targetUsage, tw, th, 1);
     s_depth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, s_depthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, tw, th, 1);
     s_tags = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER, w, h, 1);
     s_tagScratch = (float *)malloc((size_t)w * h * sizeof(float));
     s_tagUpload = (float *)malloc((size_t)w * h * sizeof(float));
-    if (!s_objColor || !s_objId || !s_objLight || !s_depth || !s_tags || !s_tagScratch || !s_tagUpload) {
+    if (!s_objColor || !s_objId || !s_objLight || !s_objShadow || !s_objHeight || !s_depth || !s_tags ||
+        !s_tagScratch || !s_tagUpload) {
         ReleaseFrameResources();
         return false;
     }
 
-    SDL_GPUTextureSamplerBinding bindings[4];
+    SDL_GPUTextureSamplerBinding bindings[6];
     bindings[0].texture = s_objColor;
     bindings[0].sampler = s_linear;
     bindings[1].texture = s_objId;
@@ -312,11 +359,15 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     bindings[2].sampler = s_nearest;
     bindings[3].texture = s_objLight;
     bindings[3].sampler = s_nearest;
+    bindings[4].texture = s_objShadow;
+    bindings[4].sampler = s_linear;
+    bindings[5].texture = s_objHeight;
+    bindings[5].sampler = s_nearest;
 
     SDL_GPURenderStateCreateInfo stateInfo;
     SDL_zero(stateInfo);
     stateInfo.fragment_shader = s_compositeFrag;
-    stateInfo.num_sampler_bindings = 4;
+    stateInfo.num_sampler_bindings = 6;
     stateInfo.sampler_bindings = bindings;
     s_composite = SDL_CreateGPURenderState(s_renderer, &stateInfo);
     if (s_composite == NULL) {
@@ -381,7 +432,7 @@ static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
     s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
-    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 5, 1);
+    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 1);
     if (!s_objVert || !s_objFrag || !s_compositeFrag) {
         return false;
     }
@@ -416,11 +467,13 @@ static bool CreatePipeline(void) {
         attributes[i].offset = i * sizeof(float) * 4;
     }
 
-    SDL_GPUColorTargetDescription targets[3];
+    SDL_GPUColorTargetDescription targets[5];
     SDL_zero(targets);
     targets[0].format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
     targets[1].format = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
     targets[2].format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    targets[3].format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    targets[4].format = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
 
     SDL_GPUGraphicsPipelineCreateInfo info;
     SDL_zero(info);
@@ -439,7 +492,7 @@ static bool CreatePipeline(void) {
     info.depth_stencil_state.enable_depth_test = true;
     info.depth_stencil_state.enable_depth_write = true;
     info.target_info.color_target_descriptions = targets;
-    info.target_info.num_color_targets = 3;
+    info.target_info.num_color_targets = 5;
     info.target_info.depth_stencil_format = s_depthFormat;
     info.target_info.has_depth_stencil_target = true;
 
@@ -465,8 +518,42 @@ static bool CreatePipeline(void) {
     targets[2].blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
     targets[2].blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
     targets[2].blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    /* The glass keeps the shadows under it. */
+    targets[3].blend_state = targets[2].blend_state;
+    targets[3].blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    targets[3].blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[4].blend_state.enable_blend = true;
+    targets[4].blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    targets[4].blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[4].blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    targets[4].blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    targets[4].blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[4].blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
     s_pipelineGlass = SDL_CreateGPUGraphicsPipeline(s_device, &info);
-    if (s_pipeline == NULL || s_pipelinePainter == NULL || s_pipelineGlass == NULL) {
+
+    /* Shadows: only the darkness target changes, overlapping shadows keep the darkest. */
+    SDL_GPUColorTargetBlendState keep;
+    SDL_zero(keep);
+    keep.enable_blend = true;
+    keep.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    keep.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    keep.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    keep.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    keep.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    keep.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    targets[0].blend_state = keep;
+    targets[1].blend_state = keep;
+    targets[2].blend_state = keep;
+    targets[3].blend_state.enable_blend = true;
+    targets[3].blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[3].blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[3].blend_state.color_blend_op = SDL_GPU_BLENDOP_MAX;
+    targets[3].blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[3].blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    targets[3].blend_state.alpha_blend_op = SDL_GPU_BLENDOP_MAX;
+    targets[4].blend_state = keep;
+    s_pipelineShadow = SDL_CreateGPUGraphicsPipeline(s_device, &info);
+    if (s_pipeline == NULL || s_pipelinePainter == NULL || s_pipelineGlass == NULL || s_pipelineShadow == NULL) {
         Log_Warn("[GPU] Unable to create object pipeline: %s", SDL_GetError());
         return false;
     }
@@ -527,6 +614,10 @@ static void ReleasePipeline(void) {
     if (s_pipeline) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipeline);
         s_pipeline = NULL;
+    }
+    if (s_pipelineShadow) {
+        SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelineShadow);
+        s_pipelineShadow = NULL;
     }
     if (s_pipelineGlass) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelineGlass);
@@ -666,6 +757,9 @@ static void UploadVertices(SDL_GPUCopyPass *pass, const T_GPUOBJ_DRAW *const *dr
         memcpy(mapped + offset, GpuObjVerts + draws[i]->First, size);
         offset += size;
     }
+    if (offset + GpuObjNbShadowVerts * sizeof(T_GPUOBJ_VERTEX) <= bytes) {
+        memcpy(mapped + offset, GpuObjShadowVerts, GpuObjNbShadowVerts * sizeof(T_GPUOBJ_VERTEX));
+    }
     SDL_UnmapGPUTransferBuffer(s_device, s_transfer);
 
     SDL_GPUTransferBufferLocation source;
@@ -679,14 +773,42 @@ static void UploadVertices(SDL_GPUCopyPass *pass, const T_GPUOBJ_DRAW *const *dr
     SDL_UploadToGPUBuffer(pass, &source, &region, false);
 }
 
+/* The global light (sun or room light) for the shaders: direction toward it and
+   sun-shadow strength, the world's up and sky-fill strength, the sun's colour and
+   rim strength. A night palette dims the sun and cools it into moonlight. */
+static void SetSunlight(float *sun) {
+    if (!GpuObjSunlight) {
+        return;
+    }
+    const float day = Daylight();
+    const float exterior = GpuObjSunExterior ? 1.0f : 0.0f;
+
+    sun[0] = GpuObjSunDir[0];
+    sun[1] = GpuObjSunDir[1];
+    sun[2] = GpuObjSunDir[2];
+    /* Sun shadows: clear under a daylight sky, faint at night and in rooms. */
+    sun[3] = exterior * (0.2f + 0.4f * day) + (1.0f - exterior) * 0.25f;
+    sun[4] = GpuObjUpDir[0];
+    sun[5] = GpuObjUpDir[1];
+    sun[6] = GpuObjUpDir[2];
+    sun[7] = 0.22f + 0.12f * exterior * day;
+    /* Warm daylight, cool moonlight. */
+    sun[8] = 1.0f - 0.35f * (1.0f - day) * exterior;
+    sun[9] = 0.9f - 0.1f * (1.0f - day) * exterior;
+    sun[10] = 0.75f + 0.15f * (1.0f - day) * exterior;
+    sun[11] = 0.18f + 0.14f * exterior * day;
+}
+
 static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *draws, const T_DRAW_UNIFORMS *uniforms,
                         U32 count) {
-    SDL_GPUColorTargetInfo colors[3];
+    SDL_GPUColorTargetInfo colors[5];
     SDL_zero(colors);
     colors[0].texture = s_objColor;
     colors[1].texture = s_objId;
     colors[2].texture = s_objLight;
-    for (int i = 0; i < 3; i++) {
+    colors[3].texture = s_objShadow;
+    colors[4].texture = s_objHeight;
+    for (int i = 0; i < 5; i++) {
         colors[i].load_op = SDL_GPU_LOADOP_CLEAR;
         colors[i].store_op = SDL_GPU_STOREOP_STORE;
         colors[i].cycle = true;
@@ -702,7 +824,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     depth.cycle = true;
 
-    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, colors, 3, &depth);
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, colors, 5, &depth);
     if (pass == NULL) {
         return;
     }
@@ -727,8 +849,9 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
 
     const double seconds = (double)SDL_GetTicks() / 1000.0;
 
-    /* std140: 16 position/radius vec4, 16 colour/intensity vec4, count. */
-    float lights[GPUOBJ_MAX_LIGHTS * 8 + 4];
+    /* std140: 16 position/radius vec4, 16 colour/intensity vec4, count, then
+       the global light: sun direction, up, sun colour. */
+    float lights[GPUOBJ_MAX_LIGHTS * 8 + 16];
     SDL_zeroa(lights);
     U32 nbLights = GpuObjLightsEnabled ? GpuObjNbLights : 0;
     for (U32 l = 0; l < nbLights; l++) {
@@ -809,6 +932,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         }
     }
     lights[GPUOBJ_MAX_LIGHTS * 8] = (float)nbLights;
+    SetSunlight(lights + GPUOBJ_MAX_LIGHTS * 8 + 4);
     SDL_PushGPUFragmentUniformData(cmd, 1, lights, sizeof(lights));
 
     /* Fire regions of the object page, when that page is among this frame's. */
@@ -899,6 +1023,26 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         first += draw->Count;
     }
 
+    /* Soft shadows over the scene surfaces, occluded by what stands in front. */
+    if (GpuObjNbShadowVerts > 0 && GpuObjShadows) {
+        SDL_BindGPUGraphicsPipeline(pass, s_pipelineShadow);
+        SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
+        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
+        SDL_Rect full;
+        full.x = 0;
+        full.y = 0;
+        full.w = (int)s_targetW;
+        full.h = (int)s_targetH;
+        SDL_SetGPUScissor(pass, &full);
+        const float sceneSlice[2] = {0.5f, 0.5f};
+        SDL_PushGPUVertexUniformData(cmd, 0, sceneSlice, sizeof(sceneSlice));
+        T_DRAW_UNIFORMS u;
+        SDL_zero(u);
+        u.LutRow = -1.0f;
+        SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(u));
+        SDL_DrawGPUPrimitives(pass, GpuObjNbShadowVerts, 1, first, 0);
+    }
+
     /* Second pass: lamp glass over everything drawn behind it. */
     if (nbGlass > 0) {
         SDL_BindGPUGraphicsPipeline(pass, s_pipelineGlass);
@@ -975,6 +1119,9 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     static T_DRAW_UNIFORMS uniforms[8192];
     U32 vertexBytes = 0;
     U32 count = liveCount > 0 ? ResolveDraws(live, liveCount, kept, uniforms, &vertexBytes) : 0;
+    if (count > 0 && GpuObjShadows) {
+        vertexBytes += GpuObjNbShadowVerts * sizeof(T_GPUOBJ_VERTEX);
+    }
     CollectFlames(kept, count, w, h);
     PushCompositeParams();
     if (count == 0) {

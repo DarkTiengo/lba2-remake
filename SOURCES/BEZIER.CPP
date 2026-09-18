@@ -12,6 +12,7 @@
  *══════════════════════════════════════════════════════════════════════════*/
 
 #include "C_EXTERN.H"
+#include <OBJECT/AFF_GPU.H>
 
 // One entry per screen scanline: sizes the shadow-fill span tables below and
 // bounds the fill loop. Must cover the active ModeResY, so it tracks the
@@ -369,6 +370,7 @@ S32 ProjectShadowExt(T_SORT *ptrs, S32 beta) {
     altitude_ref = AdjustShadowDecors(xw, zw, altitude_ref, ptrs->YMax /*yw*/);
     altitude_ref = AdjustShadowObjects(xw, zw, altitude_ref, ptrs->YMax /*yw*/);
 
+    ShadowGround = altitude_ref;
     ptrs->Yw = altitude_ref; // Pour les recouvrements
     ptrs->YMax = altitude_ref + (ptrs->YMax - yw);
 
@@ -386,6 +388,9 @@ S32 ProjectShadowExt(T_SORT *ptrs, S32 beta) {
     else if (cy > altitude_ref + ALTITUDE_MAX)
         cy = altitude_ref + ALTITUDE_MAX;
 
+    ShadowCorner[0][0] = X0;
+    ShadowCorner[0][1] = cy;
+    ShadowCorner[0][2] = Z0;
     LongWorldRotatePoint(X0, cy, Z0);
     if (!LongProjectPoint(X0, Y0, Z0))
         return FALSE;
@@ -407,6 +412,9 @@ S32 ProjectShadowExt(T_SORT *ptrs, S32 beta) {
     else if (cy > altitude_ref + ALTITUDE_MAX)
         cy = altitude_ref + ALTITUDE_MAX;
 
+    ShadowCorner[1][0] = X0;
+    ShadowCorner[1][1] = cy;
+    ShadowCorner[1][2] = Z0;
     LongWorldRotatePoint(X0, cy, Z0);
     if (!LongProjectPoint(X0, Y0, Z0))
         return FALSE;
@@ -428,6 +436,9 @@ S32 ProjectShadowExt(T_SORT *ptrs, S32 beta) {
     else if (cy > altitude_ref + ALTITUDE_MAX)
         cy = altitude_ref + ALTITUDE_MAX;
 
+    ShadowCorner[2][0] = X0;
+    ShadowCorner[2][1] = cy;
+    ShadowCorner[2][2] = Z0;
     LongWorldRotatePoint(X0, cy, Z0);
     if (!LongProjectPoint(X0, Y0, Z0))
         return FALSE;
@@ -449,6 +460,9 @@ S32 ProjectShadowExt(T_SORT *ptrs, S32 beta) {
     else if (cy > altitude_ref + ALTITUDE_MAX)
         cy = altitude_ref + ALTITUDE_MAX;
 
+    ShadowCorner[3][0] = X0;
+    ShadowCorner[3][1] = cy;
+    ShadowCorner[3][2] = Z0;
     LongWorldRotatePoint(X0, cy, Z0);
     if (!LongProjectPoint(X0, Y0, Z0))
         return FALSE;
@@ -463,7 +477,16 @@ S32 ProjectShadowExt(T_SORT *ptrs, S32 beta) {
 }
 
 //▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+S32 ShadowCorner[4][3];
+S32 ShadowGround = 0;
+S32 ShadowCasterY = 0;
+S32 ShadowCasterTall = 0;
+
 void DrawShadow() {
+    /* GPU renderer: a soft shadow drawn on the real ground instead. */
+    if (AffGpu_Shadow(ShadowCorner, ShadowGround, ShadowCasterY - ShadowGround, ShadowCasterTall)) {
+        return;
+    }
     DrawLineShade(XS0, YS0, XS1, YS1, XS2, YS2, XS3, YS3);
 
     //	BoxMovingAdd( ClipXMin, ClipYMin, ClipXMax, ClipYMax ) ;

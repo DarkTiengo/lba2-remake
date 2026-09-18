@@ -65,6 +65,8 @@ Main Menu
 │   │   │   ├── 2D size: < Classic, upscaled/Native > [selector, gfx_uiscale; applied when the page is left]
 │   │   │   ├── Modern water: < On/Off > [selector, gfx_water]
 │   │   │   ├── Lamps on models: < On/Off > [selector, gfx_lamps]
+│   │   │   ├── Global light: < On/Off > [selector, gfx_sunlight]
+│   │   │   ├── Soft shadows: < On/Off > [selector, gfx_shadows]
 │   │   │   ├── Modern fire: < On/Off > [selector, gfx_fire]
 │   │   │   ├── Dynamic lights: < On/Off > [selector, gfx_lights]
 │   │   │   ├── Pixel art filter: < On/Off > [selector, gfx_pixelfilter]

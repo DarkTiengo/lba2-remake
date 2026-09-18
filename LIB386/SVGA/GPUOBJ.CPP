@@ -27,6 +27,31 @@ S32 GpuObjSpecular = TRUE;
 S32 GpuObjUiScale = TRUE;
 S32 GpuObjFire = TRUE;
 S32 GpuObjGlow = TRUE;
+S32 GpuObjShadows = TRUE;
+S32 GpuObjSunlight = TRUE;
+float GpuObjSunDir[3] = {0.0f, 1.0f, 0.0f};
+float GpuObjUpDir[3] = {0.0f, 1.0f, 0.0f};
+S32 GpuObjSunExterior = FALSE;
+float GpuObjFocal = 1.0f;
+T_GPUOBJ_VERTEX GpuObjShadowVerts[GPUOBJ_SHADOW_CAPACITY];
+U32 GpuObjNbShadowVerts = 0;
+
+void GpuObj_ClearShadows(void) {
+    GpuObjNbShadowVerts = 0;
+}
+
+T_GPUOBJ_VERTEX *GpuObj_AllocShadowVerts(U32 n) {
+    if (GpuObjNbShadowVerts + n > GPUOBJ_SHADOW_CAPACITY) {
+        return NULL;
+    }
+    T_GPUOBJ_VERTEX *v = GpuObjShadowVerts + GpuObjNbShadowVerts;
+    GpuObjNbShadowVerts += n;
+    return v;
+}
+
+T_GPUOBJ_VERTEX *GpuObj_AllocShadow(void) {
+    return GpuObj_AllocShadowVerts(GPUOBJ_SHADOW_VERTS);
+}
 S32 GpuObjLampModel = FALSE;
 const U8 *GpuObjLampPalette = NULL;
 

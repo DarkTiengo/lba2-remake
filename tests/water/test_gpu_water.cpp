@@ -151,6 +151,9 @@ int main() {
     GpuWater_GetCompositeImpacts(screen);
     Check(screen[0] == 0.25f && screen[1] == 0.75f && screen[3] == 1.2f,
           "projected impact reaches spray compositor");
+    Check(GpuWater_ContactHeight(-50.0f, -50.0f), "water-height predicate accepts a touching surface");
+    Check(GpuWater_ContactHeight(46.0f, -50.0f), "water-height predicate accepts the contact tolerance edge");
+    Check(!GpuWater_ContactHeight(47.0f, -50.0f), "water-height predicate rejects a dry projected body");
     GpuWater_SetScene(5);
     GpuWater_GetUniforms(next);
     Check(next[19] == 0.0f, "impacts do not leak between islands");

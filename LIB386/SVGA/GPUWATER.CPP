@@ -1,5 +1,6 @@
 #include <SVGA/GPUWATER.H>
 
+#include <math.h>
 #include <string.h>
 
 S32 GpuWaterEnabled = TRUE;
@@ -136,4 +137,8 @@ void GpuWater_GetUniforms(float out[GPUWATER_UNIFORM_FLOATS]) {
         out[16 + i * 4 + 2] = impact->Start;
         out[16 + i * 4 + 3] = impact->Strength;
     }
+}
+
+S32 GpuWater_ContactHeight(float surfaceHeight, float waterHeight) {
+    return (S32)(fabsf(surfaceHeight - waterHeight) <= GPUWATER_CONTACT_HEIGHT_TOLERANCE);
 }

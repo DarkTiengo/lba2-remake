@@ -15,6 +15,9 @@ layout(location = 5) flat in vec2 v_slice;
 layout(location = 0) out vec4 o_color;
 layout(location = 1) out vec4 o_id;
 layout(location = 2) out vec4 o_light; // dynamic light at this surface, halved
+layout(location = 3) out vec4 o_shadow; // r: contact shadow darkness, g: dynamic light blocked,
+                                        // ba: view distance, 16 bits (ambient occlusion)
+layout(location = 4) out float o_height; // scene-space height for water contact
 
 layout(set = 2, binding = 0) uniform sampler2D u_palette;    // 256x1 RGBA
 layout(set = 2, binding = 1) uniform sampler2D u_lut;        // 256xN R8: logical palettes, CLUT blocks
@@ -40,6 +43,9 @@ layout(set = 3, binding = 1) uniform Lights {
     vec4 lightPos[16];   // xyz in the scene's space, w radius
     vec4 lightColor[16]; // rgb, w intensity
     float lightCount;
+    vec4 sunDir;   // toward the global light, w: sun shadow strength (0: global light off)
+    vec4 upDir;    // the world's up, w: sky fill strength
+    vec4 sunColor; // rgb, w: rim light strength
 };
 
 layout(set = 3, binding = 2) uniform Fire {
@@ -70,6 +76,35 @@ vec3 DynamicLight(vec3 pos, vec3 normal, bool useNormal) {
     return sum;
 }
 
+/* Distance between segments p0-p1 and q0-q1; s is where along p0-p1. */
+float SegmentDistance(vec3 p0, vec3 p1, vec3 q0, vec3 q1, out float s) {
+    vec3 d1 = p1 - p0;
+    vec3 d2 = q1 - q0;
+    vec3 r = p0 - q0;
+    float a = dot(d1, d1);
+    float e = dot(d2, d2);
+    float f = dot(d2, r);
+    float c = dot(d1, r);
+    float b = dot(d1, d2);
+    float denom = a * e - b * b;
+    s = denom > 1e-6 ? clamp((b * f - c * e) / denom, 0.0, 1.0) : 0.0;
+    float t = clamp((b * s + f) / max(e, 1e-6), 0.0, 1.0);
+    s = clamp((b * t - c) / max(a, 1e-6), 0.0, 1.0);
+    return length(p0 + d1 * s - (q0 + d2 * t));
+}
+
+/* The soft contact blob under a body; its shape-true shadows away from the sun
+   and the lights are the silhouettes (MODE_SILHOUETTE). */
+vec2 ShadowOf() {
+    vec2 e = v_uv.zw / v_mat.z;
+    float r = length(e);
+    float body = 1.0 - smoothstep(0.62, 1.08, r);
+    float core = 1.0 - smoothstep(0.0, 0.5, r);
+    float blob = v_mat.y * (0.75 * body + 0.25 * core);
+
+    return vec2(blob, 0.0);
+}
+
 const int MODE_PASS = 0;
 const int MODE_SOLID = 1;
 const int MODE_SHADED = 2;
@@ -79,6 +114,8 @@ const int MODE_DISC = 5;
 const int MODE_CLUT = 6;
 const int MODE_BRICK = 7;
 const int MODE_ORB = 8;
+const int MODE_SHADOW = 9;
+const int MODE_SILHOUETTE = 10;
 
 /* Must match ISO_DEPTH_RANGE in AFF_GPU.CPP: bricks and iso bodies share depth. */
 const float ISO_DEPTH_RANGE = 524288.0;
@@ -274,6 +311,35 @@ float BrickDepth(out vec3 surface) {
     return v_slice.x + d * 0.999 * v_slice.y;
 }
 
+/* The global light on a body, over its palette shading: the sky fills the side
+   turned up but away from the sun (the palette ramp leaves it flat dark), the
+   ground bounces a little warmth under it, and the sun rims the silhouette
+   when it shines from behind. */
+vec3 GlobalLight(vec3 color, vec3 normal) {
+    vec3 n = normalize(normal);
+    vec3 l = normalize(sunDir.xyz);
+    vec3 view = (Flags() & FLAG_ISO) != 0 ? normalize(vec3(1.0, 0.8, 1.0)) : normalize(-v_vpos.xyz);
+    float lit = clamp(dot(n, l), 0.0, 1.0);
+    float up = dot(n, upDir.xyz) * 0.5 + 0.5;
+    vec3 sky = fogEnd > fogStart ? mix(Pal(int(fogColor)), vec3(0.6, 0.7, 0.85), 0.5) : vec3(0.62, 0.66, 0.75);
+    vec3 ground = vec3(0.55, 0.45, 0.35);
+    vec3 fill = mix(ground * 0.4, sky, up) * upDir.w * (1.0 - lit);
+    color *= vec3(1.0) + fill * 1.6;
+    float rim = pow(1.0 - clamp(dot(n, view), 0.0, 1.0), 3.0);
+    float behind = clamp(dot(l, -view) * 0.6 + 0.4, 0.0, 1.0);
+    color += sunColor.rgb * rim * behind * sunColor.w * (0.4 + 0.6 * up);
+    return color;
+}
+
+/* Distance from the camera along the view, packed in two 8-bit channels for the
+   composite's ambient occlusion; 0 marks no surface. */
+vec2 PackDistance(vec3 p, bool iso) {
+    float dist = iso ? 65536.0 - (p.x + 0.8 * p.y + p.z) / 1.6248 : -p.z;
+    float t = clamp(dist / 131072.0, 1.0 / 65025.0, 1.0 - 1.0 / 255.0);
+    float hi = floor(t * 255.0) / 255.0;
+    return vec2(hi, (t - hi) * 255.0);
+}
+
 #include "WATER.glsl"
 
 void main() {
@@ -281,6 +347,52 @@ void main() {
     float id = drawId;
     gl_FragDepth = gl_FragCoord.z;
     o_light = vec4(0.0);
+    o_shadow = vec4(0.0);
+    /* Water contact is a height test, not a screen-space proximity test. The
+       view-space point is projected onto the scene's world-up axis, which is
+       valid for both rotated perspective scenery and isometric rooms. */
+    o_height = dot(v_vpos.xyz, upDir.xyz);
+
+    if (mode == MODE_SILHOUETTE) {
+        /* A body flattened on the ground: the sun's shadow (r) or a light's (g,
+           the share of that light it takes away here), fading with distance. */
+        if (v_mat.w > 0.5 && dot(v_uv.zw, v_uv.zw) > 1.0) {
+            discard;
+        }
+        float fade = 1.0 - smoothstep(0.3, 1.0, length(v_vpos.xyz - v_normal.xyz) / v_normal.w);
+        o_color = vec4(0.0);
+        o_id = vec4(0.0);
+        if (v_mat.z <= 0.0) {
+            o_shadow = vec4(sunDir.w * v_mat.y * fade, 0.0, 0.0, 0.0);
+        } else {
+            vec3 d = v_light.xyz - v_vpos.xyz;
+            float f = clamp(1.0 - dot(d, d) / (v_mat.x * v_mat.x), 0.0, 1.0);
+            float mine = f * f * v_mat.z;
+            float total = 0.0;
+            int count = int(lightCount);
+            for (int k = 0; k < count; k++) {
+                vec3 e = lightPos[k].xyz - v_vpos.xyz;
+                float fk = clamp(1.0 - dot(e, e) / (lightPos[k].w * lightPos[k].w), 0.0, 1.0);
+                total += fk * fk * lightColor[k].w * dot(lightColor[k].rgb, vec3(0.3, 0.59, 0.11));
+            }
+            float share = total > 0.0 ? min(mine / total, 1.0) : 0.0;
+            o_shadow = vec4(0.0, share * v_mat.y * fade, 0.0, 0.0);
+        }
+        if (o_shadow.r < 0.004 && o_shadow.g < 0.004) {
+            discard;
+        }
+        return;
+    }
+
+    if (mode == MODE_SHADOW) {
+        o_color = vec4(0.0);
+        o_id = vec4(0.0);
+        o_shadow = vec4(ShadowOf(), 0.0, 0.0);
+        if (o_shadow.r < 0.004 && o_shadow.g < 0.004) {
+            discard;
+        }
+        return;
+    }
 
     if (mode == MODE_BRICK) {
         BrickCoverage();
@@ -289,6 +401,7 @@ void main() {
         vec3 surface;
         gl_FragDepth = BrickDepth(surface);
         o_light = vec4(min(DynamicLight(surface, vec3(0.0, 1.0, 0.0), false), vec3(2.0)) * 0.5, 0.0);
+        o_shadow = vec4(0.0, 0.0, PackDistance(surface, true));
         return;
     }
 
@@ -422,6 +535,12 @@ void main() {
         color = min(color, vec3(0.97));
     }
 
+    bool litBody = (mode == MODE_SHADED || mode == MODE_TEXSHADED || mode == MODE_CLUT) &&
+                   (Flags() & FLAG_BAKED) == 0 && emissive <= 0.0;
+    if (litBody && sunDir.w > 0.0) {
+        color = GlobalLight(color, surfaceNormal);
+    }
+
     if (fogEnd > fogStart) {
         float f = clamp((-v_vpos.z - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
         color = mix(color, Pal(int(fogColor)), f);
@@ -433,5 +552,8 @@ void main() {
        without another full-resolution render target. */
     float material = water ? (1.0 / 255.0) : (sky ? (2.0 / 255.0) : clamp(emissive, 0.0, 1.0));
     o_light = vec4(min(DynamicLight(v_vpos.xyz, surfaceNormal, !baked), vec3(2.0)) * 0.5, material);
+    if (!sky) {
+        o_shadow = vec4(0.0, 0.0, PackDistance(v_vpos.xyz, (Flags() & FLAG_ISO) != 0));
+    }
     o_id = vec4(id, 0.0, 0.0, 1.0);
 }

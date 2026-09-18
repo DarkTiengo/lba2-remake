@@ -15,6 +15,8 @@ layout(set = 2, binding = 1) uniform sampler2D u_objColor;
 layout(set = 2, binding = 2) uniform sampler2D u_objId; // R32F draw ids
 layout(set = 2, binding = 3) uniform sampler2D u_tags;  // R32F draw ids per pixel
 layout(set = 2, binding = 4) uniform sampler2D u_objLight; // dynamic light, halved
+layout(set = 2, binding = 5) uniform sampler2D u_objShadow; // soft shadow darkness
+layout(set = 2, binding = 6) uniform sampler2D u_objHeight; // scene-space surface height
 
 layout(set = 3, binding = 0) uniform Params {
     float debugTint;   // > 0: tint GPU pixels green (LBA2_GPU_DEBUG)
@@ -22,7 +24,7 @@ layout(set = 3, binding = 0) uniform Params {
     float pixelFilter; // > 0: upscaled software pixels go through xBR
     float deband;      // > 0: upscaled software pixels are debanded
     float glow;        // > 0: bloom halo around emissive surfaces (fire, lamp globes)
-    float glowPad0;
+    float sunlight;    // > 0: global light grading, sun bloom, ambient occlusion
     float waterStorm;  // > 0: wider, faster breakers while visible rain is active
     float glowPad2;
     float flameTime;   // seconds
@@ -31,6 +33,9 @@ layout(set = 3, binding = 0) uniform Params {
     float waterEnabled;
     vec4 flameBoxes[16]; // burning polygons' screen boxes in frame uv (x0, y0, x1, y1)
     vec4 waterImpacts[8]; // screen x/y, start time, strength
+    vec4 sunTint;  // lit surfaces lean to the sun's colour; w: grading strength
+    vec4 skyTint;  // shaded ones to the sky's; w: sun bloom strength
+    vec4 aoParams; // x strength, y pixels per unit (3D: at distance 1), z world radius, w 1 in 3D
 };
 
 // --- Flames ----------------------------------------------------------------------
@@ -116,6 +121,11 @@ vec3 Glow(vec2 uv) {
             float e = texelFetch(u_objLight, q, 0).a;
             if (e > 0.02) {
                 sum += texelFetch(u_objColor, q, 0).rgb * e * weight;
+            } else if (skyTint.w > 0.0) {
+                /* Sunlit highlights bloom softly too. */
+                vec3 c = texelFetch(u_objColor, q, 0).rgb;
+                float bright = smoothstep(0.84, 0.98, dot(c, vec3(0.3, 0.59, 0.11)));
+                sum += c * bright * skyTint.w * weight;
             }
             total += weight;
         }
@@ -126,6 +136,75 @@ vec3 Glow(vec2 uv) {
     }
     total += 2.0;
     return sum / total * 1.6;
+}
+
+// --- Global light ------------------------------------------------------------------
+float UnpackDistance(ivec2 q) {
+    vec2 ba = texelFetch(u_objShadow, q, 0).ba;
+    float t = ba.x + ba.y / 255.0;
+    return t > 0.0 ? t * 131072.0 : -1.0;
+}
+
+/* Ambient occlusion from the view distance: each pair of opposite neighbours
+   predicts where a flat surface through them would put this pixel (harmonic in
+   perspective, where 1/distance is linear on screen); lying behind that plane
+   means a crease, a corner, the foot of a wall. Within one draw only sharp
+   corners count: the low-poly terrain's gentle folds are smooth in the art and
+   must stay so. Returns the light kept. */
+float AmbientOcclusion(ivec2 p) {
+    float d = UnpackDistance(p);
+    if (d <= 0.0 || aoParams.x <= 0.0) {
+        return 1.0;
+    }
+    ivec2 size = textureSize(u_objShadow, 0);
+    float radius = aoParams.z;
+    float px = aoParams.w > 0.5 ? aoParams.y * radius / max(d, 1.0) : aoParams.y * radius;
+    px = clamp(px, 2.0, 48.0);
+    float self = texelFetch(u_objId, clamp(ivec2(vec2(p) * vec2(textureSize(u_objId, 0)) / vec2(size)), ivec2(0),
+                                           textureSize(u_objId, 0) - ivec2(1)), 0).r;
+    float occ = 0.0;
+    const int PAIRS = 6;
+    for (int ring = 0; ring < 2; ring++) {
+        float r = px * (ring == 0 ? 0.5 : 1.0);
+        for (int k = 0; k < PAIRS; k++) {
+            float a = (float(k) + 0.5 * float(ring)) * 3.14159265 / float(PAIRS);
+            ivec2 o = ivec2(vec2(cos(a), sin(a)) * r);
+            float da = UnpackDistance(clamp(p + o, ivec2(0), size - ivec2(1)));
+            float db = UnpackDistance(clamp(p - o, ivec2(0), size - ivec2(1)));
+            if (da <= 0.0 || db <= 0.0) {
+                continue;
+            }
+            float ia = texelFetch(u_objId, clamp(p + o, ivec2(0), size - ivec2(1)), 0).r;
+            float ib = texelFetch(u_objId, clamp(p - o, ivec2(0), size - ivec2(1)), 0).r;
+            bool same = abs(ia - self) < 0.5 && abs(ib - self) < 0.5;
+            float plane = aoParams.w > 0.5 ? 2.0 / (1.0 / da + 1.0 / db) : 0.5 * (da + db);
+            float crease = (d - plane) / radius;
+            /* A neighbour far in front or behind is another object (or a horizon
+               cube drawn from a shifted camera), not this surface's corner. */
+            float near = 1.0 - smoothstep(radius * 1.2, radius * 2.5, max(abs(d - da), abs(d - db)));
+            occ += (same ? smoothstep(0.4, 1.1, crease) : clamp(crease, 0.0, 1.0)) * near;
+        }
+    }
+    return 1.0 - aoParams.x * clamp(occ / float(PAIRS * 2) * 2.5, 0.0, 1.0);
+}
+
+/* Lit surfaces lean toward the sun's colour, shaded ones toward the sky's. */
+vec3 Grade(vec3 c) {
+    float luma = dot(c, vec3(0.3, 0.59, 0.11));
+    vec3 tone = mix(skyTint.rgb, sunTint.rgb, smoothstep(0.12, 0.7, luma));
+    return mix(c, c * tone, sunTint.w);
+}
+
+/* The shadow target softened: silhouettes are drawn sharp, a penumbra is not. */
+vec2 SoftShadow(vec2 uv) {
+    vec2 texel = 1.0 / vec2(textureSize(u_objShadow, 0));
+    float r = float(textureSize(u_objShadow, 0).y) / 540.0 * 1.6;
+    vec2 sum = textureLod(u_objShadow, uv, 0.0).rg * 2.0;
+    for (int k = 0; k < 8; k++) {
+        float a = float(k) * 0.785398;
+        sum += textureLod(u_objShadow, uv + vec2(cos(a), sin(a)) * r * texel, 0.0).rg;
+    }
+    return sum / 10.0;
 }
 
 // --- Software frame -----------------------------------------------------------
@@ -301,6 +380,13 @@ vec2 ShoreFoam(ivec2 p) {
     if (SkyMarker(current)) {
         return vec2(0.0);
     }
+    float surfaceHeight = texelFetch(u_objHeight, p, 0).r;
+    /* A projected body can sit beside the sea while its feet are well above
+       the surface. Require the fragment and the nearby water edge to share a
+       world-up height before allowing foam on either side of the boundary. */
+    const float CONTACT_HEIGHT_TOLERANCE = 96.0; // GPUWATER_CONTACT_HEIGHT_TOLERANCE
+    const float CONTACT_DEPTH_TOLERANCE = 4096.0;
+    float surfaceDepth = UnpackDistance(p);
     float nearest = 30.0;
     for (int ring = 1; ring <= 5; ring++) {
         float radius = float(ring * ring);
@@ -313,6 +399,16 @@ vec2 ShoreFoam(ivec2 p) {
             float marker = texelFetch(u_objLight, q, 0).a;
             bool boundary = onWater ? (!WaterMarker(marker) && !SkyMarker(marker))
                                     : WaterMarker(marker);
+            if (boundary) {
+                boundary = abs(surfaceHeight - texelFetch(u_objHeight, q, 0).r) <= CONTACT_HEIGHT_TOLERANCE;
+                if (boundary && aoParams.w > 0.5) {
+                    float edgeDepth = UnpackDistance(q);
+                    /* A foreground body projected over a distant sea has the
+                       right screen position but cannot be a water contact. */
+                    boundary = edgeDepth > 0.0 && surfaceDepth > 0.0 &&
+                               abs(surfaceDepth - edgeDepth) <= CONTACT_DEPTH_TOLERANCE;
+                }
+            }
             if (boundary) {
                 nearest = min(nearest, radius);
             }
@@ -409,6 +505,17 @@ void main() {
     float tag = texelFetch(u_tags, tp, 0).r;
     float id = texelFetch(u_objId, p, 0).r;
 
+    /* LBA2_GPU_DEBUG=5: the ambient occlusion alone. */
+    if (debugTint > 4.5) {
+        o_color = vec4(vec3(AmbientOcclusion(p)), 1.0);
+        return;
+    }
+    /* LBA2_GPU_DEBUG=3: the soft shadow target. */
+    if (debugTint > 2.5 && debugTint < 3.5) {
+        vec2 s = SoftShadow(v_uv);
+        o_color = vec4((1.0 - s.r) * vec3(1.0, 1.0 - s.g, 1.0 - s.g), 1.0);
+        return;
+    }
     /* LBA2_GPU_DEBUG=2: the GPU image alone, wherever it drew. */
     if (debugTint > 1.5) {
         o_color = id > 0.0 ? vec4(texelFetch(u_objColor, p, 0).rgb, 1.0) : vec4(1.0, 0.0, 1.0, 1.0);
@@ -418,25 +525,41 @@ void main() {
     /* Scene tags accept any scene surface: the GPU's depth picks it. */
     const float SCENE_BIT = 8388608.0;
     bool match = tag > 0.0 && (abs(tag - id) < 0.5 || (tag >= SCENE_BIT && id >= SCENE_BIT));
-    vec3 halo = glow > 0.0 ? Glow(v_uv) : vec3(0.0);
+    vec3 halo = (glow > 0.0 || skyTint.w > 0.0) ? Glow(v_uv) : vec3(0.0);
     if (flameCount > 0.5) {
         halo += Flames(v_uv);
     }
     halo += WaterSpray(v_uv);
     if (!match) {
-        o_color = vec4(Screen(SoftwarePixel(v_uv), halo), 1.0) * v_color;
+        vec3 c = SoftwarePixel(v_uv);
+        /* A soft shadow reaches the untouched frame too (an interior room's
+           floor) where the GPU knows the surface, so it stays behind walls. */
+        if (texelFetch(u_objId, p, 0).r > 0.0) {
+            c *= 1.0 - SoftShadow(v_uv).r;
+            if (sunlight > 0.0) {
+                c = Grade(c * AmbientOcclusion(p));
+            }
+        }
+        o_color = vec4(Screen(c, halo), 1.0) * v_color;
         return;
     }
 
     vec4 nearest = texelFetch(u_objColor, p, 0);
     vec4 lightTexel = texelFetch(u_objLight, p, 0);
+    /* Soft shadow, filtered at the GPU's resolution. */
+    vec2 shadow = SoftShadow(v_uv);
+    float shade = 1.0 - shadow.r;
     /* An emissive surface is the light source: it is not lit again by itself. */
     float emissive = lightTexel.a > 0.02 ? lightTexel.a : 0.0;
-    vec3 light = lightTexel.rgb * 2.0 * (1.0 - emissive);
+    /* Bodies block the dynamic light behind them. */
+    vec3 light = lightTexel.rgb * 2.0 * (1.0 - emissive) * (1.0 - shadow.g);
     if (nearest.a < 0.5) {
         /* A surface whose colour is the software frame (interior bricks). */
         vec3 c = SoftwarePixel(v_uv);
-        o_color = vec4(Screen(c * (vec3(1.0) + light), halo), 1.0) * v_color;
+        if (sunlight > 0.0) {
+            c = Grade(c * AmbientOcclusion(p));
+        }
+        o_color = vec4(Screen(c * (vec3(1.0) + light) * shade, halo), 1.0) * v_color;
         return;
     }
 
@@ -449,7 +572,10 @@ void main() {
     } else {
         gpu = nearest.rgb;
     }
-    gpu *= vec3(1.0) + light;
+    if (sunlight > 0.0 && emissive <= 0.0) {
+        gpu = Grade(gpu * AmbientOcclusion(p));
+    }
+    gpu *= (vec3(1.0) + light) * shade;
     vec2 shore = ShoreFoam(p);
     float crest = max(max(gpu.r, gpu.g), gpu.b);
     vec3 foamColor = min(gpu * 1.45 + vec3(crest) * 0.22, vec3(1.0));

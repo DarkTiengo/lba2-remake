@@ -40,6 +40,21 @@ void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth);
 S32 AffGpu_OrbBegin(S32 cx, S32 cy, S32 halfBox);
 void AffGpu_OrbEnd(S32 cx, S32 cy, const U8 *palette);
 
+/** A soft shadow for the ground quad whose four edge midpoints are corners (world
+ *  space, in ProjectShadow order) on the ground at altitude ground, height its
+ *  caster above the ground and tall
+ *  the caster's own height. Besides the contact shadow, the caster blocks the
+ *  dynamic lights (lamps, fire, magic ball) and throws its shadow away from
+ *  them. TRUE when the GPU draws it (the software shadow is then skipped). */
+S32 AffGpu_Shadow(const S32 corners[4][3], S32 ground, S32 height, S32 tall);
+
+/** A scene frame starts: forget the last frame's bodies and shadows. */
+void AffGpu_BeginScene(void);
+
+/** Every body and shadow of the frame is captured: project each shadow's body
+ *  on the ground, away from the sun and from the strongest lights near it. */
+void AffGpu_BuildShadows(void);
+
 /** A point light at world position (x, y, z), moved into the space the bodies
  *  of the current projection are captured in (GpuObj_AddLight). */
 void AffGpu_AddWorldLight(S32 x, S32 y, S32 z, float radius, float r, float g, float b, float intensity);

@@ -2,6 +2,7 @@
 #include "RES_SWITCH.H"
 #include <POLYGON/POLYFILT.H>
 
+#include "BEZIER.H" /* ShadowCaster: the GPU shadows' caster */
 #include "DEMO_SEED.H"
 #include "FOLLOWCAM.H" /* FollowCamera: camera zones re-aim the Auto camera */
 #include "RECORD.H"    /* Record_SeedHook: the boot scene load's seed on a replay */
@@ -4886,6 +4887,19 @@ static S32 FlagFlip = 0;
 //▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 /*──────────────────────────────────────────────────────────────────────────*/
 void AfficheShadow(T_SORT *pt, S32 beta) {
+    /* Its caster, for the GPU renderer's shadows: a shadow lies at the X, Z of
+       the object throwing it (extras have none: height unknown). */
+    S32 n;
+    ShadowCasterY = pt->Yw;
+    ShadowCasterTall = 0;
+    for (n = 0; n < NbObjets; n++) {
+        if (ListObjet[n].Obj.X == pt->Xw AND ListObjet[n].Obj.Z == pt->Zw) {
+            ShadowCasterY = ListObjet[n].Obj.Y;
+            ShadowCasterTall = ListObjet[n].YMax - ListObjet[n].YMin;
+            break;
+        }
+    }
+
     if (PtrProjectShadow(pt, beta)) {
         if (ClipXMin <= ClipXMax
                             AND ClipYMin <= ClipYMax) {
@@ -5456,6 +5470,8 @@ startaffscene:
        it share the GPU's real depth. */
     GpuObj_SetSceneDepth(TRUE);
     GpuObj_ClearLights();
+    GpuObj_ClearShadows();
+    AffGpu_BeginScene();
     GpuWater_SetTime(TimerRefHR);
     GpuWater_SetWeather(CubeMode == CUBE_EXTERIEUR && Island == 0
                         && TEMPETE_ACTIVE && RainEnable);
@@ -5936,6 +5952,8 @@ startaffscene:
         const T_OBJET *hero = &ListObjet[NUM_PERSO];
         AffGpu_AddWorldLight(hero->Obj.X, hero->Obj.Y + 1200, hero->Obj.Z, 2400.0f, 1.0f, 0.8f, 0.55f, 0.35f);
     }
+    /* Every body is captured: their shadows can follow their shapes. */
+    AffGpu_BuildShadows();
 
     /*------------------------------------------------------------------------*/
     // special incrust disp

@@ -27,28 +27,10 @@ vec3 WaterTexture(vec2 uv, int offset) {
 
 vec2 WaterWave(vec2 p, vec2 direction, float frequency, float speed, float slope) {
     float phase = dot(p, direction) * frequency + waterInfo.x * speed * (6.28318530718 / 256.0);
-    /* Subpixel ripples fade out instead of shimmering at the horizon. */
-    float attenuation = 1.0 - smoothstep(0.4, 2.5, fwidth(phase));
+    /* Fine capillary waves disappear into the average instead of crawling as
+       stripes when a distant water polygon covers only a few pixels. */
+    float attenuation = 1.0 - smoothstep(0.55, 2.0, fwidth(phase));
     return direction * cos(phase) * slope * attenuation;
-}
-
-float WaterHash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
-/* One short-lived ring per moving world-space cell suggests rain striking the
-   surface without spawning hundreds of CPU particles. */
-vec2 RainRipples(vec2 p, out float glint) {
-    vec2 grid = p * 0.72;
-    vec2 cell = floor(grid);
-    vec2 centre = vec2(WaterHash(cell), WaterHash(cell + vec2(19.1, 7.7)));
-    vec2 delta = fract(grid) - centre;
-    float distance = length(delta);
-    float age = fract(waterInfo.x * 0.92 + WaterHash(cell + 3.7));
-    float radius = age * 0.62;
-    float ring = exp(-pow((distance - radius) / 0.055, 2.0)) * (1.0 - age);
-    glint = ring;
-    return delta / max(distance, 0.025) * ring * 0.055;
 }
 
 float WaterImpactAge(float start) {
@@ -70,12 +52,14 @@ vec2 WaterImpactWaves(vec2 p, out float foam) {
         vec2 delta = p - impact.xy;
         float distance = length(delta);
         float radius = age * (2.9 + impact.w);
-        float width = 0.5 + age * 0.22;
+        float width = 0.72 + age * 0.28;
         float front = exp(-pow((distance - radius) / width, 2.0));
-        float wake = cos((distance - radius) * 5.2) * front;
+        /* A broad, damped crest reads as one disturbance; a high carrier
+           frequency turns the impact into a stack of razor-thin contour rings. */
+        float wake = cos((distance - radius) * 2.1) * front * 0.55;
         float fade = 1.0 - smoothstep(1.3, 2.7, age);
         slope += delta / max(distance, 0.05) * wake * impact.w * fade * 0.14;
-        foam = max(foam, front * fade * clamp(impact.w * 0.58, 0.0, 1.0));
+        foam = max(foam, front * fade * clamp(impact.w * 0.44, 0.0, 1.0));
     }
     return slope;
 }
@@ -83,18 +67,17 @@ vec2 WaterImpactWaves(vec2 p, out float foam) {
 vec3 WaterColor(out vec3 viewNormal) {
     vec2 p = v_uv.zw;
     float storm = clamp(waterInfo.z, 0.0, 1.0);
-    vec2 slope = WaterWave(p, vec2(0.8, 0.6), 0.65, 37.0, 0.13);
-    slope += WaterWave(p, vec2(-0.6, 0.8), 1.05, -53.0, 0.085);
-    slope += WaterWave(p, vec2(0.28, -0.96), 2.3, 83.0, 0.035);
-    slope += WaterWave(p, vec2(0.96, 0.28), 4.7, -127.0, 0.018);
-    /* Rain scenes retain the original directions but gain long, faster swells
-       and small impact rings, so the coast reads as rough rather than noisy. */
-    slope += WaterWave(p, vec2(0.94, -0.34), 0.39, 61.0, 0.19 * storm);
-    slope += WaterWave(p, vec2(-0.22, -0.98), 0.82, -89.0, 0.12 * storm);
-    float rainGlint = 0.0;
-    if (storm > 0.0) {
-        slope += RainRipples(p, rainGlint) * storm;
-    }
+    /* A dominant swell and shorter cross-waves share the same world-anchored
+       phase. Their restrained slopes describe a displaced surface, rather
+       than a height-field of unrelated sine stripes. */
+    vec2 slope = WaterWave(p, normalize(vec2(0.86, 0.51)), 0.24, 11.0, 0.050);
+    slope += WaterWave(p, normalize(vec2(-0.43, 0.90)), 0.38, -16.0, 0.034);
+    slope += WaterWave(p, normalize(vec2(0.18, -0.98)), 0.72, 25.0, 0.016);
+    slope += WaterWave(p, normalize(vec2(0.97, 0.23)), 1.28, -37.0, 0.007);
+    /* Wind roughens the swell and adds short-wave energy, but never overwhelms
+       the base colour. */
+    slope += WaterWave(p, normalize(vec2(0.72, -0.69)), 0.18, 15.0, 0.040 * storm);
+    slope += WaterWave(p, normalize(vec2(-0.12, -0.99)), 0.46, -23.0, 0.021 * storm);
     float impactFoam;
     slope += WaterImpactWaves(p, impactFoam);
     vec3 normal = normalize(vec3(-slope.x, 1.0, -slope.y));
@@ -107,16 +90,22 @@ vec3 WaterColor(out vec3 viewNormal) {
     vec3 reflected = reflect(-worldView, normal);
     vec2 skyUv = vec2(64.0) + reflected.xz / max(abs(reflected.y), 0.25) * 18.0;
     vec3 sky = WaterTexture(skyUv, 128);
-    vec3 base = WaterTexture(v_uv.xy + slope * (3.0 + storm * 1.4), 0);
-    vec3 color = mix(base * (0.88 + 0.12 * facing), sky, 0.12 + fresnel * 0.58);
+    /* The polygon UVs restart at clipped sea-tile boundaries. Sampling the
+       palette page from the world phase keeps the colour field continuous
+       across those triangles and blends two scales to hide page repetition. */
+    vec2 waterUv = p * 0.13 + vec2(0.5) + slope * (0.35 + storm * 0.12);
+    vec3 baseFine = WaterTexture(waterUv, 0);
+    vec3 baseBroad = WaterTexture(p * 0.047 + vec2(0.17, 0.63) - slope * 0.18, 0);
+    vec3 base = mix(baseFine, baseBroad, 0.36);
+    vec3 color = mix(base * (0.90 + 0.10 * facing), sky, 0.08 + fresnel * 0.62);
     vec3 light = normalize(v_light.xyz);
     vec3 halfVector = normalize(view + light);
     float highlight = pow(max(dot(viewNormal, halfVector), 0.0), 72.0) *
                       max(dot(viewNormal, light), 0.0);
     /* A palette-derived glint cannot remain bright during a fade to black. */
-    color += max(sky, base) * highlight * specular * 0.7;
+    color += max(sky, base) * highlight * specular * (0.32 + 0.18 * storm);
     vec3 foamColor = min(max(sky, base) * 1.38, vec3(0.92));
-    float surfaceFoam = max(impactFoam * 0.62, rainGlint * storm * 0.24);
+    float surfaceFoam = impactFoam * (0.46 + 0.16 * storm);
     color = mix(color, foamColor, surfaceFoam);
     return color;
 }

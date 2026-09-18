@@ -13,6 +13,12 @@ typedef S32(Func_ProjectShadow)(T_SORT *, S32);
 
 extern S32 XS0, YS0, XS1, YS1, XS2, YS2, XS3, YS3;
 extern S32 ShadowTestObject;
+/* The last projected shadow's four corners in world space, the ground under
+   it and its caster, for the GPU renderer's soft shadows. */
+extern S32 ShadowCorner[4][3];
+extern S32 ShadowGround;     ///< the ground's altitude under the caster
+extern S32 ShadowCasterY;    ///< the caster's feet
+extern S32 ShadowCasterTall; ///< its height, 0 when unknown
 
 /*--------------------------------------------------------------------------*/
 void CalculeLigneOmbre(S32 x1, S32 y1, S32 x2, S32 y2);

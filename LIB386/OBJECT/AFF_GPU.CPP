@@ -62,6 +62,43 @@ static T_OBJ_POINT s_rot[MAX_NB_POINTS];
 
 static float s_normal[MAX_LIGHTS][4]; ///< xyz, shade scale
 static float s_light[3];
+static void UpdateSceneLight(void);
+
+/* The frame's bodies, kept for their shadows: triangles in scene space (x, y, z,
+   then 1 and the disc coordinates for sphere impostors, zeros otherwise). */
+#define MAX_CASTERS 96
+#define MAX_CASTER_VERTS 65536
+typedef struct {
+    float Origin[3];
+    U32 First;
+    U32 Count;
+} T_CASTER;
+static T_CASTER s_casters[MAX_CASTERS];
+static U32 s_nbCasters = 0;
+static float s_casterVerts[MAX_CASTER_VERTS][6];
+static U32 s_nbCasterVerts = 0;
+static float s_origin[3];
+
+/* Shadows asked for this frame: the body's origin and the ground under it. */
+typedef struct {
+    float Origin[3];
+    float Ground[3];
+    float Radius;
+    float Tall;
+    float Strength; ///< fainter the higher the body jumps
+} T_SHADOW_REQUEST;
+static T_SHADOW_REQUEST s_requests[GPUOBJ_MAX_SHADOWS];
+static U32 s_nbRequests = 0;
+
+/* Lamps and fires of the frame's bodies, which also cast shadows. */
+typedef struct {
+    float Pos[3];
+    float Radius;
+    float Weight;
+} T_FRAME_LIGHT;
+#define MAX_FRAME_LAMPS 32
+static T_FRAME_LIGHT s_lamps[MAX_FRAME_LAMPS];
+static U32 s_nbLamps = 0;
 static T_GPUOBJ_DRAW *s_draw = NULL;
 
 /* Fire-textured polygons of the body being captured: their centres summed. */
@@ -397,6 +434,7 @@ S32 AffGpu_Begin(void) {
     s_glowSum[0] = s_glowSum[1] = s_glowSum[2] = 0.0f;
     s_glowRgb[0] = s_glowRgb[1] = s_glowRgb[2] = 0.0f;
 
+    UpdateSceneLight();
     s_light[0] = (float)CameraXLight;
     s_light[1] = (float)CameraYLight;
     s_light[2] = (float)CameraZLight;
@@ -421,6 +459,9 @@ S32 AffGpu_Begin(void) {
         RotateNormals(&TabMat[0], faces, lBody->NbNormFaces, lBody->NbNormales, lightLen);
     }
 
+    s_origin[0] = (float)PosXWr;
+    s_origin[1] = (float)PosYWr;
+    s_origin[2] = (float)PosZWr;
     s_draw = GpuObj_BeginDraw();
     if (s_draw != NULL) {
         s_draw->X0 = ClipXMin;
@@ -723,6 +764,382 @@ void AffGpu_OrbEnd(S32 cx, S32 cy, const U8 *palette) {
     GpuObj_EndDraw();
 }
 
+/* The global light of the scene being captured: toward the light that shades
+   bodies, and the world's up, both in scene space. */
+static void UpdateSceneLight(void) {
+    const float lx = (float)CameraXLight, ly = (float)CameraYLight, lz = (float)CameraZLight;
+    const float len = sqrtf(lx * lx + ly * ly + lz * lz);
+    if (len > 0.0f) {
+        GpuObjSunDir[0] = lx / len;
+        GpuObjSunDir[1] = ly / len;
+        GpuObjSunDir[2] = lz / len;
+    }
+    GpuObjSunExterior = TypeProj == TYPE_3D;
+    /* Iso: (x - z) * 3 / 64 across, so a unit is about 0.066 pixels. */
+    GpuObjFocal = TypeProj == TYPE_3D ? FRatioX : 3.0f / 64.0f * 1.4142f;
+    if (TypeProj == TYPE_3D) {
+        const S32 savedX = X0;
+        const S32 savedY = Y0;
+        const S32 savedZ = Z0;
+        LongRotatePoint(&MatriceWorld, 0, 4096, 0);
+        const float ux = (float)X0, uy = (float)Y0, uz = (float)Z0;
+        X0 = savedX;
+        Y0 = savedY;
+        Z0 = savedZ;
+        const float ul = sqrtf(ux * ux + uy * uy + uz * uz);
+        if (ul > 0.0f) {
+            GpuObjUpDir[0] = ux / ul;
+            GpuObjUpDir[1] = uy / ul;
+            GpuObjUpDir[2] = uz / ul;
+        }
+    } else {
+        GpuObjUpDir[0] = 0.0f;
+        GpuObjUpDir[1] = 1.0f;
+        GpuObjUpDir[2] = 0.0f;
+    }
+}
+
+/* A world point in the scene space lights and vertex positions use. */
+static void SceneSpace(float wx, float wy, float wz, float out[3]) {
+    if (TypeProj == TYPE_3D) {
+        const S32 savedX = X0;
+        const S32 savedY = Y0;
+        const S32 savedZ = Z0;
+        LongWorldRotatePoint((S32)wx, (S32)wy, (S32)wz);
+        out[0] = (float)(X0 - CameraXr);
+        out[1] = (float)(Y0 - CameraYr);
+        out[2] = (float)(Z0 - CameraZr);
+        X0 = savedX;
+        Y0 = savedY;
+        Z0 = savedZ;
+    } else {
+        out[0] = wx - (float)CameraXr;
+        out[1] = wy - (float)CameraYr;
+        out[2] = wz - (float)CameraZr;
+    }
+}
+
+S32 AffGpu_Shadow(const S32 corners[4][3], S32 ground, S32 height, S32 tall) {
+    if (!GpuObj_Active() || !GpuObjShadows) {
+        return FALSE;
+    }
+    T_GPUOBJ_VERTEX *v = GpuObj_AllocShadow();
+    if (v == NULL) {
+        return TRUE;
+    }
+    UpdateSceneLight();
+    /* The corners are the ellipse's axis ends: centre and half axes. */
+    float c[3], a[3], b[3];
+    for (S32 i = 0; i < 3; i++) {
+        c[i] = ((float)corners[0][i] + (float)corners[2][i]) * 0.5f;
+        a[i] = ((float)corners[3][i] - (float)corners[1][i]) * 0.5f;
+        b[i] = ((float)corners[2][i] - (float)corners[0][i]) * 0.5f;
+    }
+    /* The quad reaches far past the corners, so it lies on the ground under
+       the caster and follows a slope only when both ends of an axis agree with
+       it: a corner resting on a nearby object would tilt it into the ground. */
+    const float g = (float)ground;
+    c[1] = g;
+    if (fabsf((float)corners[1][1] - g) > 160.0f || fabsf((float)corners[3][1] - g) > 160.0f) {
+        a[1] = 0.0f;
+    }
+    if (fabsf((float)corners[0][1] - g) > 160.0f || fabsf((float)corners[2][1] - g) > 160.0f) {
+        b[1] = 0.0f;
+    }
+    /* Higher above the ground: fainter and wider. */
+    const float h = height > 0 ? (float)height : 0.0f;
+    const float soft = h / 1200.0f > 1.0f ? 1.0f : h / 1200.0f;
+    const float strength = 0.8f * (1.0f - 0.75f * soft);
+    const float spread = 1.25f + 0.5f * soft;
+    /* Room for the contact penumbra and for shadows thrown by nearby lights. */
+    const float extent = 4.0f;
+
+    /* The caster, a vertical capsule standing on the shadow's centre. */
+    const float la = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+    const float lb = sqrtf(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+    float radius = 0.4f * (la + lb);
+    float body = tall > 0 ? (float)tall : 2.0f * radius;
+    if (radius > body * 0.5f) {
+        radius = body * 0.5f;
+    }
+    if (s_nbRequests < GPUOBJ_MAX_SHADOWS) {
+        T_SHADOW_REQUEST *req = &s_requests[s_nbRequests++];
+        SceneSpace(c[0], c[1] + h, c[2], req->Origin);
+        SceneSpace(c[0], c[1], c[2], req->Ground);
+        req->Radius = radius;
+        req->Tall = body;
+        req->Strength = 1.0f - 0.75f * soft;
+    }
+    float bottom[3], top[3];
+    SceneSpace(c[0], c[1] + h + radius, c[2], bottom);
+    SceneSpace(c[0], c[1] + h + body - radius, c[2], top);
+
+    static const S32 cornerU[6] = {0, 1, 1, 0, 1, 0};
+    static const S32 cornerV[6] = {0, 0, 1, 0, 1, 1};
+    const float cell = 2.0f * extent / (float)GPUOBJ_SHADOW_CELLS;
+    for (S32 n = 0; n < GPUOBJ_SHADOW_VERTS; n++) {
+        const S32 quad = n / 6;
+        const S32 k = n % 6;
+        const float u = -extent + (float)(quad % GPUOBJ_SHADOW_CELLS + cornerU[k]) * cell;
+        const float t = -extent + (float)(quad / GPUOBJ_SHADOW_CELLS + cornerV[k]) * cell;
+        float wx = c[0] + a[0] * u + b[0] * t;
+        float wy = c[1] + a[1] * u + b[1] * t;
+        float wz = c[2] + a[2] * u + b[2] * t;
+        memset(&v[n], 0, sizeof(v[n]));
+        if (TypeProj == TYPE_3D) {
+            /* Lifted a little toward the camera so the ground does not hide it. */
+            LongWorldRotatePoint((S32)wx, (S32)wy, (S32)wz);
+            const float depth = (float)(CameraZr - Z0) - 24.0f;
+            AffGpu_ViewVertex(&v[n], (float)(X0 - CameraXr), (float)(Y0 - CameraYr), depth > 1.0f ? depth : 1.0f);
+        } else {
+            wy += 8.0f;
+            const float x = wx - (float)CameraXr, y = wy - (float)CameraYr, z = wz - (float)CameraZr;
+            const float sx = (float)XCentre + (x - z) * 3.0f / 64.0f;
+            const float sy = (float)YCentre + 1.0f + ((x + z) * 6.0f - y * 15.0f) / 256.0f;
+            float d = 0.5f - (x + 0.8f * y + z) / ISO_DEPTH_RANGE;
+            d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+            SetClipPos(&v[n], sx, sy, 1.0f, d);
+            v[n].vpos[0] = x;
+            v[n].vpos[1] = y;
+            v[n].vpos[2] = z;
+        }
+        v[n].vpos[3] = 0.0f;
+        v[n].light[0] = bottom[0];
+        v[n].light[1] = bottom[1];
+        v[n].light[2] = bottom[2];
+        v[n].light[3] = (float)GPUOBJ_MODE_SHADOW;
+        v[n].normal[0] = top[0];
+        v[n].normal[1] = top[1];
+        v[n].normal[2] = top[2];
+        v[n].normal[3] = radius;
+        v[n].mat[1] = strength;
+        v[n].mat[2] = spread;
+        v[n].mat[3] = extent;
+        v[n].uv[2] = u;
+        v[n].uv[3] = t;
+    }
+    return TRUE;
+}
+
+/* A captured body, kept for the shadows; its lamp or fire as a light. */
+static void KeepCaster(const T_GPUOBJ_DRAW *draw) {
+    if (draw->HasGlow && s_nbLamps < MAX_FRAME_LAMPS) {
+        T_FRAME_LIGHT *l = &s_lamps[s_nbLamps++];
+        memcpy(l->Pos, draw->GlowPos, sizeof(l->Pos));
+        l->Radius = draw->HasGlow == 2 ? 9000.0f : 2400.0f;
+        l->Weight = 0.9f * 0.6f;
+    }
+    if (draw->HasFire && s_nbLamps < MAX_FRAME_LAMPS) {
+        T_FRAME_LIGHT *l = &s_lamps[s_nbLamps++];
+        memcpy(l->Pos, draw->FirePos, sizeof(l->Pos));
+        l->Radius = 2400.0f;
+        l->Weight = 0.6f * 0.65f;
+    }
+    if (!GpuObjShadows || s_nbCasters >= MAX_CASTERS || draw->Count == 0 ||
+        s_nbCasterVerts + draw->Count > MAX_CASTER_VERTS) {
+        return;
+    }
+    T_CASTER *c = &s_casters[s_nbCasters++];
+    memcpy(c->Origin, s_origin, sizeof(c->Origin));
+    c->First = s_nbCasterVerts;
+    c->Count = draw->Count;
+    for (U32 i = 0; i < draw->Count; i++) {
+        const T_GPUOBJ_VERTEX *v = &GpuObjVerts[draw->First + i];
+        float *o = s_casterVerts[s_nbCasterVerts++];
+        o[0] = v->vpos[0];
+        o[1] = v->vpos[1];
+        o[2] = v->vpos[2];
+        const S32 disc = (S32)v->light[3] == GPUOBJ_MODE_DISC;
+        o[3] = disc ? 1.0f : 0.0f;
+        o[4] = disc ? v->uv[2] : 0.0f;
+        o[5] = disc ? v->uv[3] : 0.0f;
+    }
+}
+
+void AffGpu_BeginScene(void) {
+    s_nbCasters = 0;
+    s_nbCasterVerts = 0;
+    s_nbRequests = 0;
+    s_nbLamps = 0;
+}
+
+/* A scene-space point as a shadow vertex: lifted a little toward the camera so
+   the ground it lies on does not hide it. */
+static void ShadowVertex(T_GPUOBJ_VERTEX *v, float x, float y, float z) {
+    if (TypeProj == TYPE_3D) {
+        const float depth = -z - 24.0f;
+        AffGpu_ViewVertex(v, x, y, depth > 1.0f ? depth : 1.0f);
+    } else {
+        memset(v, 0, sizeof(*v));
+        const float ly = y + 8.0f;
+        const float sx = (float)XCentre + (x - z) * 3.0f / 64.0f;
+        const float sy = (float)YCentre + 1.0f + ((x + z) * 6.0f - ly * 15.0f) / 256.0f;
+        float d = 0.5f - (x + 0.8f * ly + z) / ISO_DEPTH_RANGE;
+        d = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+        SetClipPos(v, sx, sy, 1.0f, d);
+    }
+    v->vpos[0] = x;
+    v->vpos[1] = y;
+    v->vpos[2] = z;
+    v->vpos[3] = 0.0f;
+}
+
+static float Dot3(const float *a, const float *b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+/* The caster's triangles flattened on the ground plane through the request's
+   ground point, along the sun's direction (light NULL) or away from a light. */
+static void EmitSilhouette(const T_CASTER *c, const T_SHADOW_REQUEST *r, const T_FRAME_LIGHT *light) {
+    T_GPUOBJ_VERTEX *out = GpuObj_AllocShadowVerts(c->Count);
+    if (out == NULL) {
+        return;
+    }
+    const float *up = GpuObjUpDir;
+    float sun[3] = {GpuObjSunDir[0], GpuObjSunDir[1], GpuObjSunDir[2]};
+    /* A low sun is raised a little: its shadows would reach across the scene. */
+    float su = Dot3(sun, up);
+    if (su < 0.3f) {
+        for (S32 i = 0; i < 3; i++) {
+            sun[i] += up[i] * (0.3f - su);
+        }
+        su = 0.3f;
+    }
+    const float reach = r->Tall * 3.0f;
+    for (U32 i = 0; i < c->Count; i++) {
+        const float *p = s_casterVerts[c->First + i];
+        const float rel[3] = {p[0] - r->Ground[0], p[1] - r->Ground[1], p[2] - r->Ground[2]};
+        float h = Dot3(rel, up);
+        if (h < 0.0f) {
+            h = 0.0f;
+        }
+        float q[3];
+        if (light == NULL) {
+            for (S32 k = 0; k < 3; k++) {
+                q[k] = p[k] - sun[k] * (h / su);
+            }
+        } else {
+            const float dir[3] = {p[0] - light->Pos[0], p[1] - light->Pos[1], p[2] - light->Pos[2]};
+            float du = Dot3(dir, up);
+            const float len = sqrtf(Dot3(dir, dir));
+            if (du > -0.15f * len) {
+                du = -0.15f * len;
+            }
+            for (S32 k = 0; k < 3; k++) {
+                q[k] = p[k] + dir[k] * (h / -du);
+            }
+        }
+        /* Onto the plane exactly, and no farther than a long shadow reaches. */
+        float off[3] = {q[0] - r->Ground[0], q[1] - r->Ground[1], q[2] - r->Ground[2]};
+        const float lift = Dot3(off, up);
+        for (S32 k = 0; k < 3; k++) {
+            off[k] -= up[k] * lift;
+        }
+        const float dist = sqrtf(Dot3(off, off));
+        if (dist > reach) {
+            for (S32 k = 0; k < 3; k++) {
+                off[k] *= reach / dist;
+            }
+        }
+        T_GPUOBJ_VERTEX *v = &out[i];
+        ShadowVertex(v, r->Ground[0] + off[0], r->Ground[1] + off[1], r->Ground[2] + off[2]);
+        v->light[3] = (float)GPUOBJ_MODE_SILHOUETTE;
+        v->normal[0] = r->Ground[0];
+        v->normal[1] = r->Ground[1];
+        v->normal[2] = r->Ground[2];
+        v->normal[3] = reach;
+        v->mat[1] = r->Strength;
+        v->mat[3] = p[3];
+        v->uv[2] = p[4];
+        v->uv[3] = p[5];
+        if (light != NULL) {
+            v->light[0] = light->Pos[0];
+            v->light[1] = light->Pos[1];
+            v->light[2] = light->Pos[2];
+            v->mat[0] = light->Radius;
+            v->mat[2] = light->Weight;
+        }
+    }
+}
+
+void AffGpu_BuildShadows(void) {
+    if (!GpuObj_Active() || !GpuObjShadows) {
+        return;
+    }
+    UpdateSceneLight();
+    /* Lights that can shadow: the scene's own and the lamps and fires on bodies. */
+    T_FRAME_LIGHT lights[GPUOBJ_MAX_LIGHTS + MAX_FRAME_LAMPS];
+    U32 nbLights = 0;
+    if (GpuObjLightsEnabled) {
+        for (U32 i = 0; i < GpuObjNbLights; i++) {
+            T_FRAME_LIGHT *l = &lights[nbLights++];
+            memcpy(l->Pos, GpuObjLights[i].Pos, sizeof(l->Pos));
+            l->Radius = GpuObjLights[i].Pos[3];
+            l->Weight = GpuObjLights[i].Color[3] * (0.3f * GpuObjLights[i].Color[0] +
+                                                    0.59f * GpuObjLights[i].Color[1] +
+                                                    0.11f * GpuObjLights[i].Color[2]);
+        }
+        for (U32 i = 0; i < s_nbLamps; i++) {
+            lights[nbLights++] = s_lamps[i];
+        }
+    }
+
+    for (U32 n = 0; n < s_nbRequests; n++) {
+        const T_SHADOW_REQUEST *r = &s_requests[n];
+        /* The body standing where the shadow's caster is. */
+        const T_CASTER *best = NULL;
+        float bestDist = 96.0f * 96.0f;
+        for (U32 k = 0; k < s_nbCasters; k++) {
+            const float dx = s_casters[k].Origin[0] - r->Origin[0];
+            const float dy = s_casters[k].Origin[1] - r->Origin[1];
+            const float dz = s_casters[k].Origin[2] - r->Origin[2];
+            const float d = dx * dx + dy * dy + dz * dz;
+            if (d < bestDist) {
+                bestDist = d;
+                best = &s_casters[k];
+            }
+        }
+        if (best == NULL) {
+            continue;
+        }
+        if (GpuObjSunlight) {
+            EmitSilhouette(best, r, NULL);
+        }
+        /* The two lights reaching the body the most, unless it carries them. */
+        S32 pick[2] = {-1, -1};
+        float pickW[2] = {0.0f, 0.0f};
+        for (U32 k = 0; k < nbLights; k++) {
+            const T_FRAME_LIGHT *l = &lights[k];
+            const float d[3] = {l->Pos[0] - r->Ground[0], l->Pos[1] - r->Ground[1], l->Pos[2] - r->Ground[2]};
+            const float height = Dot3(d, GpuObjUpDir);
+            const float flat[3] = {d[0] - GpuObjUpDir[0] * height, d[1] - GpuObjUpDir[1] * height,
+                                   d[2] - GpuObjUpDir[2] * height};
+            if (Dot3(flat, flat) < r->Radius * r->Radius * 2.25f && height < r->Tall * 1.2f) {
+                continue;
+            }
+            const float f = 1.0f - Dot3(d, d) / (l->Radius * l->Radius);
+            if (f <= 0.0f) {
+                continue;
+            }
+            const float w = f * f * l->Weight;
+            if (w > pickW[0]) {
+                pick[1] = pick[0];
+                pickW[1] = pickW[0];
+                pick[0] = (S32)k;
+                pickW[0] = w;
+            } else if (w > pickW[1]) {
+                pick[1] = (S32)k;
+                pickW[1] = w;
+            }
+        }
+        for (S32 k = 0; k < 2; k++) {
+            if (pick[k] >= 0 && pickW[k] > 0.02f) {
+                EmitSilhouette(best, r, &lights[pick[k]]);
+            }
+        }
+    }
+}
+
 void AffGpu_End(void) {
     if (!s_capturing) {
         return;
@@ -757,6 +1174,9 @@ void AffGpu_End(void) {
     s_glowCount = 0;
     s_glowSum[0] = s_glowSum[1] = s_glowSum[2] = 0.0f;
     s_glowRgb[0] = s_glowRgb[1] = s_glowRgb[2] = 0.0f;
+    if (s_draw != NULL) {
+        KeepCaster(s_draw);
+    }
     s_draw = NULL;
     GpuObj_EndDraw();
 }
