@@ -62,6 +62,8 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 skyZ;       // xyz the world's Z axis, w storm
     vec4 skySun;     // xyz toward the sun, w seconds
     vec4 skyFogRange; // x view depth where the fog starts, y where it is total
+    vec4 skyCamera;  // x height above the cloud ceiling, yz world X and Z, w 1 in space
+    vec4 skyPlanet;  // toward the planet seen from space (world frame), w its angular radius
 };
 
 // --- Flames ----------------------------------------------------------------------
@@ -884,7 +886,7 @@ vec3 SkyRay(ivec2 p) {
 
 /* Whether target pixel p shows the sky: the textured ceiling, or the fog-
    coloured background inside the scene's window. */
-bool IsSky(ivec2 p, bool match) {
+bool IsSky(ivec2 p, bool match, float tag) {
     if (skyFog.w < 0.5 || rtProj.z <= 0.0 || UnpackDistance(p) > 0.0) {
         return false;
     }
@@ -892,9 +894,31 @@ bool IsSky(ivec2 p, bool match) {
     if (any(lessThan(v_uv, stormView.xy)) || any(greaterThanEqual(v_uv, stormView.zw))) {
         return false;
     }
-    /* The GPU drew the cloud ceiling there (the software may have fogged it). */
-    if (match || texelFetch(u_objId, p, 0).r > 0.0) {
+    if (match) {
         return SkyMarker(texelFetch(u_objLight, p, 0).a);
+    }
+    if (texelFetch(u_objId, p, 0).r > 0.0) {
+        bool ceiling = SkyMarker(texelFetch(u_objLight, p, 0).a);
+        /* A GPU body the ceiling hides (a tower reaching into the clouds): the
+           GPU's depth says the sky is in front. Or the software drew the same
+           ceiling there itself: its pixel matches the GPU's. */
+        if (ceiling) {
+            if (tag > 0.0) {
+                return true;
+            }
+            ivec2 fs = textureSize(u_frame, 0);
+            vec3 soft = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
+            vec3 gpu = texelFetch(u_objColor, p, 0).rgb;
+            vec3 d = abs(soft - gpu);
+            if (max(max(d.r, d.g), d.b) < 0.12) {
+                return true;
+            }
+        }
+        /* Otherwise only the software's fog is sky: a sprite drawn over the
+           ceiling stays. */
+        if (!ceiling) {
+            return false;
+        }
     }
     ivec2 fs = textureSize(u_frame, 0);
     vec3 f = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
@@ -902,6 +926,12 @@ bool IsSky(ivec2 p, bool match) {
     return max(max(diff.r, diff.g), diff.b) < 0.07;
 }
 
+
+/* The haze on the horizon: the island's fog, a touch paler and warmer by day.
+   Far land fades into it, so it stays close to the fog the art was made for. */
+vec3 SkyHaze() {
+    return mix(skyFog.rgb, vec3(1.0, 0.97, 0.92), 0.07 * skyUp.w) * 1.02;
+}
 
 /* The sky along the ray through p: the island's fog at the horizon deepening
    toward the zenith, the sun, clouds drifting on a dome anchored to the world
@@ -915,22 +945,24 @@ vec3 CloudSea(vec3 w) {
     vec3 fog = skyFog.rgb;
     float day = skyUp.w;
     float t = skySun.w;
-    vec2 uv = w.xz / (down + 0.05) * 0.3 + vec2(t * 0.006, t * 0.002);
+    /* On the ceiling's plane under the camera, anchored to the world, so the
+       clouds keep their size looking straight down and stay put as it moves. */
+    float h = max(skyCamera.x, 200.0);
+    float dist = h / max(down, 0.02);
+    vec2 ground = w.xz * dist + skyCamera.yz;
+    vec2 uv = ground / 4000.0 + vec2(t * 0.02, t * 0.007);
     float n = SkyFbm(uv * 1.3);
     float n2 = SkyFbm(uv * 1.3 + vec2(0.11, 0.06));
+    /* Billows: more contrast than the dome's thin clouds. */
+    n = clamp((n - 0.5) * 1.8 + 0.5, 0.0, 1.0);
     /* Billowing tops: bright where they rise toward the sun, blue in the dips. */
     float top = clamp(0.55 + (n - n2) * 2.5, 0.0, 1.0);
-    vec3 lit = mix(vec3(1.0, 0.99, 0.96), fog, 0.12) * (0.4 + 0.7 * day);
+    vec3 lit = mix(vec3(1.0, 0.99, 0.96), fog, 0.2) * (0.35 + 0.6 * day);
     vec3 shade = mix(fog, vec3(0.55, 0.66, 0.82), 0.5) * (0.45 + 0.55 * day);
     vec3 c = mix(shade, lit, smoothstep(0.3, 0.75, n) * (0.55 + 0.45 * top));
-    /* Haze toward the horizon. */
-    return mix(fog * 1.05, c, smoothstep(0.0, 0.2, down));
-}
-
-/* The haze on the horizon: the island's fog, a touch paler and warmer by day.
-   Far land fades into it, so it stays close to the fog the art was made for. */
-vec3 SkyHaze() {
-    return mix(skyFog.rgb, vec3(1.0, 0.97, 0.92), 0.07 * skyUp.w) * 1.02;
+    /* Haze toward the horizon, far across the clouds. */
+    float haze = 1.0 - exp(-dist / 90000.0);
+    return mix(c, SkyHaze(), max(haze, 1.0 - smoothstep(0.0, 0.12, down)));
 }
 
 /* The sky's colour alone along a ray at elevation el (the lowered horizon at
@@ -942,11 +974,71 @@ vec3 SkyGradient(float el) {
     vec3 zenith = fog * mix(vec3(0.5), vec3(0.62, 0.78, 1.05) * 0.88, day);
     /* A pale, warm haze on the horizon, deepening fast: little of the sky is
        seen above these islands. */
-    return mix(SkyHaze(), zenith, smoothstep(0.0, 0.35, max(el, 0.0)));
+    return mix(SkyHaze(), zenith, smoothstep(0.05, 0.45, max(el, 0.0)));
+}
+
+/* A star field over direction w: one star in some cells of a grid wrapped on
+   the sphere, a few bright ones, colours from blue-white to warm. */
+vec3 Stars(vec3 w, float density, float twinkleTime) {
+    vec2 g = vec2(atan(w.z, w.x) * 260.0, asin(clamp(w.y, -1.0, 1.0)) * 260.0);
+    vec2 cell = floor(g);
+    float h = SkyHash(cell);
+    if (h < 1.0 - density) {
+        return vec3(0.0);
+    }
+    vec2 at = cell + 0.5 + 0.7 * (vec2(SkyHash(cell + 3.1), SkyHash(cell + 7.7)) - 0.5);
+    float r = SkyHash(cell + 11.3);
+    float size = r > 0.97 ? 0.9 : 0.45;
+    float twinkle = twinkleTime > 0.0 ? 0.7 + 0.3 * sin(twinkleTime * (2.0 + 4.0 * h) + h * 50.0) : 1.0;
+    float star = exp(-length(g - at) / size * 2.2) * (0.35 + 0.65 * r) * twinkle;
+    vec3 tint = mix(vec3(0.75, 0.85, 1.0), vec3(1.0, 0.85, 0.65), SkyHash(cell + 5.9));
+    return tint * star;
+}
+
+/* Space above the Emerald Moon: black, a dense star field, the Milky Way's
+   band, and Twinsun hanging in the sky, lit from one side, with its blue
+   atmosphere. Below the horizon the moon's fog (its dark ground) stays. */
+vec3 SpaceSky(vec3 w) {
+    vec3 fog = skyFog.rgb;
+    float el = w.y + 0.11;
+    if (el <= 0.0) {
+        return fog;
+    }
+    vec3 c = fog * 0.4 + vec3(0.004, 0.006, 0.014);
+    /* The galaxy: a tilted band of faint light and dust. */
+    vec3 axis = normalize(vec3(0.35, 0.55, 0.75));
+    float band = exp(-pow(dot(w, axis) / 0.2, 2.0));
+    float dust = SkyFbm(vec2(atan(w.z, w.x) * 3.0, w.y * 6.0) + 7.0);
+    c += vec3(0.1, 0.1, 0.14) * band * (0.4 + 0.8 * dust);
+    c += Stars(w, 0.012 + 0.02 * band, 0.0) * 1.3;
+    /* Twinsun. */
+    vec3 planet = normalize(skyPlanet.xyz);
+    float radius = skyPlanet.w;
+    float cosA = dot(w, planet);
+    float d = sqrt(max(1.0 - cosA * cosA, 0.0));
+    if (cosA > 0.0 && d < radius) {
+        /* The disc as a sphere: its normal from where the ray crosses it. */
+        vec2 local = vec2(dot(w, normalize(cross(planet, vec3(0.0, 1.0, 0.0)))), dot(w, normalize(cross(cross(planet, vec3(0.0, 1.0, 0.0)), planet))));
+        vec2 q = local / radius;
+        vec3 n = vec3(q, sqrt(max(1.0 - dot(q, q), 0.0)));
+        vec3 sunDir = normalize(vec3(0.75, 0.25, 0.6));
+        float lit = smoothstep(-0.1, 0.4, dot(n, sunDir));
+        float land = SkyFbm(q * 3.0 + 1.3);
+        vec3 surface = mix(vec3(0.08, 0.25, 0.55), vec3(0.28, 0.45, 0.2), smoothstep(0.52, 0.6, land));
+        surface = mix(surface, vec3(0.95), smoothstep(0.62, 0.8, SkyFbm(q * 5.0 + 4.0)) * 0.8);
+        vec3 disc = surface * (0.04 + lit) + vec3(0.3, 0.55, 1.0) * pow(1.0 - n.z, 3.0) * lit * 0.8;
+        c = mix(c, disc, smoothstep(radius, radius * 0.985, d));
+    }
+    /* Its atmosphere glowing past the limb. */
+    c += vec3(0.25, 0.45, 1.0) * exp(-max(d - radius, 0.0) / 0.012) * step(0.0, cosA) * 0.35;
+    return c;
 }
 
 vec3 Sky(ivec2 p) {
     vec3 w = SkyRay(p);
+    if (skyCamera.w > 0.5) {
+        return SpaceSky(w);
+    }
     bool above = skyFog.w > 1.5;
     if (above && w.y < 0.0) {
         return CloudSea(w);
@@ -983,15 +1075,7 @@ vec3 Sky(ivec2 p) {
 
     /* Stars in the gaps at night. */
     if (day < 0.5) {
-        vec2 g = vec2(atan(w.z, w.x) * 160.0, el * 160.0);
-        vec2 cell = floor(g);
-        float h = StormHash(cell);
-        if (h > 0.985) {
-            vec2 at = cell + 0.5 + 0.35 * (vec2(StormHash(cell + 3.1), StormHash(cell + 7.7)) - 0.5);
-            float twinkle = 0.6 + 0.4 * sin(t * (2.0 + 4.0 * h) + h * 50.0);
-            float star = exp(-length(g - at) * 6.0) * twinkle * (1.0 - day * 2.0);
-            sky += vec3(0.9, 0.93, 1.0) * star * (1.0 - storm);
-        }
+        sky += Stars(w, 0.01, t + 0.001) * (1.0 - day * 2.0) * (1.0 - storm);
     }
 
     /* The sun and its glow, veiled by the clouds. */
@@ -1016,9 +1100,16 @@ vec3 FogToSky(vec3 c, ivec2 p) {
     if (f <= 0.0) {
         return c;
     }
-    /* Toward the horizon's haze, whatever the height of what fades: far away
-       everything lies near the horizon, and the clouds lie beyond the land. */
-    return c + (SkyHaze() - skyFog.rgb) * f;
+    /* Toward the sky's colour behind it (not its clouds, which lie beyond the
+       land); the gradient is continuous, so no line crosses what fades. */
+    vec3 w = SkyRay(p);
+    vec3 behind = skyCamera.w > 0.5 ? skyFog.rgb : SkyGradient(skyFog.w > 1.5 ? w.y : w.y + 0.11);
+    /* What the fog has all but swallowed becomes the sky itself, clouds and
+       all, so it meets the sky around it. */
+    if (f > 0.85) {
+        behind = mix(behind, Sky(p), smoothstep(0.85, 1.0, f));
+    }
+    return c + (behind - skyFog.rgb) * f;
 }
 
 void main() {
@@ -1075,7 +1166,7 @@ void main() {
     }
     halo += WaterSpray(v_uv);
     /* The GPU's sky over the sky pixels outdoors, then the storm over it. */
-    if (IsSky(p, match)) {
+    if (IsSky(p, match, tag)) {
         o_color = vec4(Screen(Storm(Sky(p), p, true, true), halo), 1.0) * v_color;
         return;
     }

@@ -5485,6 +5485,11 @@ startaffscene:
                     CubeMode == CUBE_EXTERIEUR && Island == 0 && TEMPETE_ACTIVE ? 1.0f : 0.0f,
                     CubeMode == CUBE_EXTERIEUR && Sky_Y < CameraY);
     GpuSky_SetFog(StartZFog, ClipZFar);
+    /* Island 3 is the Emerald Moon, in space. */
+    GpuSky_SetCamera(CameraY - Sky_Y, CameraX, CameraZ, Island == 3);
+    GpuSky_SetCube(NumCube);
+    /* Zeelich (islands 4 and on) is a cloudy planet. */
+    GpuSky_SetCover(Island >= 4 ? 0.6f : 0.42f);
 
 #ifdef ENABLE_POLY_RECORDING
     // Polygon call recording (Alt+F9) — start recording before ANY rendering

@@ -25,10 +25,26 @@ S32 GpuSky_Modern(void);
  *  clouds: a sea of clouds under the horizon). */
 void GpuSky_SetScene(S32 fogIndex, S32 exterior, float storm, S32 cloudsBelow);
 
+/** How much of the sky the clouds cover by default, 0..1 (Zeelich is cloudy). */
+void GpuSky_SetCover(float cover);
+float GpuSky_Cover(void);
+
 /** The view depths where the island's fog starts and where it is total: what
  *  fades into the fog fades into the sky instead. */
 void GpuSky_SetFog(S32 start, S32 end);
 void GpuSky_GetFog(float *start, float *end);
+
+/** The camera's height above the island's cloud ceiling (negative below it)
+ *  and its world X, Z: the sea of clouds lies on that plane, anchored to the
+ *  world. space: the island floats in space (the Emerald Moon). */
+void GpuSky_SetCamera(S32 heightAboveClouds, S32 x, S32 z, S32 space);
+void GpuSky_GetCamera(float *out4);
+
+/** The scene's cube: the planet seen from space is placed, once per cube, a
+ *  little aside from where the camera looks, and stays there in the world. */
+void GpuSky_SetCube(S32 cube);
+/** Toward the planet in the world's frame (y up), w its angular radius. */
+void GpuSky_GetPlanet(float *out4);
 
 /** TRUE when the cloud ceiling lies below the camera. */
 S32 GpuSky_CloudsBelow(void);

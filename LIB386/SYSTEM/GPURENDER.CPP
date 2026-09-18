@@ -295,7 +295,7 @@ static float Daylight(void) {
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
     float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 4 + 8 +
-                 GPUSTORM_UNIFORM_FLOATS + 24];
+                 GPUSTORM_UNIFORM_FLOATS + 32];
     SDL_zeroa(params);
     params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
     params[9] = (float)s_nbFlames;
@@ -388,12 +388,14 @@ static void PushCompositeParams(void) {
             memcpy(sky + 4, GpuObjUpDir, sizeof(float) * 3);
             sky[7] = Daylight();
             memcpy(sky + 8, GpuObjWorldX, sizeof(float) * 3);
-            sky[11] = 0.42f + 0.53f * storm;
+            sky[11] = GpuSky_Cover() + (0.95f - GpuSky_Cover()) * storm;
             memcpy(sky + 12, GpuObjWorldZ, sizeof(float) * 3);
             sky[15] = storm;
             memcpy(sky + 16, GpuObjSunDir, sizeof(float) * 3);
             sky[19] = GpuWater_GetTime();
             GpuSky_GetFog(sky + 20, sky + 21);
+            GpuSky_GetCamera(sky + 24);
+            GpuSky_GetPlanet(sky + 28);
         }
     }
     if (!SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params))) {
