@@ -927,6 +927,24 @@ vec3 CloudSea(vec3 w) {
     return mix(fog * 1.05, c, smoothstep(0.0, 0.2, down));
 }
 
+/* The haze on the horizon: the island's fog, a touch paler and warmer by day.
+   Far land fades into it, so it stays close to the fog the art was made for. */
+vec3 SkyHaze() {
+    return mix(skyFog.rgb, vec3(1.0, 0.97, 0.92), 0.07 * skyUp.w) * 1.02;
+}
+
+/* The sky's colour alone along a ray at elevation el (the lowered horizon at
+   0): haze on the horizon deepening to the zenith, continuous across the
+   horizon, with no clouds, sun or stars. */
+vec3 SkyGradient(float el) {
+    vec3 fog = skyFog.rgb;
+    float day = skyUp.w;
+    vec3 zenith = fog * mix(vec3(0.5), vec3(0.62, 0.78, 1.05) * 0.88, day);
+    /* A pale, warm haze on the horizon, deepening fast: little of the sky is
+       seen above these islands. */
+    return mix(SkyHaze(), zenith, smoothstep(0.0, 0.35, max(el, 0.0)));
+}
+
 vec3 Sky(ivec2 p) {
     vec3 w = SkyRay(p);
     bool above = skyFog.w > 1.5;
@@ -938,14 +956,11 @@ vec3 Sky(ivec2 p) {
     float storm = skyZ.w;
     float t = skySun.w;
     vec3 fog = skyFog.rgb;
-    if (el <= 0.0) {
-        return fog;
-    }
     vec3 zenith = fog * mix(vec3(0.5), vec3(0.62, 0.78, 1.05) * 0.88, day);
-    /* A pale, warm haze on the horizon, deepening fast: little of the sky is
-       seen above these islands. */
-    vec3 haze = mix(fog, vec3(1.0, 0.97, 0.9), 0.18 * day) * 1.05;
-    vec3 sky = mix(haze, zenith, smoothstep(0.0, 0.35, el));
+    vec3 sky = SkyGradient(el);
+    if (el <= 0.0) {
+        return sky;
+    }
 
     vec3 sunW = normalize(vec3(dot(skySun.xyz, skyX.xyz), dot(skySun.xyz, skyUp.xyz), dot(skySun.xyz, skyZ.xyz)));
     float mu = max(dot(normalize(w), sunW), 0.0);
@@ -1001,7 +1016,9 @@ vec3 FogToSky(vec3 c, ivec2 p) {
     if (f <= 0.0) {
         return c;
     }
-    return c + (Sky(p) - skyFog.rgb) * f;
+    /* Toward the horizon's haze, whatever the height of what fades: far away
+       everything lies near the horizon, and the clouds lie beyond the land. */
+    return c + (SkyHaze() - skyFog.rgb) * f;
 }
 
 void main() {
