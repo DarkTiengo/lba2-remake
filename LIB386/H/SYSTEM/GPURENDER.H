@@ -23,10 +23,6 @@ bool GpuRender_Requested(void);
  *  device. Returns the renderer, or NULL (nothing left allocated) on failure. */
 void *GpuRender_CreateRenderer(void *sdlWindow);
 
-/** Whether the live renderer was created on the power-saving card: it is
- *  recreated when GpuObjLowPower no longer matches. */
-bool GpuRender_LowPower(void);
-
 /** Releases the pipeline; call before destroying the renderer. */
 void GpuRender_Shutdown(void);
 

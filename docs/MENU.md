@@ -62,7 +62,6 @@ Main Menu
 │   │   ├── Vsync: < On/Off >          [selector]
 │   │   ├── Renderer: < GPU/Classic >  [selector]
 │   │   ├── GPU effects [only while Renderer is GPU; the row appears/disappears as it is switched]
-│   │   │   ├── Graphics card: < Performance/Power saving > [selector, gfx_lowpower; the renderer is recreated on the chosen card]
 │   │   │   ├── 2D size: < Classic, upscaled/Native > [selector, gfx_uiscale; applied when the page is left]
 │   │   │   ├── Pixel art filter: < On/Off > [selector, gfx_pixelfilter]
 │   │   │   ├── Smooth colours: < On/Off > [selector, gfx_deband]
@@ -79,6 +78,7 @@ Main Menu
 │   │   │       ├── Specular highlights: < On/Off > [selector, gfx_specular]
 │   │   │       ├── Modern sky: < On/Off > [selector, gfx_sky]
 │   │   │       └── Rain and lightning: < On/Off > [selector, gfx_storm]
+│   │   ├── Auto-adjust to this PC [only while Renderer is GPU; every GPU effect on, then measured outdoors and turned down to hold 60 fps; gfx_autotune]
 │   │   ├── Menu style: < Auto/Modern/Classic > [selector, gfx_menustyle]
 │   │   └── Display mode: < Fullscreen/Windowed > [selector, hidden on always-fullscreen devices]
 │   ├── Keyboard Config (14)

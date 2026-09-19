@@ -1358,16 +1358,7 @@ bool GpuRender_Requested(void) {
     return env != NULL && SDL_atoi(env) != 0;
 }
 
-static bool s_lowPower = false;
-
-bool GpuRender_LowPower(void) {
-    return s_lowPower;
-}
-
 void *GpuRender_CreateRenderer(void *sdlWindow) {
-    /* The player's card: SDL prefers the high-performance one unless asked. */
-    s_lowPower = GpuObjLowPower != 0;
-    SDL_SetHint(SDL_HINT_RENDER_GPU_LOW_POWER, s_lowPower ? "1" : "0");
     SDL_Renderer *renderer = SDL_CreateGPURenderer(NULL, (SDL_Window *)sdlWindow);
     if (renderer == NULL) {
         Log_Warn("[GPU] Unable to create GPU renderer: %s", SDL_GetError());

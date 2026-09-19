@@ -132,8 +132,7 @@ static void SyncRendererKind() {
         return;
     }
     const bool wantGpu = GpuObjEnabled && !gpuRendererFailed;
-    /* Same kind, and on the card the player chose (Display > GPU effects). */
-    if (wantGpu == rendererIsGpu && (!rendererIsGpu || GpuRender_LowPower() == (GpuObjLowPower != 0))) {
+    if (wantGpu == rendererIsGpu) {
         return;
     }
 

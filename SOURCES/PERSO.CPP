@@ -21,6 +21,7 @@ extern S32 GfxDitherShading;
 #include "CONSOLE/CONSOLE.H"
 #include "EXIT_SCREEN.H"
 #include "PERFTRACE.H"
+#include "GPUTUNE.H"
 #include "TOUCH_INPUT.H"
 #include "WATER.H"
 #include <SYSTEM/CUE.H>
@@ -1990,6 +1991,7 @@ restartloop:
         Perftrace_PhaseBegin(PERFTRACE_PHASE_SCENE);
         AffScene(FirstTime);
         Perftrace_PhaseEnd(PERFTRACE_PHASE_SCENE);
+        GpuTune_Frame();
 
         if ((FirstLoop OR RestartMusic)
                 AND !PLAY_THE_END) {

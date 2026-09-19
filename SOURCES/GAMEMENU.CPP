@@ -46,6 +46,7 @@
 #include <time.h>
 #include "AMBIANCE.H"
 #include "BOOT_EXIT.H"
+#include "GPUTUNE.H"
 
 /*══════════════════════════════════════════════════════════════════════════*
  *══════════════════════════════════════════════════════════════════════════*/
@@ -118,8 +119,8 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_STORM 2133
 #define MENU_ID_GPU_SKY 2134
 #define MENU_ID_GPU_SMOOTH_TERRAIN 2135
-#define MENU_ID_GPU_CARD 2136
 #define MENU_ID_GPU_VIEW_DISTANCE 2137
+#define MENU_ID_GPU_AUTOTUNE 2138
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -185,7 +186,7 @@ U16 GameOptionMenu[] = {
 // buffer. Plain "Back" returns to Options. Built by Display_BuildMenu: the GPU
 // effects button only exists while the GPU renderer is on, and Display mode is
 // dropped on always-fullscreen devices.
-U16 DisplayMenu[4 + 7 * 2];
+U16 DisplayMenu[4 + 8 * 2];
 
 S32 MenuStyle = MENU_STYLE_AUTO;
 
@@ -193,14 +194,12 @@ S32 MenuStyle = MENU_STYLE_AUTO;
 // on: the image and the effects, and the lighting page.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    10,  // nb entries
+    9,   // nb entries
     260, // y center
     0,   // .dia num
 
     0,
     26, // menu precedent
-    MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_GPU_CARD,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_UI_SCALE,
     MENU_TYPE_DISPLAY_SELECTOR,
@@ -585,11 +584,6 @@ static void Display_CycleOption(S32 id, S32 dir) {
         TerrainGpuViewDistance = (TerrainGpuViewDistance + (dir < 0 ? 2 : 1)) % 3;
         break;
 
-    case MENU_ID_GPU_CARD:
-        /* The window recreates its renderer on the chosen card at its next present. */
-        GpuObjLowPower ^= 1;
-        break;
-
     case MENU_ID_GPU_SUNLIGHT:
         GpuObjSunlight ^= 1;
         break;
@@ -730,6 +724,12 @@ static void BuildCustomMenuText(S32 num, char *string) {
         CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(MENU_LABEL_GPU_LIGHTING));
         break;
 
+    case MENU_ID_GPU_AUTOTUNE:
+        CopyUtf8ToCp850(string, 256,
+                        GetLocalizedMenuLabel(GpuTune_Running() ? MENU_LABEL_GPU_AUTOTUNE_RUNNING
+                                                                : MENU_LABEL_GPU_AUTOTUNE));
+        break;
+
     case MENU_ID_DISPLAY_MENU_STYLE:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_MENU_STYLE),
                        GetLocalizedMenuLabel(MenuStyle == MENU_STYLE_MODERN    ? MENU_LABEL_VAL_MODERN
@@ -777,11 +777,6 @@ static void BuildCustomMenuText(S32 num, char *string) {
                        GetLocalizedMenuLabel(TerrainGpuViewDistance == 0   ? MENU_LABEL_VAL_CLASSIC
                                              : TerrainGpuViewDistance == 1 ? MENU_LABEL_VAL_FAR
                                                                            : MENU_LABEL_VAL_VERY_FAR));
-        break;
-
-    case MENU_ID_GPU_CARD:
-        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_GPU_CARD),
-                       GetLocalizedMenuLabel(GpuObjLowPower ? MENU_LABEL_VAL_POWER_SAVING : MENU_LABEL_VAL_PERFORMANCE));
         break;
 
     case MENU_ID_GPU_SMOOTH_TERRAIN:
@@ -4250,7 +4245,6 @@ static S32 GereGpuEffectsMenu(void) {
         case MENU_ID_GPU_STORM:
         case MENU_ID_GPU_SKY:
         case MENU_ID_GPU_SMOOTH_TERRAIN:
-        case MENU_ID_GPU_CARD:
         case MENU_ID_GPU_VIEW_DISTANCE:
         case MENU_ID_GPU_WATER:
         case MENU_ID_GPU_PIXEL_FILTER:
@@ -4280,8 +4274,8 @@ static void Display_ApplyRenderSize(void) {
     }
 }
 
-// Rows of the Display page for the current state: GPU effects only while the
-// GPU renderer is on, Display mode only where windowed mode exists (not on
+// Rows of the Display page for the current state: GPU effects and Auto-adjust
+// only while the GPU renderer is on, Display mode only where windowed mode exists (not on
 // Android phones/TVs). The cursor stays on the same row id when it moves.
 static void Display_BuildMenu(void) {
     const S32 oldRow = DisplayMenu[1] > 0 ? DisplayMenu[0] : 0;
@@ -4294,6 +4288,7 @@ static void Display_BuildMenu(void) {
     MenuSetEntry(DisplayMenu, n++, MENU_TYPE_DISPLAY_SELECTOR, MENU_ID_DISPLAY_GPU);
     if (GpuObjEnabled) {
         MenuSetEntry(DisplayMenu, n++, 0, MENU_ID_GPU_EFFECTS);
+        MenuSetEntry(DisplayMenu, n++, 0, MENU_ID_GPU_AUTOTUNE);
     }
     MenuSetEntry(DisplayMenu, n++, MENU_TYPE_DISPLAY_SELECTOR, MENU_ID_DISPLAY_MENU_STYLE);
     if (Window_SupportsWindowedMode()) {
@@ -4359,6 +4354,11 @@ S32 GereDisplayMenu(void) {
             if (FlagShadeMenu) {
                 ShadeBoxBlk(0, 0, (S32)ModeDesiredX - 1, (S32)ModeDesiredY - 1, SCREEN_SHADE_LVL);
             }
+            break;
+
+        case MENU_ID_GPU_AUTOTUNE:
+            /* Measured in play, outdoors, once the menus are closed. */
+            GpuTune_Start();
             break;
 
         case MENU_ID_MENU_REBUILD:

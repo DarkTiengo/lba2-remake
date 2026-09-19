@@ -1,5 +1,7 @@
 #include "../AUDIO_CONSOLE.H"
 #include <SVGA/GPUSTORM.H>
+#include <SVGA/GPUOBJ.H>
+#include "../GPUTUNE.H"
 #include <SYSTEM/INPUT_FLOW.H>
 #include "CONSOLE.H"
 #include "CONSOLE_STATE.H"
@@ -1899,6 +1901,17 @@ static void cmd_lightning(int argc, const char *argv[]) {
     Console_Print("lightning: strike at the next scene frame");
 }
 
+static void cmd_autotune(int argc, const char *argv[]) {
+    (void)argc;
+    (void)argv;
+    if (!GpuObjEnabled || !GpuObjAvailable) {
+        Console_Print("gfx_autotune: needs the GPU renderer");
+        return;
+    }
+    GpuTune_Start();
+    Console_Print("gfx_autotune: every effect on, measuring outdoors (see the log)");
+}
+
 static void cmd_behaviour(int argc, const char *argv[]) {
     if (argc >= 2) {
         S32 n = atoi(argv[1]);
@@ -2550,6 +2563,9 @@ void Console_RegisterAll(void) {
                               "magiclevel [0..4] [points]", "Level picks the magic ball's sprite and force.");
     Console_RegisterCommandEx("lightning", cmd_lightning, "Strike a lightning bolt (GPU renderer, gfx_storm)",
                               "lightning", "Visual only: the bolt, its flash and the scene it lights.");
+    Console_RegisterCommandEx("gfx_autotune", cmd_autotune, "Adjust the GPU effects to this machine",
+                              "gfx_autotune",
+                              "Turns every effect on, then off one by one outdoors until frames fit 60 fps.");
     Console_RegisterCommandEx("behaviour", cmd_behaviour, "Read/set hero behaviour (comportement)",
                               "behaviour [0..13]", "0=Normal 1=Sportif 2=Aggressive 3=Discreet 4=Protopack. Routes through SetComportement.");
     Console_RegisterCommandEx("weapon", cmd_weapon, "Read/set hero active weapon",
