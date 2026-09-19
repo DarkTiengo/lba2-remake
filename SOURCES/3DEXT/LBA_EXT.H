@@ -82,6 +82,7 @@ S32	Max3( S32 a, S32 b, S32 c ) ;
 #define	CJ_GAZ			11	// prout !
 #define	CJ_FOOT_WATER		12	// Eau où l'on a pied
 #define	CJ_ANIMATED_LAVE	13
+#define CJ_ANIMATED_WATER 15 // eau animée où on se noie
 #define	CJ_ANIMATED_GAZ		14
 
 /*──────────────────────────────────────────────────────────────────────────*/

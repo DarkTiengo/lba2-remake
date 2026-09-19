@@ -52,6 +52,9 @@ extern "C" {
 #define GPUOBJ_FLAG_EMISSIVE 8  ///< glows: a lamp's globe (bloom halo, brighter core)
 #define GPUOBJ_FLAG_WATER 16    ///< eligible sea plane; shader toggle keeps the original texture available
 #define GPUOBJ_FLAG_SKY 32      ///< sky plane marker used to keep shoreline foam off the horizon
+#define GPUOBJ_FLAG_WATER_TERRAIN 64  ///< CodeJeu water retains its authored animated terrain page
+#define GPUOBJ_FLAG_DETAIL 128        ///< smooth terrain's small triangles: shadow rays use the original instead
+#define GPUOBJ_FLAG_DETAIL_ORIGIN 256 ///< the first of them carries the original triangle in normal.xyz
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
 typedef struct {

@@ -19,6 +19,10 @@
 extern "C" {
 #endif
 
+/** Smooth terrain (gfx_smoothterrain): land cells are cut into smaller
+ *  triangles on a curved surface through the height map, finer near the camera. */
+extern S32 TerrainGpuSmooth;
+
 /** Opens the draw for one terrain cube. heights is the 65x65 vertex height map
  *  of the cube as currently loaded; clutBase the unfogged 16-row Gouraud block. */
 void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S32 fogStart, S32 fogEnd,
@@ -29,10 +33,13 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
  *  lights are the 8.8 vertex intensities, fillType and color what Fill_Poly
  *  got, uv the six texel coordinates (8.8) or NULL for an untextured fill. */
 void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
-                    const U16 *uv);
+                    const U16 *uv, S32 water);
 
 /** Captures the main cube's camera before horizon cubes shift it. */
 void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ);
+
+/** Selects the island cube whose local sea coordinates are being captured. */
+void TerrainGpu_SetWaterCube(S32 cubeX, S32 cubeZ);
 
 /** Opens a sea or sky plane and marks the material for the GPU compositor. */
 void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S32 fogEnd, S32 fogColor,

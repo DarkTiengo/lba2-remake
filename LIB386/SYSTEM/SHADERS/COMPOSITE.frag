@@ -547,6 +547,40 @@ bool SkyMarker(float alpha) {
     return alpha >= 0.006 && alpha < 0.012;
 }
 
+const float CONTACT_HEIGHT_TOLERANCE = 96.0;
+const float CONTACT_DEPTH_TOLERANCE = 4096.0;
+const float SHORE_SEARCH_RADIUS = 100.0;
+
+/* Water and a shoreline fragment must be the same visible surface scale. A
+   height-only test lets a quay or a foreground body borrow a distant sea's
+   edge; the packed view distance closes that projection ambiguity. */
+bool WaterContactPair(ivec2 a, ivec2 b) {
+    float ah = texelFetch(u_objHeight, a, 0).r;
+    float bh = texelFetch(u_objHeight, b, 0).r;
+    if (abs(ah - bh) > CONTACT_HEIGHT_TOLERANCE) {
+        return false;
+    }
+    if (aoParams.w > 0.5) {
+        float ad = UnpackDistance(a);
+        float bd = UnpackDistance(b);
+        if (ad <= 0.0 || bd <= 0.0 || abs(ad - bd) > CONTACT_DEPTH_TOLERANCE) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Convert the short screen search into a scene-space shoreline distance. The
+   same conversion is used for every resolution and camera distance, so the
+   breaker does not become a fixed-pixel neon rim when the view changes. */
+float ShoreSceneDistance(float pixels, float depth, float edgeDepth) {
+    float d = max(1.0, 0.5 * (depth + edgeDepth));
+    if (aoParams.w > 0.5) {
+        return pixels * d / max(aoParams.y, 1.0);
+    }
+    return pixels / max(aoParams.y, 1.0);
+}
+
 /* Distance to the actual visible water boundary. Sky markers exclude the
    horizon; terrain, beaches and 3D pier geometry produce the breaking edge. */
 vec2 ShoreFoam(ivec2 p) {
@@ -563,53 +597,104 @@ vec2 ShoreFoam(ivec2 p) {
     /* A projected body can sit beside the sea while its feet are well above
        the surface. Require the fragment and the nearby water edge to share a
        world-up height before allowing foam on either side of the boundary. */
-    const float CONTACT_HEIGHT_TOLERANCE = 96.0; // scene-space contact tolerance
-    const float CONTACT_DEPTH_TOLERANCE = 4096.0;
     float surfaceDepth = UnpackDistance(p);
-    float nearest = 30.0;
-    for (int ring = 1; ring <= 5; ring++) {
+    float nearest = SHORE_SEARCH_RADIUS + 1.0;
+    float nearestDepth = -1.0;
+    float nearestEdgeHeight = surfaceHeight;
+    for (int ring = 1; ring <= 10; ring++) {
         float radius = float(ring * ring);
         int r = ring * ring;
         for (int k = 0; k < 4; k++) {
             ivec2 offset = k == 0 ? ivec2(r, 0) :
                            k == 1 ? ivec2(-r, 0) :
                            k == 2 ? ivec2(0, r) : ivec2(0, -r);
+            if (radius > nearest) {
+                continue;
+            }
             ivec2 q = clamp(p + offset, ivec2(0), size - ivec2(1));
             float marker = texelFetch(u_objLight, q, 0).a;
             bool boundary = onWater ? (!WaterMarker(marker) && !SkyMarker(marker))
                                     : WaterMarker(marker);
             if (boundary) {
-                boundary = abs(surfaceHeight - texelFetch(u_objHeight, q, 0).r) <= CONTACT_HEIGHT_TOLERANCE;
-                if (boundary && aoParams.w > 0.5) {
-                    float edgeDepth = UnpackDistance(q);
-                    /* A foreground body projected over a distant sea has the
-                       right screen position but cannot be a water contact. */
-                    boundary = edgeDepth > 0.0 && surfaceDepth > 0.0 &&
-                               abs(surfaceDepth - edgeDepth) <= CONTACT_DEPTH_TOLERANCE;
+                /* The squared search radii are deliberately sparse. Refine
+                   the marker transition so a narrow quay lip is tested
+                   instead of jumping directly onto its taller wall. */
+                ivec2 lo = p;
+                ivec2 hi = q;
+                for (int refine = 0; refine < 5; refine++) {
+                    ivec2 mid = (lo + hi) / 2;
+                    float midMarker = texelFetch(u_objLight, mid, 0).a;
+                    bool midBoundary = onWater ? (!WaterMarker(midMarker) && !SkyMarker(midMarker))
+                                               : WaterMarker(midMarker);
+                    if (midBoundary) {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
                 }
+                q = hi;
+                boundary = WaterContactPair(p, q);
             }
             if (boundary) {
-                nearest = min(nearest, radius);
+                float refined = length(vec2(q - p));
+                if (refined < nearest) {
+                    nearest = refined;
+                    nearestDepth = UnpackDistance(q);
+                    nearestEdgeHeight = texelFetch(u_objHeight, q, 0).r;
+                }
             }
         }
     }
-    float reach = mix(13.0, 26.0, waterStorm);
-    if (nearest > reach) {
+    if (nearest > SHORE_SEARCH_RADIUS || nearestDepth <= 0.0 || surfaceDepth <= 0.0) {
         return vec2(0.0);
     }
-    float envelope = 1.0 - smoothstep(1.0, reach, nearest);
-    float signedDistance = onWater ? nearest : -nearest;
-    float phase = signedDistance * (1.08 + waterStorm * 0.18)
-                - waterTime * (4.2 + waterStorm * 3.6)
-                + float(p.x + p.y) * 0.035;
-    float breaker = smoothstep(0.28, 0.86, 0.5 + 0.5 * sin(phase));
-    float backwash = smoothstep(0.58, 0.92, 0.5 + 0.5 * sin(phase * 0.47 + 1.7));
-    float foam = envelope * (0.22 + breaker * 0.68 + backwash * 0.22 * waterStorm);
-    return onWater ? vec2(foam, 0.0) : vec2(0.0, foam);
+    float sceneDistance = ShoreSceneDistance(nearest, surfaceDepth, nearestDepth);
+    float storm = clamp(waterStorm, 0.0, 1.0);
+    float crestWidth = 220.0 + storm * 110.0;
+    float washWidth = 620.0 + storm * 420.0;
+    /* A travelling crest reaches the edge, recedes, then leaves a weaker
+       backwash. Its phase is in scene units, not framebuffer pixels. */
+    float phase = sceneDistance * (0.014 - storm * 0.002)
+                - waterTime * (1.25 + storm * 0.45);
+    float pulse = 0.5 + 0.5 * sin(phase);
+    float crest = exp(-pow(sceneDistance / crestWidth, 2.0));
+    /* Even between breaker crests the wet edge catches a restrained highlight;
+       otherwise a deterministic capture can make a real quay contact vanish. */
+    crest *= 0.30 + 0.70 * smoothstep(0.28, 0.78, pulse);
+    float backwash = exp(-sceneDistance / washWidth) *
+                     smoothstep(0.38, 0.82, 0.5 + 0.5 * sin(phase * 0.53 + 1.4));
+    if (onWater) {
+        /* Whitewater is strongest on the water side and falls off quickly. */
+        return vec2(crest * (0.34 + 0.52 * pulse) + backwash * (0.06 + 0.06 * storm), 0.0);
+    }
+    /* Land wash is restricted to a shallow rise above the water plane. */
+    float rise = surfaceHeight - nearestEdgeHeight;
+    float shallow = 1.0 - smoothstep(12.0, CONTACT_HEIGHT_TOLERANCE, rise);
+    float wash = shallow * exp(-sceneDistance / washWidth) *
+                 (0.18 + 0.20 * backwash + 0.06 * pulse + 0.04 * storm);
+    return vec2(0.0, wash);
 }
 
 float WaterImpactAge(float start) {
     return mod(waterTime - start + 256.0, 256.0);
+}
+
+/* An impact is allowed to cross from water onto a quay only when its projected
+   base is visible water and the receiving pixel is the same shallow surface.
+   This keeps a foreground hero from receiving a screen-space spray halo. */
+bool WaterImpactContact(ivec2 p, ivec2 base) {
+    float baseMarker = texelFetch(u_objLight, base, 0).a;
+    if (!WaterMarker(baseMarker)) {
+        return false;
+    }
+    float marker = texelFetch(u_objLight, p, 0).a;
+    if (SkyMarker(marker)) {
+        return false;
+    }
+    if (WaterMarker(marker)) {
+        return true;
+    }
+    return WaterContactPair(p, base);
 }
 
 /* Short crown and ballistic droplets above a contact. The expanding rings
@@ -637,6 +722,9 @@ vec3 WaterSpray(vec2 uv) {
             continue;
         }
         ivec2 bp = clamp(ivec2(base), ivec2(0), size - ivec2(1));
+        if (!WaterImpactContact(clamp(ivec2(pixel), ivec2(0), size - ivec2(1)), bp)) {
+            continue;
+        }
         vec3 waterColor = texelFetch(u_objColor, bp, 0).rgb;
         float waterCrest = max(max(waterColor.r, waterColor.g), waterColor.b);
         vec3 sprayColor = min(waterColor * 1.25 + vec3(waterCrest) * 0.08, vec3(0.9));
@@ -665,7 +753,7 @@ vec3 WaterSpray(vec2 uv) {
         float fade = 1.0 - smoothstep(0.9, 1.75, age);
         float spray = clamp(churn * 0.42 + crown * 0.58 + plume * 0.5
                             + drops * fade * 0.65, 0.0, 0.85);
-        sum += sprayColor * spray * 0.55;
+        sum += sprayColor * spray * 0.34;
     }
     return sum;
 }
@@ -803,6 +891,7 @@ vec3 Storm(vec3 c, ivec2 p, bool lit, bool scene) {
     vec3 pos = vec3(0.0);
     vec3 n = vec3(0.0, 0.0, 1.0);
     bool surf = exterior && d > 0.0 && rtProj.z > 0.0 && SurfaceAt(p, pos, n);
+    bool waterSurface = WaterMarker(texelFetch(u_objLight, p, 0).a);
     vec3 tint = vec3(0.78, 0.86, 1.0);
 
     if (flash > 0.001 && lit && d > 0.0) {
@@ -836,7 +925,9 @@ vec3 Storm(vec3 c, ivec2 p, bool lit, bool scene) {
         float streak = RainStreaks(q, d, s, stormRain.y) * stormRain.z;
         vec3 drop = vec3(0.62, 0.68, 0.78) * (1.0 + 2.5 * flash);
         c = Screen(c, drop * streak);
-        if (surf && d < 12000.0) {
+        /* Sea pixels have their world-anchored ripple material in WATER.glsl;
+           the screen-space ground splash grid is for dry upward surfaces only. */
+        if (surf && !waterSurface && d < 12000.0) {
             float splash = RainSplash(pos, n, stormRain.y) * (1.0 - smoothstep(5000.0, 12000.0, d));
             c = Screen(c, vec3(0.7, 0.76, 0.86) * splash * 0.45 * (1.0 + 2.0 * flash));
         }
@@ -1189,12 +1280,12 @@ void main() {
     float lightRT = traced ? LightShadowRT(surfacePos, surfaceNormal) : 0.0;
 
     /* LBA2_GPU_DEBUG=6: the ray-traced shadows alone: grey the sun's, red the lights'. */
-    if (debugTint > 5.5) {
+    if (debugTint > 5.5 && debugTint < 6.5) {
         o_color = vec4((1.0 - sunRT / max(rtSun.w, 0.01)) * vec3(1.0, 1.0 - lightRT, 1.0 - lightRT), 1.0);
         return;
     }
     /* LBA2_GPU_DEBUG=5: the ambient occlusion alone. */
-    if (debugTint > 4.5) {
+    if (debugTint > 4.5 && debugTint < 5.5) {
         o_color = vec4(vec3(AmbientOcclusion(p)), 1.0);
         return;
     }
@@ -1205,7 +1296,7 @@ void main() {
         return;
     }
     /* LBA2_GPU_DEBUG=2: the GPU image alone, wherever it drew. */
-    if (debugTint > 1.5) {
+    if (debugTint > 1.5 && debugTint < 2.5) {
         o_color = id > 0.0 ? vec4(texelFetch(u_objColor, p, 0).rgb, 1.0) : vec4(1.0, 0.0, 1.0, 1.0);
         return;
     }
@@ -1213,13 +1304,20 @@ void main() {
     /* Scene tags accept any scene surface: the GPU's depth picks it. */
     const float SCENE_BIT = 8388608.0;
     bool match = tag > 0.0 && (abs(tag - id) < 0.5 || (tag >= SCENE_BIT && id >= SCENE_BIT));
+    /* The software drew another scene surface here (the terrain's original
+       edge) but the GPU's only surface is the sky: a smoothed crest lying just
+       below the classic silhouette. Keep the software's pixel. */
+    bool hole = match && abs(tag - id) >= 0.5 && SkyMarker(texelFetch(u_objLight, p, 0).a);
+    if (hole) {
+        match = false;
+    }
     vec3 halo = (glow > 0.0 || skyTint.w > 0.0) ? Glow(v_uv) : vec3(0.0);
     if (flameCount > 0.5) {
         halo += Flames(v_uv);
     }
     halo += WaterSpray(v_uv);
     /* The GPU's sky over the sky pixels outdoors, then the storm over it. */
-    if (IsSky(p, match, tag)) {
+    if (!hole && IsSky(p, match, tag)) {
         o_color = vec4(Screen(Storm(Sky(p), p, true, true), halo), 1.0) * v_color;
         return;
     }
@@ -1276,10 +1374,10 @@ void main() {
     gpu *= (vec3(1.0) + light) * shade;
     vec2 shore = ShoreFoam(p);
     float crest = max(max(gpu.r, gpu.g), gpu.b);
-    vec3 foamColor = min(gpu * 1.45 + vec3(crest) * 0.22, vec3(1.0));
-    float waterFoam = shore.x * mix(0.72, 0.94, waterStorm);
-    float landWash = shore.y * mix(0.24, 0.78, waterStorm);
-    gpu = mix(gpu, foamColor, clamp(waterFoam + landWash, 0.0, 0.96));
+    vec3 foamColor = min(gpu * 1.30 + vec3(0.10 + crest * 0.10), vec3(0.96));
+    float waterFoam = shore.x * mix(0.66, 0.82, waterStorm);
+    float landWash = shore.y * mix(0.84, 0.96, waterStorm);
+    gpu = mix(gpu, foamColor, clamp(waterFoam + landWash, 0.0, 0.78));
     gpu = Storm(scenePixel ? FogToSky(gpu, p) : gpu, p, emissive <= 0.0, true);
     gpu = Screen(gpu, halo);
     gpu = mix(gpu, vec3(0.0, 1.0, 0.0), min(debugTint, 1.0) * 0.5);

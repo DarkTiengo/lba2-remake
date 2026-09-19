@@ -126,6 +126,7 @@ const int FLAG_BAKED = 4;
 const int FLAG_EMISSIVE = 8;
 const int FLAG_WATER = 16;
 const int FLAG_SKY = 32;
+const int FLAG_WATER_TERRAIN = 64;
 
 vec3 Pal(int i) {
     return texelFetch(u_palette, ivec2(i & 255, 0), 0).rgb;
@@ -456,8 +457,13 @@ void main() {
     bool sky = (Flags() & FLAG_SKY) != 0;
     vec3 surfaceNormal = v_normal.xyz;
 
-    if (water) {
+    if (water && (Flags() & FLAG_WATER_TERRAIN) == 0) {
         color = WaterColor(surfaceNormal);
+    } else if (water) {
+        /* CodeJeu 12/15 is the retail shoreline animation. Its page receives
+           250 ms updates in the software path, unlike SkySeaTexture's layout. */
+        surfaceNormal = normalize(v_normal.xyz);
+        color = Textured(0.0, false).rgb;
     } else if (mode == MODE_SOLID) {
         color = Pal(Logical(base));
         if ((Flags() & FLAG_EMISSIVE) != 0) {

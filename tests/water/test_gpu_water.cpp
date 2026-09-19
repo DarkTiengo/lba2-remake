@@ -4,6 +4,7 @@
 #include <3D/LIGHT.H>
 #include <3D/PROJ.H>
 #include <OBJECT/AFF_GPU.H>
+#include <POLYGON/POLY.H>
 #include <SVGA/CLIP.H>
 #include <SVGA/GPUOBJ.H>
 #include <SVGA/GPUWATER.H>
@@ -23,7 +24,7 @@ S32 ClipXMin = 0, ClipYMin = 0, ClipXMax = 639, ClipYMax = 479;
 }
 
 static T_GPUOBJ_DRAW draw;
-static T_GPUOBJ_VERTEX vertices[6];
+static T_GPUOBJ_VERTEX vertices[512];
 static S32 active = TRUE;
 static U32 allocated;
 static int failures;
@@ -69,15 +70,47 @@ int main() {
     quad[0].V_Z0 = 1024;
     quad[0].V_MapU = 256;
     quad[0].V_MapV = 512;
+    quad[1] = quad[0];
+    quad[2] = quad[0];
+    quad[3] = quad[0];
+    quad[1].V_Z0 += 8192;
+    quad[2].V_X0 += 8192;
+    quad[2].V_Z0 += 8192;
+    quad[3].V_X0 += 8192;
 
     TerrainGpu_SetWaterScene(0, 8, 9);
+    GpuWater_SetTime(1000);
     Plane(TRUE, quad);
-    Check(allocated == 6, "sea emits two triangles");
+    Check(allocated == 384, "sea emits a bounded subdivided mesh");
     Check(((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER) != 0, "Citadel sea is marked");
     Check(vertices[0].uv[2] == 513.0f && vertices[0].uv[3] == 574.0f, "island-space phase");
     Check(vertices[0].uv[0] == 1.0f && vertices[0].uv[1] == 2.0f, "original UVs retained");
     Check(vertices[0].light[3] == GPUOBJ_MODE_TEX, "toggle off can use original texture mode");
     const float worldX = vertices[0].uv[2], worldZ = vertices[0].uv[3];
+    const float crestY = vertices[0].vpos[1];
+    S32 varyingHeights = FALSE;
+    for (U32 i = 1; i < allocated; i++) {
+        if (vertices[i].vpos[1] != crestY) {
+            varyingHeights = TRUE;
+            break;
+        }
+    }
+    Check(varyingHeights, "one sea mesh carries varying vertex heights");
+    STRUC_CLIPVERTEX seamQuad[4];
+    std::memcpy(seamQuad, quad, sizeof(seamQuad));
+    for (S32 i = 0; i < 4; i++) {
+        seamQuad[i].V_X0 -= 32768;
+    }
+    TerrainGpu_SetWaterScene(0, 9, 9);
+    Plane(TRUE, seamQuad);
+    Check(vertices[0].uv[2] == worldX && vertices[0].uv[3] == worldZ,
+          "adjacent sea cubes share the island-global wave phase");
+    TerrainGpu_SetWaterScene(0, 8, 9);
+    GpuWater_SetTime(2000);
+    Plane(TRUE, quad);
+    Check(vertices[0].vpos[1] != crestY && vertices[0].normal[1] != 1.0f,
+          "analytic waves displace mesh vertices and normals");
+    const float translatedHeight = vertices[0].vpos[1];
 
     /* The same point from a translated camera has exactly the same phase. */
     CameraX = 512;
@@ -87,6 +120,7 @@ int main() {
     TerrainGpu_SetWaterScene(0, 8, 9);
     Plane(TRUE, quad);
     Check(vertices[0].uv[2] == worldX && vertices[0].uv[3] == worldZ, "camera translation does not slide waves");
+    Check(vertices[0].vpos[1] == translatedHeight, "camera translation keeps geometric wave height continuous");
 
     /* Horizon cameras shift after the reference is captured. */
     CameraX -= 32767;
@@ -117,6 +151,87 @@ int main() {
     TypeProj = TYPE_ISO;
     Plane(TRUE, quad);
     Check(allocated == 0, "interior projection does not capture water");
+
+    TypeProj = TYPE_3D;
+    active = TRUE;
+    std::memset(&MatriceWorld, 0, sizeof(MatriceWorld));
+    MatriceWorld.F.M11 = MatriceWorld.F.M22 = MatriceWorld.F.M33 = 1.0f;
+    GpuWaterEnabled = FALSE;
+    Plane(TRUE, quad);
+    Check(allocated == 6 && vertices[0].vpos[1] == (float)quad[0].V_Y0,
+          "disabled water keeps the original flat two-triangle sea");
+    GpuWaterEnabled = TRUE;
+    float calmHeight, stormHeight;
+    float surfaceNormal[3];
+    GpuWater_SetWeather(FALSE);
+    GpuWater_SampleSurface(1234.0f, 5432.0f, &calmHeight, surfaceNormal);
+    GpuWater_SetWeather(TRUE);
+    GpuWater_SampleSurface(1234.0f, 5432.0f, &stormHeight, NULL);
+    Check(calmHeight != stormHeight && surfaceNormal[1] > 0.9f && surfaceNormal[1] <= 1.0f,
+          "storm changes the sampled geometric swell without invalid normals");
+    GpuWater_SetWeather(FALSE);
+    /* Material checks on flat triangles: smooth terrain is checked below. */
+    TerrainGpuSmooth = FALSE;
+    S16 heights[65 * 65] = {};
+    const U8 corners[3] = {0, 1, 2};
+    const S32 lights[3] = {0, 0, 0};
+    const U16 terrainUv[6] = {0, 0, 256, 0, 256, 256};
+    static U8 terrainPage[65536];
+    TerrainGpu_BeginCube(heights, terrainPage, NULL, 0, 0, 0);
+    allocated = 0;
+    TerrainGpu_Tri(0, 0, corners, lights, POLY_TEXTURE, 0, terrainUv, TRUE);
+    TerrainGpu_End();
+    Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER_TERRAIN) != 0 &&
+              vertices[0].vpos[1] == 0.0f && vertices[0].uv[2] != 0.0f,
+          "authored CodeJeu water keeps its animated shoreline geometry and texture");
+    TerrainGpu_BeginCube(heights, terrainPage, NULL, 0, 0, 0);
+    allocated = 0;
+    TerrainGpu_Tri(0, 0, corners, lights, POLY_TEXTURE, 0, terrainUv, FALSE);
+    TerrainGpu_End();
+    Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER) == 0,
+          "unmarked terrain such as animated lava or gas keeps its original material");
+
+    /* Smooth terrain: a land triangle becomes sixteen on the curve, never below
+       its plane, flagged for the shadow rays, the first carrying the original. */
+    {
+        const TYPE_MAT saved = MatriceWorld;
+        std::memset(&MatriceWorld, 0, sizeof(MatriceWorld));
+        MatriceWorld.F.M11 = MatriceWorld.F.M22 = MatriceWorld.F.M33 = 1.0f;
+        static S16 hills[65 * 65];
+        for (int i = 0; i < 65 * 65; i++) {
+            hills[i] = 1000;
+        }
+        hills[4 * 65 + 4] = 2000;
+        hills[5 * 65 + 5] = 2600;
+        TerrainGpuSmooth = TRUE;
+        TerrainGpu_BeginCube(hills, terrainPage, NULL, 0, 0, 0);
+        allocated = 0;
+        TerrainGpu_Tri(3, 3, corners, lights, POLY_TEXTURE, 0, terrainUv, FALSE);
+        Check(allocated == 0, "land triangles wait for the cube's end");
+        TerrainGpu_End();
+        bool above = true, raised = false, flagged = true;
+        for (U32 i = 0; i < allocated; i++) {
+            const S32 flags = (S32)vertices[i].vpos[3];
+            flagged = flagged && (flags & GPUOBJ_FLAG_DETAIL) != 0 &&
+                      ((flags & GPUOBJ_FLAG_DETAIL_ORIGIN) != 0) == (i < 3);
+            /* The plane through corners (3,3) 1000, (3,4) 1000, (4,4) 2000. */
+            const float x = vertices[i].vpos[0] / 512.0f - 3.0f;
+            const float plane = 1000.0f + 1000.0f * x;
+            above = above && vertices[i].vpos[1] >= plane - 0.5f;
+            raised = raised || vertices[i].vpos[1] > plane + 1.0f;
+        }
+        Check(allocated == 48 && flagged, "smooth terrain cuts a land triangle into sixteen, flagged");
+        Check(above && raised, "smooth terrain curves above the original plane, never below");
+        TerrainGpuSmooth = FALSE;
+        MatriceWorld = saved;
+    }
+    quad[0].V_Z0 = -100;
+    quad[1].V_Z0 = 100;
+    quad[2].V_Z0 = 100;
+    quad[3].V_Z0 = -100;
+    Plane(TRUE, quad);
+    Check(allocated == 384 && vertices[0].vpos[2] > 0.0f && vertices[337].vpos[2] < 0.0f,
+          "near-plane crossing is retained for GPU clipping after displacement");
 
     float first[GPUWATER_UNIFORM_FLOATS], next[GPUWATER_UNIFORM_FLOATS];
     GpuWater_SetTime(123000);
@@ -151,9 +266,6 @@ int main() {
     GpuWater_GetCompositeImpacts(screen);
     Check(screen[0] == 0.25f && screen[1] == 0.75f && screen[3] == 1.2f,
           "projected impact reaches spray compositor");
-    Check(GpuWater_ContactHeight(-50.0f, -50.0f), "water-height predicate accepts a touching surface");
-    Check(GpuWater_ContactHeight(46.0f, -50.0f), "water-height predicate accepts the contact tolerance edge");
-    Check(!GpuWater_ContactHeight(47.0f, -50.0f), "water-height predicate rejects a dry projected body");
     GpuWater_SetScene(5);
     GpuWater_GetUniforms(next);
     Check(next[19] == 0.0f, "impacts do not leak between islands");

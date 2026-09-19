@@ -410,4 +410,11 @@ const struct MenuLabelRow LocalizedMenuLabels[MENU_LABEL_COUNT] = {
       "Cielo moderno",
       "Cielo moderno",
       "Céu moderno"}},
+    {MENU_LABEL_OPT_SMOOTH_TERRAIN,
+     {"Smooth terrain",
+      "Terrain lissé",
+      "Weiches Gelände",
+      "Terreno suave",
+      "Terreno morbido",
+      "Terreno suave"}},
 };

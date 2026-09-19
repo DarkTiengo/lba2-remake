@@ -312,6 +312,8 @@ static void PushCompositeParams(void) {
     float *sun = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4;
     /* Shoreline depth gating is geometric and must remain active when optional
        sunlight/AO grading is disabled. */
+    sun[9] = GpuObjFocal * (float)s_targetW / (float)ModeDesiredX;
+    sun[10] = 320.0f;
     sun[11] = TypeProj == TYPE_3D ? 1.0f : 0.0f;
     if (GpuObjSunlight) {
         const float day = Daylight();
@@ -329,8 +331,6 @@ static void PushCompositeParams(void) {
         /* Rooms: their furniture is bricks, whose depth is the brick's box, so
            occlusion would come out blocky; the art already shades them. */
         sun[8] = 0.55f * exterior;
-        sun[9] = GpuObjFocal * (float)s_targetW / (float)ModeDesiredX;
-        sun[10] = 320.0f;
         sun[11] = exterior;
     }
     /* Sun rays through the frame's bodies: the sun, the projection that turns a
@@ -763,11 +763,18 @@ static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
                 mode == GPUOBJ_MODE_ORB || (flags & skipFlags) != 0) {
                 continue;
             }
+            /* Smooth terrain: its many small triangles lie on or above the
+               original, which the rays keep, sixteen times fewer. */
+            const bool detail = (flags & GPUOBJ_FLAG_DETAIL) != 0;
+            if (detail && (flags & GPUOBJ_FLAG_DETAIL_ORIGIN) == 0) {
+                continue;
+            }
             float *o = tris + n * 9;
             for (int k = 0; k < 3; k++) {
-                o[k * 3 + 0] = v[i + k].vpos[0];
-                o[k * 3 + 1] = v[i + k].vpos[1];
-                o[k * 3 + 2] = v[i + k].vpos[2];
+                const float *src = detail ? v[i + k].normal : v[i + k].vpos;
+                o[k * 3 + 0] = src[0];
+                o[k * 3 + 1] = src[1];
+                o[k * 3 + 2] = src[2];
             }
             n++;
         }

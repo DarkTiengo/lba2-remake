@@ -77,6 +77,7 @@ lba2.cfg stores user preferences and last-save info. Read at startup, written at
 | MenuStyle | int | 0–2 | 2 | Menu look: 0 classic plasma bars, 1 modern cards (UI overlay, Nunito font), 2 modern with the GPU renderer only. Console `gfx_menustyle`. See [MENU.md](MENU.md) |
 | GpuUiScale | int | 0–1 | 1 | GPU renderer draws 2D at the classic size (frame 480–719 lines) and upscales it; 3D stays at full resolution. Console `gfx_uiscale` |
 | GpuLamps | int | 0–1 | 1 | GPU renderer: lamp globes on 3D models cast light. Console `gfx_lamps` |
+| GpuSmoothTerrain | int | 0–1 | 1 | GPU renderer: terrain cells curved into smooth hills and valleys (drawn only; collision keeps the original ground). Console `gfx_smoothterrain`. See [GPU_RENDERER.md](GPU_RENDERER.md) |
 | GpuSky | int | 0–1 | 1 | GPU renderer: procedural sky over every exterior (gradient, sun, drifting clouds, stars, a sea of clouds under islands above them), with distant land fading into it. Console `gfx_sky`. See [GPU_RENDERER.md](GPU_RENDERER.md) |
 | GpuStorm | int | 0–1 | 1 | GPU renderer: modern rain (layered streaks, ground splashes), lightning bolts and flashes lighting the scene, in place of the rain lines and the lightning palette. Console `gfx_storm`; `lightning` strikes one. See [GPU_RENDERER.md](GPU_RENDERER.md) |
 | GpuSunlight | int | 0–1 | 1 | GPU renderer: global light: sun shadows, sky fill and rim light on bodies, sun/sky colour grading, sun bloom, ambient occlusion outdoors. Console `gfx_sunlight`. See [GPU_RENDERER.md](GPU_RENDERER.md) |

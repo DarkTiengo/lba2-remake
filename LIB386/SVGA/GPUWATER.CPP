@@ -54,6 +54,45 @@ float GpuWater_GetWeather(void) {
     return s_water[2];
 }
 
+/* Keep the low-frequency geometric swells analytical and bounded. The shader
+ * adds the smaller normals and rain detail after rasterization, where that
+ * detail remains stable without turning a sea tile into a dense CPU mesh. */
+void GpuWater_SampleSurface(float x, float z, float *height, float normal[3]) {
+    float h = 0.0f;
+    float dx = 0.0f;
+    float dz = 0.0f;
+    if (GpuWaterEnabled) {
+        static const float direction[5][2] = {
+            {0.859292f, 0.511483f}, {-0.430315f, 0.902679f}, {0.180818f, -0.983517f}, {0.972996f, 0.230817f}, {0.721105f, -0.692826f}};
+        static const float frequency[5] = {0.24f, 0.38f, 0.72f, 1.28f, 0.18f};
+        static const float speed[5] = {11.0f, -16.0f, 25.0f, -37.0f, 15.0f};
+        /* slope * 512 / frequency: the same broad components as WATER.glsl. */
+        static const float amplitude[5] = {106.6667f, 45.8106f, 14.2223f, 4.0f, 113.7778f};
+        const float storm = s_water[2];
+        const float pX = x / 512.0f;
+        const float pZ = z / 512.0f;
+        for (S32 i = 0; i < 5; i++) {
+            float scale = i == 4 ? storm : 1.0f;
+            float phase = (pX * direction[i][0] + pZ * direction[i][1]) * frequency[i] +
+                          s_water[0] * speed[i] * (6.28318530718f / 256.0f);
+            float rise = amplitude[i] * scale;
+            float slope = rise * cosf(phase) * frequency[i] / 512.0f;
+            h += rise * sinf(phase);
+            dx += slope * direction[i][0];
+            dz += slope * direction[i][1];
+        }
+    }
+    if (height != NULL) {
+        *height = h;
+    }
+    if (normal != NULL) {
+        float length = sqrtf(dx * dx + dz * dz + 1.0f);
+        normal[0] = -dx / length;
+        normal[1] = 1.0f / length;
+        normal[2] = -dz / length;
+    }
+}
+
 void GpuWater_SetScene(S32 island) {
     s_sceneIsland = island;
 }
@@ -137,8 +176,4 @@ void GpuWater_GetUniforms(float out[GPUWATER_UNIFORM_FLOATS]) {
         out[16 + i * 4 + 2] = impact->Start;
         out[16 + i * 4 + 3] = impact->Strength;
     }
-}
-
-S32 GpuWater_ContactHeight(float surfaceHeight, float waterHeight) {
-    return (S32)(fabsf(surfaceHeight - waterHeight) <= GPUWATER_CONTACT_HEIGHT_TOLERANCE);
 }
