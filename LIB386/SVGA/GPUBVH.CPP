@@ -8,73 +8,31 @@ float GpuBvhTris[GPUBVH_MAX_TRIS * GPUBVH_TRI_FLOATS];
 U32 GpuBvhNbNodes = 0;
 U32 GpuBvhNbTris = 0;
 
-/* Build scratch: each triangle's centroid and bounds, and the order leaves
-   take them in. */
-static float s_centre[GPUBVH_MAX_TRIS][3];
-static float s_min[GPUBVH_MAX_TRIS][3];
-static float s_max[GPUBVH_MAX_TRIS][3];
-static U32 s_order[GPUBVH_MAX_TRIS];
+/* Build scratch: each triangle's bounds and its place along a Morton curve
+   through the scene (nearby triangles get nearby codes). Sorting by it once
+   (radix sort, linear) and splitting the sorted run in halves gives the tree;
+   boxes are then merged bottom-up. Every pass reads memory in order. */
+typedef struct {
+    float Min[3];
+    float Max[3];
+    U32 Index;
+    U32 Code;
+} T_BVH_ITEM;
+static T_BVH_ITEM s_items[GPUBVH_MAX_TRIS];
+static T_BVH_ITEM s_sorted[GPUBVH_MAX_TRIS];
+static U32 s_nodeFirst[GPUBVH_MAX_NODES]; ///< the node's run in the sorted triangles
+static U32 s_nodeCount[GPUBVH_MAX_NODES];
 
 #define LEAF_TRIS 4
 
-/* Reorders order[0..count) so the element at k is the one a sort by centroid
-   on axis would put there, smaller ones before it, larger after (quickselect). */
-static void SelectNth(U32 *order, U32 count, U32 k, int axis) {
-    U32 lo = 0, hi = count - 1;
-    while (lo < hi) {
-        const float pivot = s_centre[order[(lo + hi) / 2]][axis];
-        U32 i = lo, j = hi;
-        while (i <= j) {
-            while (s_centre[order[i]][axis] < pivot) {
-                i++;
-            }
-            while (s_centre[order[j]][axis] > pivot) {
-                j--;
-            }
-            if (i <= j) {
-                const U32 t = order[i];
-                order[i] = order[j];
-                order[j] = t;
-                i++;
-                if (j == 0) {
-                    break;
-                }
-                j--;
-            }
-        }
-        if (k <= j) {
-            hi = j;
-        } else if (k >= i) {
-            lo = i;
-        } else {
-            return;
-        }
-    }
-}
-
-typedef struct {
-    U32 Node;
-    U32 First;
-    U32 Count;
-} T_BUILD_TASK;
-
-static void SetBounds(U32 node, U32 first, U32 count) {
-    float lo[3] = {1e30f, 1e30f, 1e30f};
-    float hi[3] = {-1e30f, -1e30f, -1e30f};
-    for (U32 i = first; i < first + count; i++) {
-        const U32 t = s_order[i];
-        for (int k = 0; k < 3; k++) {
-            lo[k] = s_min[t][k] < lo[k] ? s_min[t][k] : lo[k];
-            hi[k] = s_max[t][k] > hi[k] ? s_max[t][k] : hi[k];
-        }
-    }
-    float *n = GpuBvhNodes + node * GPUBVH_NODE_FLOATS;
-    n[0] = lo[0];
-    n[1] = lo[1];
-    n[2] = lo[2];
-    n[4] = hi[0];
-    n[5] = hi[1];
-    n[6] = hi[2];
+/* The 10 low bits of v spread to every third bit. */
+static U32 Spread3(U32 v) {
+    v &= 0x3FFu;
+    v = (v | (v << 16)) & 0x030000FFu;
+    v = (v | (v << 8)) & 0x0300F00Fu;
+    v = (v | (v << 4)) & 0x030C30C3u;
+    v = (v | (v << 2)) & 0x09249249u;
+    return v;
 }
 
 void GpuBvh_Build(const float *triangles, U32 count) {
@@ -86,70 +44,109 @@ void GpuBvh_Build(const float *triangles, U32 count) {
     if (count == 0) {
         return;
     }
+    float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
     for (U32 t = 0; t < count; t++) {
         const float *v = triangles + t * 9;
+        T_BVH_ITEM *it = &s_items[t];
         for (int k = 0; k < 3; k++) {
             const float a = v[k], b = v[3 + k], c = v[6 + k];
-            s_min[t][k] = a < b ? (a < c ? a : c) : (b < c ? b : c);
-            s_max[t][k] = a > b ? (a > c ? a : c) : (b > c ? b : c);
-            s_centre[t][k] = (a + b + c) * (1.0f / 3.0f);
+            it->Min[k] = a < b ? (a < c ? a : c) : (b < c ? b : c);
+            it->Max[k] = a > b ? (a > c ? a : c) : (b > c ? b : c);
+            const float centre = (a + b + c) * (1.0f / 3.0f);
+            lo[k] = centre < lo[k] ? centre : lo[k];
+            hi[k] = centre > hi[k] ? centre : hi[k];
         }
-        s_order[t] = t;
+        it->Index = t;
     }
+    /* Morton codes of the centroids, 10 bits an axis. */
+    float scale[3];
+    for (int k = 0; k < 3; k++) {
+        scale[k] = hi[k] > lo[k] ? 1023.0f / (hi[k] - lo[k]) : 0.0f;
+    }
+    for (U32 t = 0; t < count; t++) {
+        const float *v = triangles + t * 9;
+        U32 q[3];
+        for (int k = 0; k < 3; k++) {
+            const float centre = (v[k] + v[3 + k] + v[6 + k]) * (1.0f / 3.0f);
+            q[k] = (U32)((centre - lo[k]) * scale[k]);
+        }
+        s_items[t].Code = (Spread3(q[0]) << 2) | (Spread3(q[1]) << 1) | Spread3(q[2]);
+    }
+    /* Radix sort by code, 8 bits a pass, between the two arrays. */
+    T_BVH_ITEM *src = s_items, *dst = s_sorted;
+    for (int shift = 0; shift < 32; shift += 8) {
+        U32 counts[257];
+        memset(counts, 0, sizeof(counts));
+        for (U32 t = 0; t < count; t++) {
+            counts[((src[t].Code >> shift) & 255u) + 1]++;
+        }
+        for (int b = 0; b < 256; b++) {
+            counts[b + 1] += counts[b];
+        }
+        for (U32 t = 0; t < count; t++) {
+            dst[counts[(src[t].Code >> shift) & 255u]++] = src[t];
+        }
+        T_BVH_ITEM *swap = src;
+        src = dst;
+        dst = swap;
+    }
+    const T_BVH_ITEM *items = src; /* four passes: back in s_items */
 
-    /* Median split on the widest axis of the centroids, depth first. */
-    static T_BUILD_TASK stack[128];
-    int sp = 0;
+    /* The tree: runs split in halves, parents always before their children. */
     GpuBvhNbNodes = 1;
-    stack[sp].Node = 0;
-    stack[sp].First = 0;
-    stack[sp].Count = count;
-    sp++;
-    while (sp > 0) {
-        const T_BUILD_TASK task = stack[--sp];
-        SetBounds(task.Node, task.First, task.Count);
-        float *n = GpuBvhNodes + task.Node * GPUBVH_NODE_FLOATS;
-        if (task.Count <= LEAF_TRIS || GpuBvhNbNodes + 2 > GPUBVH_MAX_NODES || sp + 2 > 128) {
-            n[3] = (float)task.First;
-            n[7] = (float)task.Count;
+    s_nodeFirst[0] = 0;
+    s_nodeCount[0] = count;
+    for (U32 node = 0; node < GpuBvhNbNodes; node++) {
+        float *n = GpuBvhNodes + node * GPUBVH_NODE_FLOATS;
+        const U32 first = s_nodeFirst[node], n_count = s_nodeCount[node];
+        if (n_count <= LEAF_TRIS || GpuBvhNbNodes + 2 > GPUBVH_MAX_NODES) {
+            n[3] = (float)first;
+            n[7] = (float)n_count;
             continue;
         }
-        float lo[3] = {1e30f, 1e30f, 1e30f};
-        float hi[3] = {-1e30f, -1e30f, -1e30f};
-        for (U32 i = task.First; i < task.First + task.Count; i++) {
-            const U32 t = s_order[i];
-            for (int k = 0; k < 3; k++) {
-                lo[k] = s_centre[t][k] < lo[k] ? s_centre[t][k] : lo[k];
-                hi[k] = s_centre[t][k] > hi[k] ? s_centre[t][k] : hi[k];
-            }
-        }
-        int axis = 0;
-        if (hi[1] - lo[1] > hi[axis] - lo[axis]) {
-            axis = 1;
-        }
-        if (hi[2] - lo[2] > hi[axis] - lo[axis]) {
-            axis = 2;
-        }
-        const U32 half = task.Count / 2;
-        SelectNth(s_order + task.First, task.Count, half, axis);
-
         const U32 left = GpuBvhNbNodes;
         GpuBvhNbNodes += 2;
+        const U32 half = n_count / 2;
+        s_nodeFirst[left] = first;
+        s_nodeCount[left] = half;
+        s_nodeFirst[left + 1] = first + half;
+        s_nodeCount[left + 1] = n_count - half;
         n[3] = (float)left;
         n[7] = 0.0f;
-        stack[sp].Node = left;
-        stack[sp].First = task.First;
-        stack[sp].Count = half;
-        sp++;
-        stack[sp].Node = left + 1;
-        stack[sp].First = task.First + half;
-        stack[sp].Count = task.Count - half;
-        sp++;
+    }
+    /* Boxes bottom-up: children come after their parent. */
+    for (U32 node = GpuBvhNbNodes; node-- > 0;) {
+        float *n = GpuBvhNodes + node * GPUBVH_NODE_FLOATS;
+        float bl[3] = {1e30f, 1e30f, 1e30f}, bh[3] = {-1e30f, -1e30f, -1e30f};
+        if (n[7] > 0.0f) {
+            const U32 first = s_nodeFirst[node];
+            for (U32 i = first; i < first + s_nodeCount[node]; i++) {
+                for (int k = 0; k < 3; k++) {
+                    bl[k] = items[i].Min[k] < bl[k] ? items[i].Min[k] : bl[k];
+                    bh[k] = items[i].Max[k] > bh[k] ? items[i].Max[k] : bh[k];
+                }
+            }
+        } else {
+            const U32 left = (U32)n[3];
+            for (U32 c = left; c < left + 2; c++) {
+                const float *cn = GpuBvhNodes + c * GPUBVH_NODE_FLOATS;
+                for (int k = 0; k < 3; k++) {
+                    bl[k] = cn[k] < bl[k] ? cn[k] : bl[k];
+                    bh[k] = cn[4 + k] > bh[k] ? cn[4 + k] : bh[k];
+                }
+            }
+        }
+        n[0] = bl[0];
+        n[1] = bl[1];
+        n[2] = bl[2];
+        n[4] = bh[0];
+        n[5] = bh[1];
+        n[6] = bh[2];
     }
 
     /* Triangles in leaf order: a vertex and two edges. */
     for (U32 i = 0; i < count; i++) {
-        const float *v = triangles + s_order[i] * 9;
+        const float *v = triangles + items[i].Index * 9;
         float *o = GpuBvhTris + i * GPUBVH_TRI_FLOATS;
         for (int k = 0; k < 3; k++) {
             o[k] = v[k];

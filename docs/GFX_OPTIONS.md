@@ -16,6 +16,7 @@ All three are off by default, so a stock run renders exactly as before. None of 
 | Menu style | `gfx_menustyle` | `MenuStyle` | — | 0 classic, 1 modern cards, 2 modern with the GPU renderer (default); see [MENU.md](MENU.md) |
 | GPU 2D scale | `gfx_uiscale` | `GpuUiScale` | — | 1 classic size upscaled, 0 native; GPU renderer only |
 | GPU lamps on models | `gfx_lamps` | `GpuLamps` | — | 1 lamp globes on models cast light, 0 off; GPU renderer only |
+| GPU graphics card | `gfx_lowpower` | `GpuLowPower` | — | 0 the high-performance card, 1 the power-saving (integrated) one, on laptops with two; GPU renderer only (Display > GPU effects) |
 | GPU smooth terrain | `gfx_smoothterrain` | `GpuSmoothTerrain` | — | 1 terrain cells near the camera curved into smooth hills (at most 220 units above the original ground, never below); 0 the original flat cells; GPU renderer only (Display > GPU effects) |
 | GPU modern sky | `gfx_sky` | `GpuSky` | — | 1 procedural sky with sun, clouds and stars, distant land fading into it; 0 the original sky texture and fog colour; GPU renderer only (Display > GPU effects) |
 | GPU rain and lightning | `gfx_storm` | `GpuStorm` | — | 1 layered rain with splashes, lightning bolts and flashes lighting the scene; 0 the original rain lines and lightning palette; GPU renderer only (Display > GPU effects) |

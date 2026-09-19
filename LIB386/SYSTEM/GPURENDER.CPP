@@ -46,6 +46,8 @@ void GpuRender_EndComposite(void * /*sdlRenderer*/) {
 #else
 
 #include "SHADERS/COMPOSITE.frag.spv.h"
+#include "SHADERS/COMPOSITE_HALF.frag.spv.h"
+#include "SHADERS/FULLSCREEN.vert.spv.h"
 #include "SHADERS/GPUOBJ.frag.spv.h"
 #include "SHADERS/GPUOBJ.vert.spv.h"
 
@@ -56,6 +58,13 @@ static SDL_GPUDevice *s_device = NULL;
 static SDL_GPUShader *s_objVert = NULL;
 static SDL_GPUShader *s_objFrag = NULL;
 static SDL_GPUShader *s_compositeFrag = NULL;
+static SDL_GPUShader *s_fullscreenVert = NULL;
+static SDL_GPUShader *s_halfFrag = NULL;
+static SDL_GPUGraphicsPipeline *s_pipelineHalf = NULL; ///< shadows and occlusion at half resolution
+static SDL_GPUTexture *s_rtHalf = NULL;
+static bool s_halfReady = false; ///< this present's half pass ran: the composite reads it
+static float s_params[1024];     ///< the composite's last uniforms, for the half pass
+static U32 s_paramsSize = 0;
 static SDL_GPUGraphicsPipeline *s_pipeline = NULL;
 static SDL_GPUGraphicsPipeline *s_pipelinePainter = NULL; ///< depth write, no depth test
 static SDL_GPUGraphicsPipeline *s_pipelineGlass = NULL;   ///< blended over the scene, depth test without write
@@ -185,6 +194,7 @@ static void ReleaseFrameResources(void) {
     ReleaseTexture(&s_objLight);
     ReleaseTexture(&s_objShadow);
     ReleaseTexture(&s_objHeight);
+    ReleaseTexture(&s_rtHalf);
     ReleaseTexture(&s_depth);
     ReleaseTexture(&s_tags);
     free(s_tagScratch);
@@ -309,6 +319,7 @@ static void PushCompositeParams(void) {
     params[2] = (s_upscale && GpuObjPixelFilter) ? 1.0f : 0.0f;
     params[3] = (s_upscale && GpuObjDeband) ? 1.0f : 0.0f;
     params[4] = (GpuObjFire || GpuObjGlow) ? 1.0f : 0.0f;
+    params[7] = s_halfReady ? 1.0f : 0.0f;
     float *sun = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4;
     /* Shoreline depth gating is geometric and must remain active when optional
        sunlight/AO grading is disabled. */
@@ -398,6 +409,9 @@ static void PushCompositeParams(void) {
             GpuSky_GetPlanet(sky + 28);
         }
     }
+    SDL_COMPILE_TIME_ASSERT(half_params, sizeof(params) <= sizeof(s_params));
+    memcpy(s_params, params, sizeof(params));
+    s_paramsSize = (U32)sizeof(params);
     if (!SDL_SetGPURenderStateFragmentUniforms(s_composite, 0, params, sizeof(params))) {
         Log_Warn("[GPU] Unable to update composite uniforms: %s", SDL_GetError());
     }
@@ -418,6 +432,8 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     s_objLight = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, tw, th, 1);
     s_objShadow = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, tw, th, 1);
     s_objHeight = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, targetUsage, tw, th, 1);
+    s_rtHalf = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, (tw + 1) / 2,
+                             (th + 1) / 2, 1);
     s_depth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, s_depthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, tw, th, 1);
     s_tags = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER, w, h, 1);
     s_tagScratch = (float *)malloc((size_t)w * h * sizeof(float));
@@ -428,7 +444,7 @@ static bool EnsureFrameResources(U32 w, U32 h) {
         return false;
     }
 
-    SDL_GPUTextureSamplerBinding bindings[6];
+    SDL_GPUTextureSamplerBinding bindings[7];
     bindings[0].texture = s_objColor;
     bindings[0].sampler = s_linear;
     bindings[1].texture = s_objId;
@@ -441,11 +457,13 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     bindings[4].sampler = s_linear;
     bindings[5].texture = s_objHeight;
     bindings[5].sampler = s_nearest;
+    bindings[6].texture = s_rtHalf;
+    bindings[6].sampler = s_nearest;
 
     SDL_GPURenderStateCreateInfo stateInfo;
     SDL_zero(stateInfo);
     stateInfo.fragment_shader = s_compositeFrag;
-    stateInfo.num_sampler_bindings = 6;
+    stateInfo.num_sampler_bindings = 7;
     stateInfo.sampler_bindings = bindings;
     SDL_GPUBuffer *storage[2] = {s_bvhNodes, s_bvhTris};
     stateInfo.num_storage_buffers = 2;
@@ -513,9 +531,32 @@ static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
     s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
-    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 1, 2);
-    if (!s_objVert || !s_objFrag || !s_compositeFrag) {
+    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1, 2);
+    /* The half-resolution pass: the composite's source built with HALF_PASS,
+       bound as the composite is (a stand-in texture at the frame's slot). */
+    s_fullscreenVert = CreateShader(FULLSCREEN_vert_spv, FULLSCREEN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
+    s_halfFrag = CreateShader(COMPOSITE_HALF_frag_spv, COMPOSITE_HALF_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1, 2);
+    if (!s_objVert || !s_objFrag || !s_compositeFrag || !s_fullscreenVert || !s_halfFrag) {
         return false;
+    }
+    {
+        SDL_GPUColorTargetDescription half;
+        SDL_zero(half);
+        half.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        SDL_GPUGraphicsPipelineCreateInfo halfInfo;
+        SDL_zero(halfInfo);
+        halfInfo.vertex_shader = s_fullscreenVert;
+        halfInfo.fragment_shader = s_halfFrag;
+        halfInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        halfInfo.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+        halfInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+        halfInfo.target_info.color_target_descriptions = &half;
+        halfInfo.target_info.num_color_targets = 1;
+        s_pipelineHalf = SDL_CreateGPUGraphicsPipeline(s_device, &halfInfo);
+        if (s_pipelineHalf == NULL) {
+            Log_Warn("[GPU] Unable to create the half-resolution pass: %s", SDL_GetError());
+            return false;
+        }
     }
     /* The ray-tracing hierarchy, at its largest: filled each frame it is used. */
     SDL_GPUBufferCreateInfo bvhInfo;
@@ -716,6 +757,18 @@ static void ReleasePipeline(void) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipeline);
         s_pipeline = NULL;
     }
+    if (s_pipelineHalf) {
+        SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelineHalf);
+        s_pipelineHalf = NULL;
+    }
+    if (s_fullscreenVert) {
+        SDL_ReleaseGPUShader(s_device, s_fullscreenVert);
+        s_fullscreenVert = NULL;
+    }
+    if (s_halfFrag) {
+        SDL_ReleaseGPUShader(s_device, s_halfFrag);
+        s_halfFrag = NULL;
+    }
     if (s_pipelineShadow) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelineShadow);
         s_pipelineShadow = NULL;
@@ -781,6 +834,20 @@ static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
     }
     GpuBvh_Build(tris, n);
     return GpuBvhNbNodes > 0;
+}
+
+/* The hierarchy is built on a worker thread while the present copies the
+   vertices and tags: both only read the frame's draws. */
+typedef struct {
+    const T_GPUOBJ_DRAW *const *Draws;
+    U32 Count;
+    bool Built;
+} T_BVH_JOB;
+
+static int SDLCALL BvhWorker(void *data) {
+    T_BVH_JOB *job = (T_BVH_JOB *)data;
+    job->Built = BuildRayScene(job->Draws, job->Count);
+    return 0;
 }
 
 static void UploadBuffer(SDL_GPUCopyPass *pass, SDL_GPUBuffer *buffer, const void *data, U32 size) {
@@ -957,6 +1024,40 @@ static void SetSunlight(float *sun) {
     sun[9] = 0.9f - 0.1f * (1.0f - day) * exterior;
     sun[10] = 0.75f + 0.15f * (1.0f - day) * exterior;
     sun[11] = 0.18f + 0.14f * exterior * day;
+}
+
+/* The composite's shadow rays and ambient occlusion into s_rtHalf, one texel
+   for four of the targets' pixels, with the composite's own bindings and
+   uniforms (the HALF_PASS build of its shader). */
+static void RenderHalf(SDL_GPUCommandBuffer *cmd) {
+    if (s_pipelineHalf == NULL || s_rtHalf == NULL || s_paramsSize == 0) {
+        return;
+    }
+    SDL_GPUColorTargetInfo target;
+    SDL_zero(target);
+    target.texture = s_rtHalf;
+    target.load_op = SDL_GPU_LOADOP_DONT_CARE;
+    target.store_op = SDL_GPU_STOREOP_STORE;
+    target.cycle = true;
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &target, 1, NULL);
+    if (pass == NULL) {
+        return;
+    }
+    SDL_BindGPUGraphicsPipeline(pass, s_pipelineHalf);
+    SDL_GPUTextureSamplerBinding bindings[8];
+    SDL_GPUTexture *const textures[8] = {s_objColor, s_objColor, s_objId, s_tags,
+                                         s_objLight, s_objShadow, s_objHeight, s_objColor};
+    for (int i = 0; i < 8; i++) {
+        bindings[i].texture = textures[i];
+        bindings[i].sampler = (i == 0 || i == 1) ? s_linear : s_nearest;
+    }
+    SDL_BindGPUFragmentSamplers(pass, 0, bindings, 8);
+    SDL_GPUBuffer *storage[2] = {s_bvhNodes, s_bvhTris};
+    SDL_BindGPUFragmentStorageBuffers(pass, 0, storage, 2);
+    SDL_PushGPUFragmentUniformData(cmd, 0, s_params, s_paramsSize);
+    SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+    SDL_EndGPURenderPass(pass);
+    s_halfReady = true;
 }
 
 static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *draws, const T_DRAW_UNIFORMS *uniforms,
@@ -1257,7 +1358,16 @@ bool GpuRender_Requested(void) {
     return env != NULL && SDL_atoi(env) != 0;
 }
 
+static bool s_lowPower = false;
+
+bool GpuRender_LowPower(void) {
+    return s_lowPower;
+}
+
 void *GpuRender_CreateRenderer(void *sdlWindow) {
+    /* The player's card: SDL prefers the high-performance one unless asked. */
+    s_lowPower = GpuObjLowPower != 0;
+    SDL_SetHint(SDL_HINT_RENDER_GPU_LOW_POWER, s_lowPower ? "1" : "0");
     SDL_Renderer *renderer = SDL_CreateGPURenderer(NULL, (SDL_Window *)sdlWindow);
     if (renderer == NULL) {
         Log_Warn("[GPU] Unable to create GPU renderer: %s", SDL_GetError());
@@ -1309,7 +1419,20 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     static T_DRAW_UNIFORMS uniforms[8192];
     U32 vertexBytes = 0;
     U32 count = liveCount > 0 ? ResolveDraws(live, liveCount, kept, uniforms, &vertexBytes) : 0;
-    s_rayScene = GpuObjRayScene && count > 0 && BuildRayScene(kept, count);
+    s_halfReady = false; /* until this present's half pass has run */
+    /* Start the hierarchy now; it is waited for just before its upload. */
+    static T_BVH_JOB bvhJob;
+    SDL_Thread *bvhThread = NULL;
+    s_rayScene = GpuObjRayScene && count > 0;
+    if (s_rayScene) {
+        bvhJob.Draws = kept;
+        bvhJob.Count = count;
+        bvhJob.Built = false;
+        bvhThread = SDL_CreateThread(BvhWorker, "lba2_bvh", &bvhJob);
+        if (bvhThread == NULL) {
+            BvhWorker(&bvhJob);
+        }
+    }
     if (count > 0 && GpuObjShadows) {
         vertexBytes += GpuObjNbShadowVerts * sizeof(T_GPUOBJ_VERTEX);
     }
@@ -1325,7 +1448,7 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     const bool boxEmpty = box[2] <= box[0] || box[3] <= box[1];
     const bool lastEmpty = s_tagBox[2] <= s_tagBox[0] || s_tagBox[3] <= s_tagBox[1];
     if (count == 0 && !s_upscale && lastEmpty && s_tagsCleared && !GpuStorm_Active()) {
-        return false;
+        return false; /* no rays either: count is 0 */
     }
 
     /* Upload the union of this box and the last one, so ids left from the
@@ -1371,20 +1494,21 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         need = vertexBytes;
     if (tagBytes > need)
         need = tagBytes;
-    const bool rays = s_rayScene;
-    const U32 bvhNodeBytes = rays ? GpuBvhNbNodes * GPUBVH_NODE_FLOATS * (U32)sizeof(float) : 0;
-    const U32 bvhTriBytes = rays ? GpuBvhNbTris * GPUBVH_TRI_FLOATS * (U32)sizeof(float) : 0;
-    if (bvhNodeBytes > need)
-        need = bvhNodeBytes;
-    if (bvhTriBytes > need)
-        need = bvhTriBytes;
+    /* The hierarchy's size is known only once it is built: room for the largest. */
+    if (s_rayScene) {
+        const U32 bvhMax = SDL_max((U32)(GPUBVH_MAX_NODES * GPUBVH_NODE_FLOATS * sizeof(float)),
+                                   (U32)(GPUBVH_MAX_TRIS * GPUBVH_TRI_FLOATS * sizeof(float)));
+        need = SDL_max(need, bvhMax);
+    }
 
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_device);
-    if (cmd == NULL) {
-        return false;
-    }
-    if (!EnsureTransfer(need) || (vertexBytes > 0 && !EnsureVertexBuffer(vertexBytes))) {
-        SDL_CancelGPUCommandBuffer(cmd);
+    if (cmd == NULL || !EnsureTransfer(need) || (vertexBytes > 0 && !EnsureVertexBuffer(vertexBytes))) {
+        if (bvhThread != NULL) {
+            SDL_WaitThread(bvhThread, NULL);
+        }
+        if (cmd != NULL) {
+            SDL_CancelGPUCommandBuffer(cmd);
+        }
         return false;
     }
 
@@ -1411,9 +1535,13 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     if (vertexBytes > 0) {
         UploadVertices(copy, kept, count, vertexBytes);
     }
-    if (bvhNodeBytes > 0 && bvhTriBytes > 0) {
-        UploadBuffer(copy, s_bvhNodes, GpuBvhNodes, bvhNodeBytes);
-        UploadBuffer(copy, s_bvhTris, GpuBvhTris, bvhTriBytes);
+    if (bvhThread != NULL) {
+        SDL_WaitThread(bvhThread, NULL);
+    }
+    s_rayScene = s_rayScene && bvhJob.Built;
+    if (s_rayScene) {
+        UploadBuffer(copy, s_bvhNodes, GpuBvhNodes, GpuBvhNbNodes * GPUBVH_NODE_FLOATS * (U32)sizeof(float));
+        UploadBuffer(copy, s_bvhTris, GpuBvhTris, GpuBvhNbTris * GPUBVH_TRI_FLOATS * (U32)sizeof(float));
     }
     if (upW > 0 && upH > 0) {
         UploadTexture(copy, s_tags, 0, (U32)up[0], (U32)up[1], upW, upH, s_tagUpload, tagBytes);
@@ -1423,10 +1551,13 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     Uint64 t2 = SDL_GetPerformanceCounter();
     if (count > 0) {
         RenderDraws(cmd, kept, uniforms, count);
-        if (s_rayScene) {
-            /* Now with this present's lights for the shadow rays. */
+        /* Shadow rays and occlusion at half resolution, outdoors, where they
+           cost the most; the composite then reads them. */
+        if (s_rayScene || (GpuObjSunlight && GpuObjSunExterior)) {
             PushCompositeParams();
+            RenderHalf(cmd);
         }
+        PushCompositeParams();
     }
     SDL_SubmitGPUCommandBuffer(cmd);
     Uint64 t3 = SDL_GetPerformanceCounter();

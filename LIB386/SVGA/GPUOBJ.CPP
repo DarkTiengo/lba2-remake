@@ -29,6 +29,7 @@ S32 GpuObjFire = TRUE;
 S32 GpuObjGlow = TRUE;
 S32 GpuObjShadows = TRUE;
 S32 GpuObjSunlight = TRUE;
+S32 GpuObjLowPower = FALSE;
 float GpuObjSunDir[3] = {0.0f, 1.0f, 0.0f};
 float GpuObjUpDir[3] = {0.0f, 1.0f, 0.0f};
 float GpuObjWorldX[3] = {1.0f, 0.0f, 0.0f};

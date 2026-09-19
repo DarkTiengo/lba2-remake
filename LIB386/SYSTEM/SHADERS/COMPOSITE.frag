@@ -17,13 +17,16 @@ layout(set = 2, binding = 3) uniform sampler2D u_tags;  // R32F draw ids per pix
 layout(set = 2, binding = 4) uniform sampler2D u_objLight; // dynamic light, halved
 layout(set = 2, binding = 5) uniform sampler2D u_objShadow; // soft shadow darkness
 layout(set = 2, binding = 6) uniform sampler2D u_objHeight; // scene-space surface height
+/* Ray-traced sun and light shadows and ambient occlusion at half resolution
+   (the HALF_PASS build of this shader writes it): r sun, g lights, b occlusion. */
+layout(set = 2, binding = 7) uniform sampler2D u_rtHalf;
 
 /* The frame's bodies for sun rays (GPUBVH.H): nodes are two vec4 (min, first;
    max, leaf count), triangles three (a vertex, two edges). */
-layout(std430, set = 2, binding = 7) readonly buffer BvhNodes {
+layout(std430, set = 2, binding = 8) readonly buffer BvhNodes {
     vec4 bvhNodes[];
 };
-layout(std430, set = 2, binding = 8) readonly buffer BvhTris {
+layout(std430, set = 2, binding = 9) readonly buffer BvhTris {
     vec4 bvhTris[];
 };
 
@@ -35,7 +38,7 @@ layout(set = 3, binding = 0) uniform Params {
     float glow;        // > 0: bloom halo around emissive surfaces (fire, lamp globes)
     float sunlight;    // > 0: global light grading, sun bloom, ambient occlusion
     float waterStorm;  // > 0: wider, faster breakers while visible rain is active
-    float glowPad2;
+    float halfReady;   // > 0: u_rtHalf holds this present's shadows and occlusion
     float flameTime;   // seconds
     float flameCount;  // boxes in flameBoxes
     float waterTime;   // game seconds, frozen with the simulation
@@ -1256,6 +1259,63 @@ vec3 FogToSky(vec3 c, ivec2 p) {
     return c + (behind - skyFog.rgb) * f;
 }
 
+/* The half-resolution shadows and occlusion at full-resolution pixel p: the
+   four half texels around it, each weighed by how close its surface's distance
+   is to this pixel's, so shadows do not bleed across depth edges. */
+vec3 HalfLight(ivec2 p) {
+    ivec2 hs = textureSize(u_rtHalf, 0);
+    ivec2 fs = textureSize(u_objShadow, 0);
+    vec2 scale = vec2(fs) / vec2(hs);
+    vec2 hp = (vec2(p) + 0.5) / scale - 0.5;
+    ivec2 base = ivec2(floor(hp));
+    vec2 f = hp - vec2(base);
+    float d = UnpackDistance(p);
+    vec3 sum = vec3(0.0);
+    float total = 0.0;
+    vec3 nearest = vec3(0.0, 0.0, 1.0);
+    float best = 1e9;
+    for (int k = 0; k < 4; k++) {
+        ivec2 o = ivec2(k & 1, k >> 1);
+        ivec2 q = clamp(base + o, ivec2(0), hs - ivec2(1));
+        ivec2 at = clamp(ivec2((vec2(q) + 0.5) * scale), ivec2(0), fs - ivec2(1));
+        float dq = UnpackDistance(at);
+        float gap = d > 0.0 && dq > 0.0 ? abs(dq - d) : (d > 0.0 || dq > 0.0 ? 1e6 : 0.0);
+        float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+        w *= exp(-gap / (d * 0.02 + 40.0));
+        vec3 v = texelFetch(u_rtHalf, q, 0).rgb;
+        sum += v * w;
+        total += w;
+        if (gap < best) {
+            best = gap;
+            nearest = v;
+        }
+    }
+    return total > 1e-4 ? sum / total : nearest;
+}
+
+#ifdef HALF_PASS
+/* The half-resolution pass: what the composite would trace per pixel. */
+void main() {
+    ivec2 objSize = textureSize(u_objId, 0);
+    ivec2 p = clamp(ivec2(v_uv * vec2(objSize)), ivec2(0), objSize - ivec2(1));
+    bool scenePixel = texelFetch(u_objId, p, 0).r >= 8388608.0;
+    float sunRT = 0.0;
+    float lightRT = 0.0;
+    float ao = 1.0;
+    if (scenePixel) {
+        vec3 pos;
+        vec3 n;
+        if ((rtSun.w > 0.0 || rtLightCfg.x > 0.5) && SurfaceAt(p, pos, n)) {
+            sunRT = SunShadowRT(p, pos, n);
+            lightRT = LightShadowRT(pos, n);
+        }
+        if (sunlight > 0.0) {
+            ao = AmbientOcclusion(p);
+        }
+    }
+    o_color = vec4(sunRT, lightRT, ao, 1.0);
+}
+#else
 void main() {
     g_frameSize = textureSize(u_frame, 0);
     vec4 frame = texture(u_frame, v_uv) * v_color;
@@ -1275,9 +1335,23 @@ void main() {
     /* Only scene surfaces: a menu's bodies (the behaviour menu's Twinsens) have
        their own projection, their distances are not scene points. */
     bool scenePixel = id >= 8388608.0;
-    bool traced = scenePixel && (rtSun.w > 0.0 || rtLightCfg.x > 0.5) && SurfaceAt(p, surfacePos, surfaceNormal);
-    float sunRT = traced ? SunShadowRT(p, surfacePos, surfaceNormal) : 0.0;
-    float lightRT = traced ? LightShadowRT(surfacePos, surfaceNormal) : 0.0;
+    float sunRT = 0.0;
+    float lightRT = 0.0;
+    float sceneAO = 1.0;
+    if (halfReady > 0.5) {
+        /* Traced at half resolution by the HALF_PASS build. */
+        if (scenePixel) {
+            vec3 h = HalfLight(p);
+            sunRT = h.r;
+            lightRT = h.g;
+            sceneAO = h.b;
+        }
+    } else {
+        bool traced = scenePixel && (rtSun.w > 0.0 || rtLightCfg.x > 0.5) && SurfaceAt(p, surfacePos, surfaceNormal);
+        sunRT = traced ? SunShadowRT(p, surfacePos, surfaceNormal) : 0.0;
+        lightRT = traced ? LightShadowRT(surfacePos, surfaceNormal) : 0.0;
+        sceneAO = scenePixel && sunlight > 0.0 ? AmbientOcclusion(p) : 1.0;
+    }
 
     /* LBA2_GPU_DEBUG=6: the ray-traced shadows alone: grey the sun's, red the lights'. */
     if (debugTint > 5.5 && debugTint < 6.5) {
@@ -1328,7 +1402,7 @@ void main() {
         if (texelFetch(u_objId, p, 0).r > 0.0) {
             c *= 1.0 - max(SoftShadow(v_uv).r, sunRT);
             if (sunlight > 0.0) {
-                c = Grade(c * (scenePixel ? AmbientOcclusion(p) : 1.0));
+                c = Grade(c * sceneAO);
             }
             c = Storm(FogToSky(c, p), p, true, false);
         } else if (stormLight.w > 0.5 && all(greaterThanEqual(v_uv, stormView.xy)) &&
@@ -1353,7 +1427,7 @@ void main() {
         /* A surface whose colour is the software frame (interior bricks). */
         vec3 c = SoftwarePixel(v_uv);
         if (sunlight > 0.0) {
-            c = Grade(c * (scenePixel ? AmbientOcclusion(p) : 1.0));
+            c = Grade(c * sceneAO);
         }
         o_color = vec4(Screen(Storm(FogToSky(c * (vec3(1.0) + light) * shade, p), p, true, true), halo), 1.0) * v_color;
         return;
@@ -1369,7 +1443,7 @@ void main() {
         gpu = nearest.rgb;
     }
     if (sunlight > 0.0 && emissive <= 0.0) {
-        gpu = Grade(gpu * (scenePixel ? AmbientOcclusion(p) : 1.0));
+        gpu = Grade(gpu * sceneAO);
     }
     gpu *= (vec3(1.0) + light) * shade;
     vec2 shore = ShoreFoam(p);
@@ -1383,3 +1457,4 @@ void main() {
     gpu = mix(gpu, vec3(0.0, 1.0, 0.0), min(debugTint, 1.0) * 0.5);
     o_color = vec4(gpu, frame.a);
 }
+#endif

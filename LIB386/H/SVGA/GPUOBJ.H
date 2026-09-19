@@ -117,6 +117,7 @@ extern S32 GpuObjSpecular;    ///< specular highlights on models (gfx_specular)
 extern S32 GpuObjUiScale;     ///< 2D drawn at its classic size and upscaled (gfx_uiscale)
 extern S32 GpuObjShadows;     ///< soft shadows on the real ground (gfx_shadows)
 extern S32 GpuObjSunlight;    ///< global light: sun shadows, sky fill, rim light (gfx_sunlight)
+extern S32 GpuObjLowPower;    ///< run on the power-saving (integrated) graphics card (gfx_lowpower)
 
 /* The scene's global light, in the scene space lights use: the direction toward
    the sun (the light that shades bodies), the world's up, and whether the scene

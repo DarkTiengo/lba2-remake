@@ -118,6 +118,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_STORM 2133
 #define MENU_ID_GPU_SKY 2134
 #define MENU_ID_GPU_SMOOTH_TERRAIN 2135
+#define MENU_ID_GPU_CARD 2136
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -191,12 +192,14 @@ S32 MenuStyle = MENU_STYLE_AUTO;
 // on: the image and the effects, and the lighting page.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    10,  // nb entries
+    9,   // nb entries
     260, // y center
     0,   // .dia num
 
     0,
     26, // menu precedent
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_CARD,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_UI_SCALE,
     MENU_TYPE_DISPLAY_SELECTOR,
@@ -209,10 +212,6 @@ U16 GpuEffectsMenu[] = {
     MENU_ID_GPU_FIRE,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_SMOOTH_TERRAIN,
-    MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_GPU_SKY,
-    MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_GPU_STORM,
     0,
     MENU_ID_GPU_LIGHTING,
 };
@@ -220,7 +219,7 @@ U16 GpuEffectsMenu[] = {
 // Lighting and shadows, opened from the GPU effects page.
 U16 GpuLightingMenu[] = {
     0,   // selected
-    7,   // nb entries
+    9,   // nb entries
     260, // y center
     0,   // .dia num
 
@@ -238,6 +237,10 @@ U16 GpuLightingMenu[] = {
     MENU_ID_GPU_LAMPS,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_SPECULAR,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_SKY,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_STORM,
 };
 
 // Set when a selector changed the rows of its page; DoGameMenu then returns
@@ -574,6 +577,11 @@ static void Display_CycleOption(S32 id, S32 dir) {
         TerrainGpuSmooth ^= 1;
         break;
 
+    case MENU_ID_GPU_CARD:
+        /* The window recreates its renderer on the chosen card at its next present. */
+        GpuObjLowPower ^= 1;
+        break;
+
     case MENU_ID_GPU_SUNLIGHT:
         GpuObjSunlight ^= 1;
         break;
@@ -754,6 +762,11 @@ static void BuildCustomMenuText(S32 num, char *string) {
     case MENU_ID_GPU_SUNLIGHT:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_SUNLIGHT),
                        GetLocalizedMenuLabel(GpuObjSunlight ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_CARD:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_GPU_CARD),
+                       GetLocalizedMenuLabel(GpuObjLowPower ? MENU_LABEL_VAL_POWER_SAVING : MENU_LABEL_VAL_PERFORMANCE));
         break;
 
     case MENU_ID_GPU_SMOOTH_TERRAIN:
@@ -4184,6 +4197,8 @@ static void GereGpuLightingMenu(void) {
         case MENU_ID_GPU_LIGHTS:
         case MENU_ID_GPU_LAMPS:
         case MENU_ID_GPU_SPECULAR:
+        case MENU_ID_GPU_SKY:
+        case MENU_ID_GPU_STORM:
             Display_CycleOption(select, 1);
             break;
         }
@@ -4220,6 +4235,7 @@ static S32 GereGpuEffectsMenu(void) {
         case MENU_ID_GPU_STORM:
         case MENU_ID_GPU_SKY:
         case MENU_ID_GPU_SMOOTH_TERRAIN:
+        case MENU_ID_GPU_CARD:
         case MENU_ID_GPU_WATER:
         case MENU_ID_GPU_PIXEL_FILTER:
         case MENU_ID_GPU_DEBAND:
