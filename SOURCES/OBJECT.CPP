@@ -5486,7 +5486,10 @@ startaffscene:
                     CubeMode == CUBE_EXTERIEUR && Sky_Y < CameraY);
     GpuSky_SetFog(StartZFog, ClipZFar);
     /* Island 3 is the Emerald Moon, in space. */
-    GpuSky_SetCamera(CameraY - Sky_Y, CameraX, CameraZ, Island == 3);
+    /* Island 3 is the Emerald Moon, in space; 5, 6, 7 and 11 lie at the
+       bottom of Zeelich's gas, under a heavy cover. */
+    GpuSky_SetCamera(CameraY - Sky_Y, CameraX, CameraZ,
+                     Island == 3 ? 1 : ((Island >= 5 && Island <= 7) || Island == 11 ? 2 : 0));
     GpuSky_SetCube(NumCube);
     /* Zeelich (islands 4 and on) is a cloudy planet. */
     GpuSky_SetCover(Island >= 4 ? 0.6f : 0.42f);

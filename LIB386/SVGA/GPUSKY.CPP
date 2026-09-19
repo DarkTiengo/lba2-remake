@@ -36,11 +36,11 @@ void GpuSky_GetFog(float *start, float *end) {
 
 static float s_camera[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
-void GpuSky_SetCamera(S32 heightAboveClouds, S32 x, S32 z, S32 space) {
+void GpuSky_SetCamera(S32 heightAboveClouds, S32 x, S32 z, S32 kind) {
     s_camera[0] = (float)heightAboveClouds;
     s_camera[1] = (float)x;
     s_camera[2] = (float)z;
-    s_camera[3] = space ? 1.0f : 0.0f;
+    s_camera[3] = (float)kind;
 }
 
 void GpuSky_GetCamera(float *out4) {

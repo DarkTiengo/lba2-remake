@@ -36,8 +36,9 @@ void GpuSky_GetFog(float *start, float *end);
 
 /** The camera's height above the island's cloud ceiling (negative below it)
  *  and its world X, Z: the sea of clouds lies on that plane, anchored to the
- *  world. space: the island floats in space (the Emerald Moon). */
-void GpuSky_SetCamera(S32 heightAboveClouds, S32 x, S32 z, S32 space);
+ *  world. kind: 0 an open sky, 1 space (the Emerald Moon), 2 the heavy gas
+ *  overhead at the bottom of Zeelich's atmosphere. */
+void GpuSky_SetCamera(S32 heightAboveClouds, S32 x, S32 z, S32 kind);
 void GpuSky_GetCamera(float *out4);
 
 /** The scene's cube: the planet seen from space is placed, once per cube, a

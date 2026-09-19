@@ -62,7 +62,7 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 skyZ;       // xyz the world's Z axis, w storm
     vec4 skySun;     // xyz toward the sun, w seconds
     vec4 skyFogRange; // x view depth where the fog starts, y where it is total
-    vec4 skyCamera;  // x height above the cloud ceiling, yz world X and Z, w 1 in space
+    vec4 skyCamera;  // x height above the cloud ceiling, yz world X and Z, w 1 space, 2 heavy gas
     vec4 skyPlanet;  // toward the planet seen from space (world frame), w its angular radius
 };
 
@@ -1054,8 +1054,41 @@ vec3 SpaceSky(vec3 w) {
     return c;
 }
 
+/* The bottom of Zeelich's gas: a heavy cover closing the whole sky, rolling
+   and churning slowly, lilac-grey with darker folds and paler swells, over a
+   band of the island's glowing haze on the horizon. */
+vec3 GasSky(vec3 w) {
+    vec3 fog = skyFog.rgb;
+    float t = skySun.w;
+    float el = w.y + 0.11;
+    if (el <= 0.0) {
+        return fog;
+    }
+    /* On a deck overhead: compressed toward the horizon. */
+    vec2 uv = w.xz / (el + 0.06) * 0.32;
+    /* Domain warping twists the gas into swirls; it drifts and churns. */
+    vec2 drift = vec2(t * 0.008, t * 0.003);
+    vec2 warp = vec2(SkyFbm(uv * 1.3 + drift + 3.1), SkyFbm(uv * 1.3 - drift + 7.7));
+    float n = SkyFbm(uv * 2.0 + warp * 1.6 + drift * 0.5);
+    float fine = SkyFbm(uv * 6.0 + warp * 2.5 - drift);
+    float g = clamp(n * 0.75 + (fine - 0.5) * 0.55 + 0.12, 0.0, 1.0);
+    vec3 deep = mix(fog, vec3(0.3, 0.26, 0.38), 0.8);
+    vec3 swell = mix(fog, vec3(0.68, 0.63, 0.76), 0.7);
+    vec3 gas = mix(deep, swell, smoothstep(0.35, 0.72, g));
+    /* The folds catch the haze's glow from below near the horizon. */
+    gas += fog * 0.25 * (1.0 - smoothstep(0.05, 0.35, el)) * smoothstep(0.45, 0.8, g);
+    /* Heavier and darker overhead. */
+    gas *= mix(1.0, 0.72, smoothstep(0.15, 0.7, el));
+    /* The cover's ragged underside over the band of haze. */
+    float edge = 0.17 + (n - 0.5) * 0.08;
+    return mix(fog, gas, smoothstep(edge, edge + 0.05, el));
+}
+
 vec3 Sky(ivec2 p) {
     vec3 w = SkyRay(p);
+    if (skyCamera.w > 1.5) {
+        return GasSky(w);
+    }
     if (skyCamera.w > 0.5) {
         return SpaceSky(w);
     }
