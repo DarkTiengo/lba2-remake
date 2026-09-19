@@ -1,4 +1,5 @@
 #include "DEFINES.H"
+#include "TERRAIN_GPU.H" /* TerrainGpu_FogScale */
 
 #include "../DIRECTORIES.H"
 
@@ -218,6 +219,12 @@ S32 LoadCube(S32 x, S32 y) {
     if (!StartZFog)
         StartZFog = 12000;
     //*********
+
+    /* The GPU renderer's view distance moves the fog out. */
+    if (TerrainGpu_FogScale() != 1.0f) {
+        ClipZFar = (S32)((float)ClipZFar * TerrainGpu_FogScale());
+        StartZFog = (S32)((float)StartZFog * TerrainGpu_FogScale());
+    }
 
     //********* tests temporaires de protection
     if (!OffsetAniPoly3)

@@ -1014,6 +1014,18 @@ bool IsSky(ivec2 p, bool match, float tag) {
             return false;
         }
     }
+    /* The software's edge of the cloud ceiling, where the GPU drew nothing:
+       the ceiling lies right above or below. */
+    ivec2 os = textureSize(u_objId, 0);
+    for (int k = -3; k <= 3; k++) {
+        if (k == 0) {
+            continue;
+        }
+        ivec2 q = clamp(p + ivec2(0, k), ivec2(0), os - ivec2(1));
+        if (texelFetch(u_objId, q, 0).r > 0.0 && SkyMarker(texelFetch(u_objLight, q, 0).a)) {
+            return true;
+        }
+    }
     ivec2 fs = textureSize(u_frame, 0);
     vec3 f = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
     vec3 diff = abs(f - skyFog.rgb);
@@ -1244,6 +1256,13 @@ vec3 FogToSky(vec3 c, ivec2 p) {
         return c;
     }
     float f = clamp((d - skyFogRange.x) / (skyFogRange.y - skyFogRange.x), 0.0, 1.0);
+    /* A neighbouring cube fogs by its own distances: what already shows the
+       fog colour past the fog's start is fog too, whatever this cube says. */
+    ivec2 fs = textureSize(u_frame, 0);
+    vec3 soft = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
+    vec3 diff = min(abs(c - skyFog.rgb), abs(soft - skyFog.rgb));
+    float fogged = 1.0 - smoothstep(0.02, 0.09, max(max(diff.r, diff.g), diff.b));
+    f = max(f, fogged * step(skyFogRange.x, d));
     if (f <= 0.0) {
         return c;
     }
@@ -1256,7 +1275,9 @@ vec3 FogToSky(vec3 c, ivec2 p) {
     if (f > 0.85) {
         behind = mix(behind, Sky(p), smoothstep(0.85, 1.0, f));
     }
-    return c + (behind - skyFog.rgb) * f;
+    /* What the fog has swallowed takes that colour outright (its own shade
+       would show as a seam at a silhouette's filtered edge). */
+    return mix(c + (behind - skyFog.rgb) * f, behind, fogged * step(skyFogRange.x, d));
 }
 
 /* The half-resolution shadows and occlusion at full-resolution pixel p: the

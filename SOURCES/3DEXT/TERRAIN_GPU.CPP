@@ -37,6 +37,24 @@ static float s_grid[GRID_SIDE * GRID_SIDE][3];
 
 /* Smooth terrain (gfx_smoothterrain): the cube's heights, to curve its cells. */
 S32 TerrainGpuSmooth = TRUE;
+S32 TerrainGpuViewDistance = 1;
+
+static S32 ViewDistanceLevel(void) {
+    if (!GpuObjEnabled || !GpuObjAvailable) {
+        return 0;
+    }
+    return TerrainGpuViewDistance < 0 ? 0 : (TerrainGpuViewDistance > 2 ? 2 : TerrainGpuViewDistance);
+}
+
+S32 TerrainGpu_HorizonRadius(void) {
+    static const S32 kRadius[3] = {1, 2, 3};
+    return kRadius[ViewDistanceLevel()];
+}
+
+float TerrainGpu_FogScale(void) {
+    static const float kScale[3] = {1.0f, 1.6f, 2.4f};
+    return kScale[ViewDistanceLevel()];
+}
 static S16 s_heights[GRID_SIDE * GRID_SIDE];
 
 /* Land triangles waiting for the cube's end, when every flat-drawn triangle is

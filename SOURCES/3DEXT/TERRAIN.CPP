@@ -4,6 +4,7 @@
 #include <SVGA/SCREEN.H>
 #include <SVGA/GPUOBJ.H> /* GpuObj_RefreshTags */
 #include "TERRAIN_GPU.H"
+#include <SVGA/GPUSKY.H> /* GpuSky_Modern */
 
 #define LIMITE_LOIN (60 * 1024)
 #define COLOR_LIMITE 255
@@ -769,7 +770,40 @@ void DrawHorizon2ZBuf() {
 		TerrainTri = TerrNO ;
 	}
 */
-    for (S32 n = 9; n > 0; n--, TerrainTri++) {
+    /* The GPU renderer's farther view: a wider ring of cubes, farthest first. */
+    const S32 radius = TerrainGpu_HorizonRadius();
+    static struct S_Terrain ring[49];
+    if (radius > 1) {
+        S32 nb = 0;
+        for (S32 dy = -radius; dy <= radius; dy++) {
+            for (S32 dx = -radius; dx <= radius; dx++) {
+                ring[nb].x = (S8)dx;
+                ring[nb].y = (S8)dy;
+                nb++;
+            }
+        }
+        /* Distance from the camera within its cube to each cube's centre. */
+        const float camX = (float)(cx & 32767) / 32768.0f - 0.5f;
+        const float camZ = (float)(cz & 32767) / 32768.0f - 0.5f;
+        for (S32 i = 1; i < nb; i++) {
+            const struct S_Terrain t = ring[i];
+            const float d = ((float)t.x - camX) * ((float)t.x - camX) + ((float)t.y - camZ) * ((float)t.y - camZ);
+            S32 j = i - 1;
+            while (j >= 0) {
+                const float dj = ((float)ring[j].x - camX) * ((float)ring[j].x - camX) +
+                                 ((float)ring[j].y - camZ) * ((float)ring[j].y - camZ);
+                if (dj >= d) {
+                    break;
+                }
+                ring[j + 1] = ring[j];
+                j--;
+            }
+            ring[j + 1] = t;
+        }
+        TerrainTri = ring;
+    }
+    const S32 nbCubes = (2 * radius + 1) * (2 * radius + 1);
+    for (S32 n = nbCubes; n > 0; n--, TerrainTri++) {
         S32 x, y;
 
         x = CurrentCubeX + TerrainTri->x;
@@ -785,7 +819,7 @@ void DrawHorizon2ZBuf() {
 */
                 {
 #ifdef LBA_GAME
-                    SetPosCamera(cx - OffPosCamera[TerrainTri->x + 1] + TerrainTri->x, cy, cz - OffPosCamera[TerrainTri->y + 1] + TerrainTri->y);
+                    SetPosCamera(cx - TerrainTri->x * 512 * 64 + TerrainTri->x, cy, cz - TerrainTri->y * 512 * 64 + TerrainTri->y);
 #else
                     SetPosCamera(cx - OffPosCamera[TerrainTri->x + 1] + TerrainTri->x * Reglage, cy, cz - OffPosCamera[TerrainTri->y + 1] + TerrainTri->y * Reglage);
 #endif

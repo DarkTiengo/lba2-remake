@@ -23,6 +23,17 @@ extern "C" {
  *  triangles on a curved surface through the height map, finer near the camera. */
 extern S32 TerrainGpuSmooth;
 
+/** View distance with the GPU renderer (gfx_viewdistance): 0 the classic one,
+ *  1 far, 2 very far. The fog moves out and more cubes are drawn around the
+ *  camera; the classic renderer keeps the original. */
+extern S32 TerrainGpuViewDistance;
+
+/** How many cubes around the camera's are drawn (1: the classic 3 x 3). */
+S32 TerrainGpu_HorizonRadius(void);
+
+/** The factor on the island's fog distances (1 for the classic view). */
+float TerrainGpu_FogScale(void);
+
 /** Opens the draw for one terrain cube. heights is the 65x65 vertex height map
  *  of the cube as currently loaded; clutBase the unfogged 16-row Gouraud block. */
 void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S32 fogStart, S32 fogEnd,

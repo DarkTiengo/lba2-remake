@@ -21,6 +21,7 @@ float FRatioX = 1000.0f, FRatioY = 1.0f;
 S32 CameraXLight = 0, CameraYLight = 1, CameraZLight = 0;
 S32 TypeProj = TYPE_3D;
 S32 ClipXMin = 0, ClipYMin = 0, ClipXMax = 639, ClipYMax = 479;
+S32 GpuObjEnabled = TRUE, GpuObjAvailable = TRUE;
 }
 
 static T_GPUOBJ_DRAW draw;

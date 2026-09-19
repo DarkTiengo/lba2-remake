@@ -144,6 +144,8 @@ static const T_SETTING BootSettings[] = {
      "GPU renderer: shadows ray traced outdoors through bodies and terrain, from the sun and lights"},
     {"GpuLowPower", NULL, "gfx_lowpower", &GpuObjLowPower, SETTING_OR_DEFAULT, FALSE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: 0 the high-performance graphics card, 1 the power-saving (integrated) one"},
+    {"GpuViewDistance", NULL, "gfx_viewdistance", &TerrainGpuViewDistance, SETTING_CLAMP, 1, 0, 2, NULL, NULL, NULL,
+     NULL, "GPU renderer: view distance outdoors: 0 classic, 1 far, 2 very far"},
     {"GpuSmoothTerrain", NULL, "gfx_smoothterrain", &TerrainGpuSmooth, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL,
      NULL, NULL, "GPU renderer: terrain cells curved into smooth hills and valleys"},
     {"GpuSky", NULL, "gfx_sky", &GpuSkyEnabled, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,

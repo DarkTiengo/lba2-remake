@@ -119,6 +119,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_SKY 2134
 #define MENU_ID_GPU_SMOOTH_TERRAIN 2135
 #define MENU_ID_GPU_CARD 2136
+#define MENU_ID_GPU_VIEW_DISTANCE 2137
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -192,7 +193,7 @@ S32 MenuStyle = MENU_STYLE_AUTO;
 // on: the image and the effects, and the lighting page.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    9,   // nb entries
+    10,  // nb entries
     260, // y center
     0,   // .dia num
 
@@ -210,6 +211,8 @@ U16 GpuEffectsMenu[] = {
     MENU_ID_GPU_WATER,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_FIRE,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_VIEW_DISTANCE,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_SMOOTH_TERRAIN,
     0,
@@ -577,6 +580,11 @@ static void Display_CycleOption(S32 id, S32 dir) {
         TerrainGpuSmooth ^= 1;
         break;
 
+    case MENU_ID_GPU_VIEW_DISTANCE:
+        /* Takes effect as cubes are loaded, every frame outdoors. */
+        TerrainGpuViewDistance = (TerrainGpuViewDistance + (dir < 0 ? 2 : 1)) % 3;
+        break;
+
     case MENU_ID_GPU_CARD:
         /* The window recreates its renderer on the chosen card at its next present. */
         GpuObjLowPower ^= 1;
@@ -762,6 +770,13 @@ static void BuildCustomMenuText(S32 num, char *string) {
     case MENU_ID_GPU_SUNLIGHT:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_SUNLIGHT),
                        GetLocalizedMenuLabel(GpuObjSunlight ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_VIEW_DISTANCE:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_VIEW_DISTANCE),
+                       GetLocalizedMenuLabel(TerrainGpuViewDistance == 0   ? MENU_LABEL_VAL_CLASSIC
+                                             : TerrainGpuViewDistance == 1 ? MENU_LABEL_VAL_FAR
+                                                                           : MENU_LABEL_VAL_VERY_FAR));
         break;
 
     case MENU_ID_GPU_CARD:
@@ -4236,6 +4251,7 @@ static S32 GereGpuEffectsMenu(void) {
         case MENU_ID_GPU_SKY:
         case MENU_ID_GPU_SMOOTH_TERRAIN:
         case MENU_ID_GPU_CARD:
+        case MENU_ID_GPU_VIEW_DISTANCE:
         case MENU_ID_GPU_WATER:
         case MENU_ID_GPU_PIXEL_FILTER:
         case MENU_ID_GPU_DEBAND:

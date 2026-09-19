@@ -68,6 +68,7 @@ Main Menu
 │   │   │   ├── Smooth colours: < On/Off > [selector, gfx_deband]
 │   │   │   ├── Modern water: < On/Off > [selector, gfx_water]
 │   │   │   ├── Modern fire: < On/Off > [selector, gfx_fire]
+│   │   │   ├── View distance: < Classic/Far/Very far > [selector, gfx_viewdistance]
 │   │   │   ├── Smooth terrain: < On/Off > [selector, gfx_smoothterrain]
 │   │   │   └── Lighting and shadows
 │   │   │       ├── Global light: < On/Off > [selector, gfx_sunlight]

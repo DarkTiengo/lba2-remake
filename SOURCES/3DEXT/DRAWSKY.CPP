@@ -36,6 +36,14 @@ void DrawSky(S32 y) {
     U32 xx, zz, i, j;
     STRUC_CLIPVERTEX src[10];
 
+    /* The GPU renderer's modern sky replaces a ceiling overhead (its edge
+       would show against the farther view): the fog-coloured background
+       becomes sky. A cloud layer below the camera stays: it hides what lies
+       under it. */
+    if (GpuSky_Modern() && y > CameraY) {
+        return;
+    }
+
     PtrMap = SkySeaTexture + 128;
     RepMask = 0x7F7F;
     PtrCLUTGouraud = PtrCLUTFog;
