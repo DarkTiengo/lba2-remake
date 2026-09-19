@@ -109,6 +109,21 @@ static SDL_GPUTexture *s_atlas = NULL;
 
 static SDL_GPUBuffer *s_vertexBuffer = NULL;
 static U32 s_vertexCapacity = 0;
+/* The vertex buffer mirrors GpuObjVerts: each draw lies at its own First.
+   Draws are only appended, so a present copies only the vertices written
+   since the last one, unless they moved (GpuObj_VertexEpoch). */
+static U32 s_mirroredVerts = 0;
+static U32 s_statUploaded = 0; ///< vertices copied to the mirror, for LBA2_GPU_STATS
+static U32 s_mirroredEpoch = 0;
+static const SDL_GPUBuffer *s_mirroredBuffer = NULL;
+/* The vertices travel through their own transfer buffer, mapped once a
+   present: the shared one is mapped for every page and would be cycled,
+   at its full size, as often. */
+static SDL_GPUTransferBuffer *s_vertexTransfer = NULL;
+static U32 s_vertexTransferCapacity = 0;
+/* The soft shadows' vertices, rebuilt every frame, in a buffer of their own. */
+static SDL_GPUBuffer *s_shadowBuffer = NULL;
+static U32 s_shadowCapacity = 0;
 static SDL_GPUTransferBuffer *s_transfer = NULL;
 static U32 s_transferCapacity = 0;
 
@@ -527,6 +542,48 @@ static bool EnsureVertexBuffer(U32 size) {
     return s_vertexBuffer != NULL;
 }
 
+static bool EnsureVertexTransfer(U32 size) {
+    if (size <= s_vertexTransferCapacity) {
+        return true;
+    }
+    if (s_vertexTransfer) {
+        SDL_ReleaseGPUTransferBuffer(s_device, s_vertexTransfer);
+        s_vertexTransfer = NULL;
+    }
+    U32 capacity = s_vertexTransferCapacity ? s_vertexTransferCapacity : (1u << 20);
+    while (capacity < size) {
+        capacity *= 2;
+    }
+    SDL_GPUTransferBufferCreateInfo info;
+    SDL_zero(info);
+    info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    info.size = capacity;
+    s_vertexTransfer = SDL_CreateGPUTransferBuffer(s_device, &info);
+    s_vertexTransferCapacity = s_vertexTransfer ? capacity : 0;
+    return s_vertexTransfer != NULL;
+}
+
+static bool EnsureShadowBuffer(U32 size) {
+    if (size <= s_shadowCapacity) {
+        return true;
+    }
+    if (s_shadowBuffer) {
+        SDL_ReleaseGPUBuffer(s_device, s_shadowBuffer);
+        s_shadowBuffer = NULL;
+    }
+    U32 capacity = s_shadowCapacity ? s_shadowCapacity : (1u << 16);
+    while (capacity < size) {
+        capacity *= 2;
+    }
+    SDL_GPUBufferCreateInfo info;
+    SDL_zero(info);
+    info.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
+    info.size = capacity;
+    s_shadowBuffer = SDL_CreateGPUBuffer(s_device, &info);
+    s_shadowCapacity = s_shadowBuffer ? capacity : 0;
+    return s_shadowBuffer != NULL;
+}
+
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
     s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
@@ -731,6 +788,17 @@ static void ReleasePipeline(void) {
         SDL_ReleaseGPUBuffer(s_device, s_vertexBuffer);
         s_vertexBuffer = NULL;
     }
+    if (s_shadowBuffer) {
+        SDL_ReleaseGPUBuffer(s_device, s_shadowBuffer);
+        s_shadowBuffer = NULL;
+    }
+    s_shadowCapacity = 0;
+    s_mirroredBuffer = NULL;
+    if (s_vertexTransfer) {
+        SDL_ReleaseGPUTransferBuffer(s_device, s_vertexTransfer);
+        s_vertexTransfer = NULL;
+    }
+    s_vertexTransferCapacity = 0;
     if (s_bvhNodes) {
         SDL_ReleaseGPUBuffer(s_device, s_bvhNodes);
         s_bvhNodes = NULL;
@@ -974,31 +1042,40 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
     return n;
 }
 
-static void UploadVertices(SDL_GPUCopyPass *pass, const T_GPUOBJ_DRAW *const *draws, U32 count, U32 bytes) {
-    U8 *mapped = (U8 *)SDL_MapGPUTransferBuffer(s_device, s_transfer, true);
+/* Copies into the mirror the vertices [from, to) of GpuObjVerts, and the
+   frame's shadow vertices into their own buffer, through one mapping. */
+static void UploadVertices(SDL_GPUCopyPass *pass, U32 from, U32 to, U32 shadows) {
+    const U32 mirrorBytes = (to - from) * (U32)sizeof(T_GPUOBJ_VERTEX);
+    const U32 shadowBytes = shadows * (U32)sizeof(T_GPUOBJ_VERTEX);
+    if (mirrorBytes + shadowBytes == 0) {
+        return;
+    }
+    U8 *mapped = (U8 *)SDL_MapGPUTransferBuffer(s_device, s_vertexTransfer, true);
     if (mapped == NULL) {
         return;
     }
-    U32 offset = 0;
-    for (U32 i = 0; i < count; i++) {
-        U32 size = draws[i]->Count * sizeof(T_GPUOBJ_VERTEX);
-        memcpy(mapped + offset, GpuObjVerts + draws[i]->First, size);
-        offset += size;
-    }
-    if (offset + GpuObjNbShadowVerts * sizeof(T_GPUOBJ_VERTEX) <= bytes) {
-        memcpy(mapped + offset, GpuObjShadowVerts, GpuObjNbShadowVerts * sizeof(T_GPUOBJ_VERTEX));
-    }
-    SDL_UnmapGPUTransferBuffer(s_device, s_transfer);
+    memcpy(mapped, GpuObjVerts + from, mirrorBytes);
+    memcpy(mapped + mirrorBytes, GpuObjShadowVerts, shadowBytes);
+    SDL_UnmapGPUTransferBuffer(s_device, s_vertexTransfer);
 
     SDL_GPUTransferBufferLocation source;
     SDL_zero(source);
-    source.transfer_buffer = s_transfer;
-
+    source.transfer_buffer = s_vertexTransfer;
     SDL_GPUBufferRegion region;
     SDL_zero(region);
-    region.buffer = s_vertexBuffer;
-    region.size = bytes;
-    SDL_UploadToGPUBuffer(pass, &source, &region, false);
+    if (mirrorBytes > 0) {
+        region.buffer = s_vertexBuffer;
+        region.offset = from * (U32)sizeof(T_GPUOBJ_VERTEX);
+        region.size = mirrorBytes;
+        SDL_UploadToGPUBuffer(pass, &source, &region, false);
+    }
+    if (shadowBytes > 0 && s_shadowBuffer != NULL) {
+        source.offset = mirrorBytes;
+        region.buffer = s_shadowBuffer;
+        region.offset = 0;
+        region.size = shadowBytes;
+        SDL_UploadToGPUBuffer(pass, &source, &region, false);
+    }
 }
 
 /* The global light (sun or room light) for the shaders: direction toward it and
@@ -1250,7 +1327,6 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     GpuWater_GetUniforms(water);
     SDL_PushGPUFragmentUniformData(cmd, 3, water, sizeof(water));
 
-    U32 first = 0;
     S32 slice = -1;
     U32 glassDraw[64];
     U32 glassFirst[64];
@@ -1304,10 +1380,10 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             SDL_SetGPUScissor(pass, &scissor);
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));
             SDL_PushGPUFragmentUniformData(cmd, 0, &uniforms[i], sizeof(T_DRAW_UNIFORMS));
-            SDL_DrawGPUPrimitives(pass, draw->Count, 1, first, 0);
+            SDL_DrawGPUPrimitives(pass, draw->Count, 1, draw->First, 0);
             if (draw->HasGlow && nbGlass < SDL_arraysize(glassDraw)) {
                 glassDraw[nbGlass] = i;
-                glassFirst[nbGlass] = first;
+                glassFirst[nbGlass] = draw->First;
                 glassSlice[nbGlass * 4] = sliceUniform[0];
                 glassSlice[nbGlass * 4 + 1] = sliceUniform[1];
                 glassSlice[nbGlass * 4 + 2] = windTime;
@@ -1316,13 +1392,16 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
                 nbGlass++;
             }
         }
-        first += draw->Count;
     }
 
     /* Soft shadows over the scene surfaces, occluded by what stands in front. */
-    if (GpuObjNbShadowVerts > 0 && GpuObjShadows) {
+    if (GpuObjNbShadowVerts > 0 && GpuObjShadows && s_shadowBuffer != NULL &&
+        GpuObjNbShadowVerts * sizeof(T_GPUOBJ_VERTEX) <= s_shadowCapacity) {
         SDL_BindGPUGraphicsPipeline(pass, s_pipelineShadow);
-        SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
+        SDL_GPUBufferBinding sbind;
+        sbind.buffer = s_shadowBuffer;
+        sbind.offset = 0;
+        SDL_BindGPUVertexBuffers(pass, 0, &sbind, 1);
         SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
         SDL_Rect full;
         full.x = 0;
@@ -1336,7 +1415,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         SDL_zero(u);
         u.LutRow = -1.0f;
         SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(u));
-        SDL_DrawGPUPrimitives(pass, GpuObjNbShadowVerts, 1, first, 0);
+        SDL_DrawGPUPrimitives(pass, GpuObjNbShadowVerts, 1, 0, 0);
     }
 
     /* Second pass: lamp glass over everything drawn behind it. */
@@ -1430,8 +1509,13 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
             BvhWorker(&bvhJob);
         }
     }
-    if (count > 0 && GpuObjShadows) {
-        vertexBytes += GpuObjNbShadowVerts * sizeof(T_GPUOBJ_VERTEX);
+    const U32 shadowVerts = count > 0 && GpuObjShadows ? GpuObjNbShadowVerts : 0;
+    /* The mirror takes what was written since the last present. */
+    const U32 nbVerts = GpuObj_VertexCount();
+    U32 mirrorFrom = 0;
+    if (s_mirroredBuffer == s_vertexBuffer && s_vertexBuffer != NULL && s_mirroredEpoch == GpuObj_VertexEpoch() &&
+        s_mirroredVerts <= nbVerts) {
+        mirrorFrom = s_mirroredVerts;
     }
     CollectFlames(kept, count, w, h);
     PushCompositeParams();
@@ -1487,8 +1571,7 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     const bool atlasUpload = GpuObjAtlasDirty && GpuObjAtlas != NULL;
     if (atlasUpload && atlasBytes > need)
         need = atlasBytes;
-    if (vertexBytes > need)
-        need = vertexBytes;
+    const U32 shadowBytes = shadowVerts * (U32)sizeof(T_GPUOBJ_VERTEX);
     if (tagBytes > need)
         need = tagBytes;
     /* The hierarchy's size is known only once it is built: room for the largest. */
@@ -1499,7 +1582,10 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     }
 
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_device);
-    if (cmd == NULL || !EnsureTransfer(need) || (vertexBytes > 0 && !EnsureVertexBuffer(vertexBytes))) {
+    if (cmd == NULL || !EnsureTransfer(need) ||
+        (count > 0 && !EnsureVertexBuffer(nbVerts * (U32)sizeof(T_GPUOBJ_VERTEX))) ||
+        (count > 0 && !EnsureVertexTransfer(nbVerts * (U32)sizeof(T_GPUOBJ_VERTEX) + shadowBytes)) ||
+        (shadowVerts > 0 && !EnsureShadowBuffer(shadowBytes))) {
         if (bvhThread != NULL) {
             SDL_WaitThread(bvhThread, NULL);
         }
@@ -1529,8 +1615,14 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         UploadTexture(copy, s_atlas, 0, 0, 0, GPUOBJ_ATLAS_SIZE, GPUOBJ_ATLAS_SIZE, GpuObjAtlas, atlasBytes);
         GpuObjAtlasDirty = FALSE;
     }
-    if (vertexBytes > 0) {
-        UploadVertices(copy, kept, count, vertexBytes);
+    if (count > 0) {
+        /* A new buffer holds nothing yet. */
+        const U32 from = s_mirroredBuffer == s_vertexBuffer ? mirrorFrom : 0;
+        UploadVertices(copy, from, nbVerts, shadowVerts);
+        s_statUploaded += nbVerts - from;
+        s_mirroredBuffer = s_vertexBuffer;
+        s_mirroredEpoch = GpuObj_VertexEpoch();
+        s_mirroredVerts = nbVerts;
     }
     if (bvhThread != NULL) {
         SDL_WaitThread(bvhThread, NULL);
@@ -1559,6 +1651,15 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     SDL_SubmitGPUCommandBuffer(cmd);
     Uint64 t3 = SDL_GetPerformanceCounter();
 
+    if (GpuObjVertsExhausted > 0) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            Log_Info("[GPU] the vertex budget (%u) ran out: some draws keep their software pixels",
+                     (unsigned)GPUOBJ_MAX_VERTS);
+        }
+    }
+
     static const char *stats = SDL_getenv("LBA2_GPU_STATS");
     if (stats != NULL) {
         static double sumTags = 0, sumUpload = 0, sumRender = 0;
@@ -1570,8 +1671,11 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         sumDraws += count;
         sumVerts += vertexBytes / sizeof(T_GPUOBJ_VERTEX);
         if (++frames == 300) {
-            Log_Info("[GPU] per present: tags %.2f ms, resolve+upload %.2f ms, render+submit %.2f ms, %u draws, %u verts",
-                     sumTags / frames, sumUpload / frames, sumRender / frames, sumDraws / frames, sumVerts / frames);
+            Log_Info("[GPU] per present: tags %.2f ms, resolve+upload %.2f ms, render+submit %.2f ms, %u draws, %u verts, "
+                     "%u uploaded",
+                     sumTags / frames, sumUpload / frames, sumRender / frames, sumDraws / frames, sumVerts / frames,
+                     s_statUploaded / frames);
+            s_statUploaded = 0;
             sumTags = sumUpload = sumRender = 0;
             frames = sumDraws = sumVerts = 0;
         }

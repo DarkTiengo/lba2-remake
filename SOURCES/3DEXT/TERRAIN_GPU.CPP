@@ -65,10 +65,10 @@ const U8 *TerrainGpuPalette = NULL;
 /* The footstep sound of grass (T_HALF_POLY.SampleStep): the island's own mark
    of where grass grows. */
 #define GRASS_STEP 2
-#define GRASS_TUFTS 28   ///< per triangle (half a cell) near the camera
+#define GRASS_TUFTS 12   ///< per triangle (half a cell) near the camera: a lawn, not a thicket
 #define GRASS_BLADES 3   ///< per tuft
-#define GRASS_NEAR 24000.0f
-#define GRASS_FAR 34000.0f
+#define GRASS_NEAR 20000.0f
+#define GRASS_FAR 28000.0f
 
 typedef struct {
     S16 Xi, Zi;
@@ -441,17 +441,17 @@ static void GrassTri(const T_GRASS_TRI *t) {
         for (S32 j = 0; j < GRASS_BLADES; j++) {
             const float h0 = GrassHash((U32)k * 3u + (U32)j, (U32)t->Xi * 31u + key, (U32)t->Zi * 17u);
             const float h1 = GrassHash((U32)t->Zi * 5u + key, (U32)k * 3u + (U32)j, (U32)t->Xi * 11u);
-            const float height = (130.0f + 150.0f * h0) * grow;
-            const float half = 12.0f + 8.0f * h1;
+            const float height = (55.0f + 60.0f * h0) * grow;
+            const float half = 9.0f + 5.0f * h1;
             /* A little apart from the tuft's centre, leaning out of it. */
             const float angle = ((float)j + h1) * 2.0944f;
             const float ox = cosf(angle), oz = sinf(angle);
-            const float base[3] = {wx + ox * 24.0f * h0, y, wz + oz * 24.0f * h0};
+            const float base[3] = {wx + ox * 18.0f * h0, y, wz + oz * 18.0f * h0};
             const float left[3] = {base[0] - rx * half, y - 6.0f, base[2] - rz * half};
             const float right[3] = {base[0] + rx * half, y - 6.0f, base[2] + rz * half};
             const float lean = height * (0.18f + 0.22f * h1);
             const float tip[3] = {base[0] + ox * lean, y + height, base[2] + oz * lean};
-            const float sway[3] = {windX * height * 0.35f, -height * 0.06f, windZ * height * 0.35f};
+            const float sway[3] = {windX * height * 0.3f, -height * 0.05f, windZ * height * 0.3f};
             /* Darker at the root, in the grass's own shadow; lit at the tip. */
             const float root = shade * 0.62f;
             float top = shade * 1.08f + 0.6f;

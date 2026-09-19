@@ -250,7 +250,7 @@ int main() {
             if (texel == 5) {
                 const S32 flags = (S32)vertices[0].vpos[3];
                 Check(allocated == 9 && (flags & GPUOBJ_FLAG_GRASS) != 0, "grass ground grows tufts of three blades");
-                Check(vertices[2].vpos[1] > vertices[0].vpos[1] + 100.0f, "a blade stands up from the ground");
+                Check(vertices[2].vpos[1] > vertices[0].vpos[1] + 40.0f, "a blade stands up from the ground");
             } else {
                 Check(allocated == 0, "no grass grows on earth, even where the island marks grass");
             }

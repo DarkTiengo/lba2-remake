@@ -28,7 +28,7 @@ extern "C" {
 #endif
 
 // -----------------------------------------------------------------------------
-#define GPUOBJ_MAX_VERTS (1u << 20) ///< cached vertices across live draws (about 96 MB)
+#define GPUOBJ_MAX_VERTS (1u << 21) ///< cached vertices across live draws (192 MB at most): a camera cut keeps the old view and the new one live together
 #define GPUOBJ_MAX_IDS (1u << 23)   ///< ids are exact in a float32 target, below GPUOBJ_SCENE_ID_BIT
 #define GPUOBJ_SCENE_ID_BIT (1u << 23) ///< added to the id the GPU sees for a scene draw
 #define GPUOBJ_SLICES 4096.0f       ///< depth slices ordering draws
@@ -96,6 +96,7 @@ extern S32 GpuObjEnabled;   ///< player choice (lba2.cfg GpuRenderer, gfx_gpu); 
 extern S32 GpuObjAvailable; ///< set by the presenter once its pipeline is live
 
 extern T_GPUOBJ_VERTEX *GpuObjVerts;
+extern U32 GpuObjVertsExhausted; ///< draws left to the software frame for want of room
 
 /* Dynamic point lights for the scene, in the scene's own space (camera-relative
    world units in isometric rooms, view space in perspective scenes, the spaces
@@ -247,6 +248,14 @@ void GpuObj_OnCopyBlock(const void *dst, const void *src, S32 sx, S32 sy, S32 dx
  *  *draws. Pixels outside the box carry no tag. Returns the number of live
  *  draws; 0 means no pixel needs the GPU and out[] and box[] are untouched. */
 U32 GpuObj_BuildPresent(float *out, const T_GPUOBJ_DRAW *const **draws, S32 *box);
+
+/** Vertices written in GpuObjVerts so far. Draws are only appended, so a
+ *  presenter mirroring the array uploads just what lies past its last copy. */
+U32 GpuObj_VertexCount(void);
+
+/** Changes whenever vertices already written move (repacked or reset): the
+ *  mirror must then be copied whole again. */
+U32 GpuObj_VertexEpoch(void);
 
 #ifdef __cplusplus
 }

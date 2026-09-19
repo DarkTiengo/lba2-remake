@@ -16,6 +16,7 @@ S32 GpuObjEnabled = FALSE;
 S32 GpuObjAvailable = FALSE;
 
 T_GPUOBJ_VERTEX *GpuObjVerts = NULL;
+U32 GpuObjVertsExhausted = 0;
 U32 GpuObjTargetHintW = 0;
 U8 *GpuObjAtlas = NULL;
 T_GPUOBJ_LIGHT GpuObjLights[GPUOBJ_MAX_LIGHTS];
@@ -94,6 +95,7 @@ static U8 s_live[MAX_DRAWS];
 static const T_GPUOBJ_DRAW *s_presentList[MAX_DRAWS];
 static U32 s_nbDraws = 0;
 static U32 s_nbVerts = 0;
+static U32 s_vertsEpoch = 0; ///< bumped when written vertices move
 static S32 s_drawOpen = FALSE;
 static U32 s_nextId = 1;
 static S32 s_groupOpen = FALSE;
@@ -281,6 +283,7 @@ static void Compact(void) {
     }
     s_nbDraws = keptDraws;
     s_nbVerts = keptVerts;
+    s_vertsEpoch++;
 }
 
 /* Ids never repeat while a tag could still name the old draw. */
@@ -293,7 +296,16 @@ static void ResetAll(void) {
     }
     s_nbDraws = 0;
     s_nbVerts = 0;
+    s_vertsEpoch++;
     s_nextId = 1;
+}
+
+U32 GpuObj_VertexCount(void) {
+    return s_nbVerts;
+}
+
+U32 GpuObj_VertexEpoch(void) {
+    return s_vertsEpoch;
 }
 
 // --- Capture -----------------------------------------------------------------
@@ -339,6 +351,9 @@ T_GPUOBJ_VERTEX *GpuObj_AllocVerts(U32 n) {
     if (s_nbVerts + n > GPUOBJ_MAX_VERTS) {
         Compact();
         if (s_nbVerts + n > GPUOBJ_MAX_VERTS) {
+            /* Nothing more fits: this draw keeps its software pixels. The
+               presenter says so once, since what is missing has no other sign. */
+            GpuObjVertsExhausted++;
             return NULL;
         }
     }
