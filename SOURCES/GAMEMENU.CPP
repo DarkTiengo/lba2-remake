@@ -121,6 +121,8 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_SMOOTH_TERRAIN 2135
 #define MENU_ID_GPU_VIEW_DISTANCE 2137
 #define MENU_ID_GPU_AUTOTUNE 2138
+#define MENU_ID_GPU_SCENERY 2139
+#define MENU_ID_GPU_GRASS 2140
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -191,10 +193,10 @@ U16 DisplayMenu[4 + 8 * 2];
 S32 MenuStyle = MENU_STYLE_AUTO;
 
 // GPU effects submenu, opened from the Display page while the GPU renderer is
-// on: the image and the effects, and the lighting page.
+// on: the image, and the scenery and lighting pages.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    9,   // nb entries
+    7,   // nb entries
     260, // y center
     0,   // .dia num
 
@@ -207,21 +209,40 @@ U16 GpuEffectsMenu[] = {
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_DEBAND,
     MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_FIRE,
+    0,
+    MENU_ID_GPU_SCENERY,
+    0,
+    MENU_ID_GPU_LIGHTING,
+};
+
+// Scenery: water, sky, weather and the ground, opened from the GPU effects page.
+U16 GpuSceneryMenu[] = {
+    0,   // selected
+    7,   // nb entries
+    260, // y center
+    0,   // .dia num
+
+    0,
+    26, // menu precedent
+    MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_WATER,
     MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_GPU_FIRE,
+    MENU_ID_GPU_SKY,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_STORM,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_VIEW_DISTANCE,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_SMOOTH_TERRAIN,
-    0,
-    MENU_ID_GPU_LIGHTING,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_GRASS,
 };
 
 // Lighting and shadows, opened from the GPU effects page.
 U16 GpuLightingMenu[] = {
     0,   // selected
-    9,   // nb entries
+    7,   // nb entries
     260, // y center
     0,   // .dia num
 
@@ -239,10 +260,6 @@ U16 GpuLightingMenu[] = {
     MENU_ID_GPU_LAMPS,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_SPECULAR,
-    MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_GPU_SKY,
-    MENU_TYPE_DISPLAY_SELECTOR,
-    MENU_ID_GPU_STORM,
 };
 
 // Set when a selector changed the rows of its page; DoGameMenu then returns
@@ -579,6 +596,10 @@ static void Display_CycleOption(S32 id, S32 dir) {
         TerrainGpuSmooth ^= 1;
         break;
 
+    case MENU_ID_GPU_GRASS:
+        TerrainGpuGrass ^= 1;
+        break;
+
     case MENU_ID_GPU_VIEW_DISTANCE:
         /* Takes effect as cubes are loaded, every frame outdoors. */
         TerrainGpuViewDistance = (TerrainGpuViewDistance + (dir < 0 ? 2 : 1)) % 3;
@@ -724,6 +745,10 @@ static void BuildCustomMenuText(S32 num, char *string) {
         CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(MENU_LABEL_GPU_LIGHTING));
         break;
 
+    case MENU_ID_GPU_SCENERY:
+        CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(MENU_LABEL_GPU_SCENERY));
+        break;
+
     case MENU_ID_GPU_AUTOTUNE:
         CopyUtf8ToCp850(string, 256,
                         GetLocalizedMenuLabel(GpuTune_Running() ? MENU_LABEL_GPU_AUTOTUNE_RUNNING
@@ -782,6 +807,11 @@ static void BuildCustomMenuText(S32 num, char *string) {
     case MENU_ID_GPU_SMOOTH_TERRAIN:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_SMOOTH_TERRAIN),
                        GetLocalizedMenuLabel(TerrainGpuSmooth ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_GRASS:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_GRASS),
+                       GetLocalizedMenuLabel(TerrainGpuGrass ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
         break;
 
     case MENU_ID_GPU_SKY:
@@ -4093,6 +4123,10 @@ void GpuLighting_MainCapture(const char *path) {
     MenuPage_MainCapture(GpuLightingMenu, path);
 }
 
+void GpuScenery_MainCapture(const char *path) {
+    MenuPage_MainCapture(GpuSceneryMenu, path);
+}
+
 void Advanced_MainCapture(const char *path) {
     MenuPage_MainCapture(AdvancedOptionMenu, path);
 }
@@ -4207,8 +4241,30 @@ static void GereGpuLightingMenu(void) {
         case MENU_ID_GPU_LIGHTS:
         case MENU_ID_GPU_LAMPS:
         case MENU_ID_GPU_SPECULAR:
+            Display_CycleOption(select, 1);
+            break;
+        }
+    }
+    WaitNoInput();
+}
+
+// Scenery page: selector rows for the GPU renderer's water, sky and ground.
+static void GereGpuSceneryMenu(void) {
+    S32 flag = 0;
+    while (!flag) {
+        const S32 select = DoGameMenu(GpuSceneryMenu);
+        switch (select) {
+        case 26:
+        case 1000:
+            flag = 1;
+            break;
+
+        case MENU_ID_GPU_WATER:
         case MENU_ID_GPU_SKY:
         case MENU_ID_GPU_STORM:
+        case MENU_ID_GPU_VIEW_DISTANCE:
+        case MENU_ID_GPU_SMOOTH_TERRAIN:
+        case MENU_ID_GPU_GRASS:
             Display_CycleOption(select, 1);
             break;
         }
@@ -4240,13 +4296,12 @@ static S32 GereGpuEffectsMenu(void) {
             GereGpuLightingMenu();
             break;
 
+        case MENU_ID_GPU_SCENERY:
+            GereGpuSceneryMenu();
+            break;
+
         case MENU_ID_GPU_UI_SCALE:
         case MENU_ID_GPU_FIRE:
-        case MENU_ID_GPU_STORM:
-        case MENU_ID_GPU_SKY:
-        case MENU_ID_GPU_SMOOTH_TERRAIN:
-        case MENU_ID_GPU_VIEW_DISTANCE:
-        case MENU_ID_GPU_WATER:
         case MENU_ID_GPU_PIXEL_FILTER:
         case MENU_ID_GPU_DEBAND:
             Display_CycleOption(select, 1);

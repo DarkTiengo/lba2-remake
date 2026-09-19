@@ -1,5 +1,6 @@
 #include "DEFINES.H"
 #include "../PERSO.H"
+#include "../C_EXTERN.H" /* PtrPal */
 
 #include <SVGA/SCREEN.H>
 #include <SVGA/GPUOBJ.H> /* GpuObj_RefreshTags */
@@ -190,7 +191,7 @@ if (ptrh->Sens == 0) {
                     static const U8 gpuCorners[3] = {0, 1, 2};
                     const S32 gpuLights[3] = {i0, i1, i2};
                     TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag], color, NULL,
-                                   FALSE);
+                                   FALSE, ptrh->SampleStep);
                 }
                 Fill_Poly(ListTypePolygone[ptrh->PolyFlag],
                           color, 3,
@@ -220,7 +221,7 @@ if (ptrh->Sens == 0) {
                     const S32 gpuLights[3] = {i0, i1, i2};
                     const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
                     TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv,
-                                   ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER);
+                                   ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER, ptrh->SampleStep);
                 }
                 if (Fill_Poly(type, color, 3, Tab_Points)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
@@ -287,7 +288,7 @@ if (ptrh->Sens == 0) {
                     static const U8 gpuCorners[3] = {2, 3, 0};
                     const S32 gpuLights[3] = {i2, i3, i0};
                     TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag], color, NULL,
-                                   FALSE);
+                                   FALSE, ptrh->SampleStep);
                 }
                 Fill_Poly(ListTypePolygone[ptrh->PolyFlag],
                           color, 3,
@@ -317,7 +318,7 @@ if (ptrh->Sens == 0) {
                     const S32 gpuLights[3] = {i2, i3, i0};
                     const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
                     TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv,
-                                   ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER);
+                                   ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER, ptrh->SampleStep);
                 }
                 if (Fill_Poly(type, color, 3, Tab_Points)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
@@ -383,7 +384,7 @@ if (ptrh->Sens == 0) {
                     static const U8 gpuCorners[3] = {3, 0, 1};
                     const S32 gpuLights[3] = {i3, i0, i1};
                     TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag], color, NULL,
-                                   FALSE);
+                                   FALSE, ptrh->SampleStep);
                 }
                 Fill_Poly(ListTypePolygone[ptrh->PolyFlag],
                           color, 3,
@@ -413,7 +414,7 @@ if (ptrh->Sens == 0) {
                     const S32 gpuLights[3] = {i3, i0, i1};
                     const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
                     TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv,
-                                   ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER);
+                                   ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER, ptrh->SampleStep);
                 }
                 if (Fill_Poly(type, color, 3, Tab_Points)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
@@ -480,7 +481,7 @@ if (ptrh->Sens == 0) {
                     static const U8 gpuCorners[3] = {1, 2, 3};
                     const S32 gpuLights[3] = {i1, i2, i3};
                     TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag], color, NULL,
-                                   FALSE);
+                                   FALSE, ptrh->SampleStep);
                 }
                 Fill_Poly(ListTypePolygone[ptrh->PolyFlag],
                           color, 3,
@@ -510,7 +511,7 @@ if (ptrh->Sens == 0) {
                     const S32 gpuLights[3] = {i1, i2, i3};
                     const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
                     TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv,
-                                   ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER);
+                                   ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER, ptrh->SampleStep);
                 }
                 if (Fill_Poly(type, color, 3, Tab_Points)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
@@ -936,6 +937,7 @@ void AffichageTerrainZBuf(void) {
 
     /* The GPU draws the cube unfogged (its CLUT at the normal level) and fogs
        by distance itself. */
+    TerrainGpuPalette = PtrPal;
     TerrainGpu_BeginCube(MapSommetY, GroundTexture, PtrCLUTFog + ((PalLevel << 8) & 0xF000), StartZFog, ClipZFar,
                          FogCoul);
 

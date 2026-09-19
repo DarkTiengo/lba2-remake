@@ -97,6 +97,8 @@ extern void Display_MainCapture(const char *path);
 extern void GpuEffects_MainCapture(const char *path);
 /* Harness one-shot capture of the lighting and shadows page (from GPU effects). */
 extern void GpuLighting_MainCapture(const char *path);
+/* The Scenery page (water, sky, weather, ground), from GPU effects. */
+extern void GpuScenery_MainCapture(const char *path);
 /* Harness one-shot capture of the sound volume page. */
 extern void Volume_MainCapture(const char *path);
 /* Harness one-shot capture of the advanced options page. */

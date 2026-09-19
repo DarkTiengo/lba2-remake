@@ -12,15 +12,16 @@ All three are off by default, so a stock run renders exactly as before. None of 
 | Dithered shading | `gfx_dither` | `DitherShading` | (none) | 0 off, 1 on |
 | Interior render scaling | (none) | (none) | `LBA2_ISO_DIV` | 1 off, 2 to 4; unset = follows the frame scaling below |
 | GPU renderer | `gfx_gpu` | `GpuRenderer` | `LBA2_GPU` | 0 classic, 1 GPU (Display menu: Renderer); see [GPU_RENDERER.md](GPU_RENDERER.md) |
-| GPU modern water | `gfx_water` | `GpuWater` | — | 1 procedural waves, rain-driven rough seas, beach/pier breakers and contact splashes on every exterior sea; 0 original material; GPU renderer only (Display > GPU effects) |
+| GPU modern water | `gfx_water` | `GpuWater` | — | 1 procedural waves, rain-driven rough seas, beach/pier breakers and contact splashes on every exterior sea; 0 original material; GPU renderer only (Display > GPU effects > Scenery) |
 | Menu style | `gfx_menustyle` | `MenuStyle` | — | 0 classic, 1 modern cards, 2 modern with the GPU renderer (default); see [MENU.md](MENU.md) |
 | GPU 2D scale | `gfx_uiscale` | `GpuUiScale` | — | 1 classic size upscaled, 0 native; GPU renderer only |
 | GPU lamps on models | `gfx_lamps` | `GpuLamps` | — | 1 lamp globes on models cast light, 0 off; GPU renderer only |
-| GPU view distance | `gfx_viewdistance` | `GpuViewDistance` | — | 0 classic, 1 far (default), 2 very far: more cubes around the camera and the fog farther out; about 2–3 ms (far) and 4–6 ms (very far) a frame; GPU renderer only (Display > GPU effects) |
+| GPU view distance | `gfx_viewdistance` | `GpuViewDistance` | — | 0 classic, 1 far (default), 2 very far: more cubes around the camera and the fog farther out; about 2–3 ms (far) and 4–6 ms (very far) a frame; GPU renderer only (Display > GPU effects > Scenery) |
 | GPU auto-adjust | `gfx_autotune` (command) | `GpuAutoTuned` | — | measures this machine outdoors and turns the costliest GPU effects off until frames hold 60 fps; runs by itself once, then on request (Display > Auto-adjust) |
-| GPU smooth terrain | `gfx_smoothterrain` | `GpuSmoothTerrain` | — | 1 terrain cells near the camera curved into smooth hills (at most 220 units above the original ground, never below); 0 the original flat cells; GPU renderer only (Display > GPU effects) |
-| GPU modern sky | `gfx_sky` | `GpuSky` | — | 1 procedural sky with sun, clouds and stars, distant land fading into it; 0 the original sky texture and fog colour; GPU renderer only (Display > GPU effects) |
-| GPU rain and lightning | `gfx_storm` | `GpuStorm` | — | 1 layered rain with splashes, lightning bolts and flashes lighting the scene; 0 the original rain lines and lightning palette; GPU renderer only (Display > GPU effects) |
+| GPU smooth terrain | `gfx_smoothterrain` | `GpuSmoothTerrain` | — | 1 terrain cells near the camera curved into smooth hills (at most 220 units above the original ground, never below); 0 the original flat cells; GPU renderer only (Display > GPU effects > Scenery) |
+| GPU grass | `gfx_grass` | `GpuGrass` | — | 1 tufts of grass blades swaying in the wind where the island has grass, within the near part of the view; no measurable cost; GPU renderer only (Display > GPU effects > Scenery) |
+| GPU modern sky | `gfx_sky` | `GpuSky` | — | 1 procedural sky with sun, clouds and stars, distant land fading into it; 0 the original sky texture and fog colour; GPU renderer only (Display > GPU effects > Scenery) |
+| GPU rain and lightning | `gfx_storm` | `GpuStorm` | — | 1 layered rain with splashes, lightning bolts and flashes lighting the scene; 0 the original rain lines and lightning palette; GPU renderer only (Display > GPU effects > Scenery) |
 | GPU global light | `gfx_sunlight` | `GpuSunlight` | — | 1 sun shadows, sky fill and rim light, sun/sky grading, sun bloom, outdoor ambient occlusion; 0 the palette's lighting alone; GPU renderer only (Display > GPU effects > Lighting and shadows) |
 | GPU ray tracing | `gfx_raytrace` | `GpuRayTrace` | — | 1 shadows ray traced outdoors through every body and the terrain, from the sun and the lights; 0 the characters' silhouettes only; GPU renderer only (Display > GPU effects > Lighting and shadows) |
 | GPU soft shadows | `gfx_shadows` | `GpuShadows` | — | 1 soft shadows that bodies also cast away from dynamic lights, 0 the original shadow; GPU renderer only (Display > GPU effects > Lighting and shadows) |

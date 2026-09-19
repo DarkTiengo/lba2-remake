@@ -550,6 +550,7 @@ widescreen, font, palette, or layout changes are most likely to disturb.
 | `ui advanced <path>` | The Advanced options page |
 | `ui gpu-effects <path>` | The GPU effects page (Display menu, GPU renderer) |
 | `ui gpu-lighting <path>` | The Lighting and shadows page (from GPU effects) |
+| `ui gpu-scenery <path>` | The Scenery page (from GPU effects) |
 | `ui menu-main <path>` | The boot-time main menu (Resume / New Game / Load / Options / Quit) |
 | `ui found-object <numvar> <path>` | The found-object cinematic — 3D rotation of `TabInv[numvar]`'s item + dialogue |
 

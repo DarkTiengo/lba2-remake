@@ -11,6 +11,7 @@
 #include <SVGA/GPUWATER.H>
 
 #include <string.h>
+#include <math.h>
 
 // -----------------------------------------------------------------------------
 #ifdef __cplusplus
@@ -56,6 +57,34 @@ float TerrainGpu_FogScale(void) {
     return kScale[ViewDistanceLevel()];
 }
 static S16 s_heights[GRID_SIDE * GRID_SIDE];
+
+/* Grass (gfx_grass): blades standing on the ground the island marks as grass. */
+S32 TerrainGpuGrass = TRUE;
+const U8 *TerrainGpuPalette = NULL;
+
+/* The footstep sound of grass (T_HALF_POLY.SampleStep): the island's own mark
+   of where grass grows. */
+#define GRASS_STEP 2
+#define GRASS_TUFTS 28   ///< per triangle (half a cell) near the camera
+#define GRASS_BLADES 3   ///< per tuft
+#define GRASS_NEAR 24000.0f
+#define GRASS_FAR 34000.0f
+
+typedef struct {
+    S16 Xi, Zi;
+    U8 Corners[3];
+    U8 HasUv;
+    U8 Smoothed; ///< lies on the smooth terrain's curve
+    S32 Lights[3];
+    S32 PerVertexShade;
+    S32 Color;
+    float Mode;
+    float ConstantShade;
+    U16 Uv[6];
+} T_GRASS_TRI;
+#define MAX_GRASS_TRIS 4096
+static T_GRASS_TRI s_grassTris[MAX_GRASS_TRIS];
+static S32 s_nbGrassTris = 0;
 
 /* Land triangles waiting for the cube's end, when every flat-drawn triangle is
    known: along their edges the curve must vanish, or the two would not meet. */
@@ -180,6 +209,29 @@ static void WaterVertex(T_GPUOBJ_VERTEX *v, const STRUC_CLIPVERTEX src[4], float
     DisplacedWaterVertex(v, point[0], point[1], point[2], point[3] / 256.0f, point[4] / 256.0f);
 }
 
+/* How far smooth terrain lifts the point of grid position (gx, gz) whose
+   original triangle lies at height flat; cornerWeight is the share of its
+   corners that may curve (none at a flat-drawn triangle's). */
+static float SmoothOffset(float gx, float gz, float flat, float cornerWeight) {
+    float p[3];
+    GridPoint(gx * (float)CELL_SIZE, flat, gz * (float)CELL_SIZE, p);
+    /* How much of the curve this point takes: none far away or at the sea. */
+    float w = (SMOOTH_FADE_FAR - p[2]) / (SMOOTH_FADE_FAR - SMOOTH_FADE_NEAR);
+    w = w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
+    float shore = (flat - 64.0f) / 320.0f;
+    shore = shore < 0.0f ? 0.0f : (shore > 1.0f ? 1.0f : shore);
+    /* None on the cube's border: the next cube curves its own side. */
+    float border = gx < gz ? gx : gz;
+    border = (float)(GRID_SIDE - 1) - gx < border ? (float)(GRID_SIDE - 1) - gx : border;
+    border = (float)(GRID_SIDE - 1) - gz < border ? (float)(GRID_SIDE - 1) - gz : border;
+    border = border > 1.0f ? 1.0f : border;
+    float offset = CurveHeight(gx, gz) - flat;
+    /* Rounding a hill or a crest raises it; only hollows sink, and
+       barely: a sunk fold would open a gap onto what lies behind. */
+    offset = offset < -SMOOTH_MAX_SINK ? -SMOOTH_MAX_SINK : (offset > SMOOTH_MAX_OFFSET ? SMOOTH_MAX_OFFSET : offset);
+    return offset * w * shore * border * cornerWeight;
+}
+
 /* A land triangle of cell (xi, zi) cut into smaller ones lying on the curved
    surface. The curve fades out with the distance and down at the sea's level,
    so where cells are drawn flat (far away, water) their edges stay straight
@@ -223,23 +275,9 @@ static S32 SmoothTri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], f
                        cell's diagonal, as the classic terrain lies. */
                     const float flat = b0 * ch[0] + b1 * ch[1] + b2 * ch[2];
                     float p[3];
-                    GridPoint(gx * (float)CELL_SIZE, flat, gz * (float)CELL_SIZE, p);
-                    /* How much of the curve this point takes: none far away or at the sea. */
-                    float w = (SMOOTH_FADE_FAR - p[2]) / (SMOOTH_FADE_FAR - SMOOTH_FADE_NEAR);
-                    w = w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
-                    float shore = (flat - 64.0f) / 320.0f;
-                    shore = shore < 0.0f ? 0.0f : (shore > 1.0f ? 1.0f : shore);
-                    /* None on the cube's border: the next cube curves its own side. */
-                    float border = gx < gz ? gx : gz;
-                    border = (float)(GRID_SIDE - 1) - gx < border ? (float)(GRID_SIDE - 1) - gx : border;
-                    border = (float)(GRID_SIDE - 1) - gz < border ? (float)(GRID_SIDE - 1) - gz : border;
-                    border = border > 1.0f ? 1.0f : border;
-                    float offset = CurveHeight(gx, gz) - flat;
-                    /* Rounding a hill or a crest raises it; only hollows sink, and
-                       barely: a sunk fold would open a gap onto what lies behind. */
-                    offset = offset < -SMOOTH_MAX_SINK ? -SMOOTH_MAX_SINK
-                                                       : (offset > SMOOTH_MAX_OFFSET ? SMOOTH_MAX_OFFSET : offset);
-                    GridPoint(gx * (float)CELL_SIZE, flat + offset * w * shore * border * (b0 * cw[0] + b1 * cw[1] + b2 * cw[2]), gz * (float)CELL_SIZE, p);
+                    GridPoint(gx * (float)CELL_SIZE,
+                              flat + SmoothOffset(gx, gz, flat, b0 * cw[0] + b1 * cw[1] + b2 * cw[2]),
+                              gz * (float)CELL_SIZE, p);
                     T_GPUOBJ_VERTEX *vert = &v[out++];
                     AffGpu_ViewVertex(vert, p[0], p[1], p[2]);
                     vert->normal[3] = perVertexShade ? (b0 * (float)lights[0] + b1 * (float)lights[1] +
@@ -270,6 +308,161 @@ static S32 SmoothTri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], f
     return TRUE;
 }
 
+/* A hash of integers to [0, 1): the same blades wherever the camera stands. */
+static float GrassHash(U32 a, U32 b, U32 c) {
+    U32 h = a * 0x8DA6B343u ^ b * 0xD8163841u ^ c * 0xCB1AB31Fu;
+    h ^= h >> 13;
+    h *= 0x5BD1E995u;
+    h ^= h >> 15;
+    return (float)(h & 0xFFFFFF) / 16777216.0f;
+}
+
+/* The ground's colour under texel (u, v) (8.8), or under the fill colour. */
+static S32 GrassGround(const T_GRASS_TRI *t, float u, float v) {
+    S32 index;
+    if (t->HasUv && s_draw->Page != NULL) {
+        index = s_draw->Page[(((S32)v >> 8 & 255) << 8) | ((S32)u >> 8 & 255)];
+        if (index == 0) {
+            return FALSE;
+        }
+    } else {
+        index = t->Color & 255;
+    }
+    if (s_draw->Clut != NULL) {
+        index = s_draw->Clut[8 * 256 + index];
+    }
+    if (TerrainGpuPalette == NULL) {
+        return TRUE;
+    }
+    const S32 r = TerrainGpuPalette[index * 3];
+    const S32 g = TerrainGpuPalette[index * 3 + 1];
+    const S32 b = TerrainGpuPalette[index * 3 + 2];
+    /* Grass green or dry grass; not the earth or the stones its patches border. */
+    return g * 10 >= r * 9 && g * 100 > b * 112;
+}
+
+/* One grass vertex: cube-local world point, its shade, the tip's sway. */
+static void GrassVertex(T_GPUOBJ_VERTEX *v, const float w[3], float shade, float mode, S32 color, float u, float tv,
+                        const float *sway, float phase) {
+    float p[3];
+    GridPoint(w[0], w[1], w[2], p);
+    AffGpu_ViewVertex(v, p[0], p[1], p[2]);
+    v->normal[3] = shade;
+    v->light[3] = mode;
+    v->vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_GRASS);
+    v->mat[0] = (float)(color & 0xFF);
+    v->mat[1] = 0.0f;
+    v->mat[2] = 65535.0f;
+    v->mat[3] = phase;
+    v->uv[0] = u;
+    v->uv[1] = tv;
+    if (sway != NULL) {
+        /* The clip-space offset of a unit of wind: the vertex shader moves
+           the tip along it (clip coordinates are linear in the position). */
+        float q[3];
+        T_GPUOBJ_VERTEX moved;
+        GridPoint(w[0] + sway[0], w[1] + sway[1], w[2] + sway[2], q);
+        AffGpu_ViewVertex(&moved, q[0], q[1], q[2]);
+        v->uv[2] = moved.clip[0] - v->clip[0];
+        v->uv[3] = moved.clip[1] - v->clip[1];
+    }
+}
+
+/* Tufts of blades over a grass triangle, on the ground as it is drawn (curved
+   by smooth terrain), coloured by the texel under their root. Their number
+   and height fade out with the distance, blade by blade, so none pops. */
+static void GrassTri(const T_GRASS_TRI *t) {
+    static const S32 kCornerX[4] = {0, 0, 1, 1};
+    static const S32 kCornerZ[4] = {0, 1, 1, 0};
+    float cx[3], cz[3], ch[3], cw[3];
+    for (S32 i = 0; i < 3; i++) {
+        cx[i] = (float)(t->Xi + kCornerX[t->Corners[i] & 3]);
+        cz[i] = (float)(t->Zi + kCornerZ[t->Corners[i] & 3]);
+        const S32 g = (S32)cz[i] * GRID_SIDE + (S32)cx[i];
+        ch[i] = (float)s_heights[g];
+        cw[i] = s_flatCorner[g] ? 0.0f : 1.0f;
+    }
+    /* The blades face the camera: its right, level. */
+    const TYPE_MAT *m = &MatriceWorld;
+    float rx = m->F.M11, rz = m->F.M13;
+    const float rl = rx * rx + rz * rz;
+    if (rl < 1e-6f) {
+        return;
+    }
+    const float inv = 1.0f / sqrtf(rl);
+    rx *= inv;
+    rz *= inv;
+    /* One wind over the island. */
+    const float windX = 0.94f, windZ = 0.34f;
+    const U32 key = (U32)(t->Corners[0] | t->Corners[1] << 2 | t->Corners[2] << 4);
+    for (S32 k = 0; k < GRASS_TUFTS; k++) {
+        float b0 = GrassHash((U32)t->Xi, (U32)t->Zi, key * 64u + (U32)k);
+        float b1 = GrassHash((U32)t->Zi, (U32)t->Xi, key * 64u + (U32)k + 4096u);
+        if (b0 + b1 > 1.0f) {
+            b0 = 1.0f - b0;
+            b1 = 1.0f - b1;
+        }
+        const float b2 = 1.0f - b0 - b1;
+        const float gx = b0 * cx[0] + b1 * cx[1] + b2 * cx[2];
+        const float gz = b0 * cz[0] + b1 * cz[1] + b2 * cz[2];
+        const float flat = b0 * ch[0] + b1 * ch[1] + b2 * ch[2];
+        float p[3];
+        GridPoint(gx * (float)CELL_SIZE, flat, gz * (float)CELL_SIZE, p);
+        /* Thinned out with the distance: each tuft has its own threshold, and
+           shrinks into the ground as the distance reaches it. */
+        const float density = (GRASS_FAR - p[2]) / (GRASS_FAR - GRASS_NEAR);
+        const float rank = GrassHash((U32)t->Xi * 7u, (U32)t->Zi * 13u, key * 64u + (U32)k + 8192u) * 0.999f;
+        float grow = (density - rank) * 6.0f;
+        if (grow <= 0.0f || p[2] < 64.0f) {
+            continue;
+        }
+        grow = grow > 1.0f ? 1.0f : grow;
+        float u = 0.0f, tv = 0.0f;
+        if (t->HasUv) {
+            u = b0 * (float)t->Uv[0] + b1 * (float)t->Uv[2] + b2 * (float)t->Uv[4];
+            tv = b0 * (float)t->Uv[1] + b1 * (float)t->Uv[3] + b2 * (float)t->Uv[5];
+        }
+        if (!GrassGround(t, u, tv)) {
+            continue;
+        }
+        const float y =
+            flat + (t->Smoothed ? SmoothOffset(gx, gz, flat, b0 * cw[0] + b1 * cw[1] + b2 * cw[2]) : 0.0f);
+        const float shade = t->PerVertexShade ? (b0 * (float)t->Lights[0] + b1 * (float)t->Lights[1] +
+                                                 b2 * (float)t->Lights[2]) /
+                                                    256.0f
+                                              : t->ConstantShade;
+        const float wx = gx * (float)CELL_SIZE, wz = gz * (float)CELL_SIZE;
+        /* Neighbouring tufts sway together: the gust travels along the wind. */
+        const float phase = (wx * windX + wz * windZ) * 0.004f + GrassHash((U32)k, (U32)t->Xi, (U32)t->Zi) * 1.2f;
+        T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(GRASS_BLADES * 3);
+        if (v == NULL) {
+            return;
+        }
+        for (S32 j = 0; j < GRASS_BLADES; j++) {
+            const float h0 = GrassHash((U32)k * 3u + (U32)j, (U32)t->Xi * 31u + key, (U32)t->Zi * 17u);
+            const float h1 = GrassHash((U32)t->Zi * 5u + key, (U32)k * 3u + (U32)j, (U32)t->Xi * 11u);
+            const float height = (130.0f + 150.0f * h0) * grow;
+            const float half = 12.0f + 8.0f * h1;
+            /* A little apart from the tuft's centre, leaning out of it. */
+            const float angle = ((float)j + h1) * 2.0944f;
+            const float ox = cosf(angle), oz = sinf(angle);
+            const float base[3] = {wx + ox * 24.0f * h0, y, wz + oz * 24.0f * h0};
+            const float left[3] = {base[0] - rx * half, y - 6.0f, base[2] - rz * half};
+            const float right[3] = {base[0] + rx * half, y - 6.0f, base[2] + rz * half};
+            const float lean = height * (0.18f + 0.22f * h1);
+            const float tip[3] = {base[0] + ox * lean, y + height, base[2] + oz * lean};
+            const float sway[3] = {windX * height * 0.35f, -height * 0.06f, windZ * height * 0.35f};
+            /* Darker at the root, in the grass's own shadow; lit at the tip. */
+            const float root = shade * 0.62f;
+            float top = shade * 1.08f + 0.6f;
+            top = top > 15.0f ? 15.0f : top;
+            GrassVertex(&v[j * 3], left, root, t->Mode, t->Color, u / 256.0f, tv / 256.0f, NULL, phase);
+            GrassVertex(&v[j * 3 + 1], right, root, t->Mode, t->Color, u / 256.0f, tv / 256.0f, NULL, phase);
+            GrassVertex(&v[j * 3 + 2], tip, top, t->Mode, t->Color, u / 256.0f, tv / 256.0f, sway, phase);
+        }
+    }
+}
+
 // --- Interface ---------------------------------------------------------------
 void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S32 fogStart, S32 fogEnd,
                           S32 fogColor) {
@@ -282,6 +475,7 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
         return;
     }
     s_nbSmoothTris = 0;
+    s_nbGrassTris = 0;
     memset(s_flatCorner, 0, sizeof(s_flatCorner));
 
     /* LongWorldRotatePoint then LongProjectPoint's camera offsets, in float. */
@@ -301,7 +495,7 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
 }
 
 void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
-                    const U16 *uv, S32 water) {
+                    const U16 *uv, S32 water, S32 step) {
     if (s_draw == NULL) {
         return;
     }
@@ -341,6 +535,35 @@ void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S3
     }
     if (fillType >= POLY_TEXTURE_INCRUST && fillType <= POLY_TEXTURE_INCRUST_DITHER) {
         flags |= GPUOBJ_FLAG_CHROMAKEY;
+    }
+
+    if (TerrainGpuGrass && step == GRASS_STEP && !water && mode != (float)GPUOBJ_MODE_PASS &&
+        s_nbGrassTris < MAX_GRASS_TRIS) {
+        static const S32 kGX[4] = {0, 0, 1, 1};
+        static const S32 kGZ[4] = {0, 1, 1, 0};
+        float depth = 1e30f;
+        for (S32 i = 0; i < 3; i++) {
+            const S32 g = (zi + kGZ[corners[i] & 3]) * GRID_SIDE + xi + kGX[corners[i] & 3];
+            depth = s_grid[g][2] < depth ? s_grid[g][2] : depth;
+        }
+        if (depth < GRASS_FAR) {
+            T_GRASS_TRI *t = &s_grassTris[s_nbGrassTris++];
+            t->Xi = (S16)xi;
+            t->Zi = (S16)zi;
+            t->HasUv = uv != NULL;
+            t->Smoothed = TerrainGpuSmooth && depth < SMOOTH_FADE_FAR && s_nbSmoothTris < MAX_SMOOTH_TRIS;
+            for (S32 i = 0; i < 3; i++) {
+                t->Corners[i] = corners[i];
+                t->Lights[i] = lights[i];
+            }
+            for (S32 i = 0; i < 6; i++) {
+                t->Uv[i] = uv != NULL ? uv[i] : 0;
+            }
+            t->Mode = mode;
+            t->PerVertexShade = perVertexShade;
+            t->ConstantShade = constantShade;
+            t->Color = color;
+        }
     }
 
     if (TerrainGpuSmooth) {
@@ -532,6 +755,10 @@ void TerrainGpu_End(void) {
                   t->Color, t->HasUv ? t->Uv : NULL);
     }
     s_nbSmoothTris = 0;
+    for (S32 k = 0; k < s_nbGrassTris; k++) {
+        GrassTri(&s_grassTris[k]);
+    }
+    s_nbGrassTris = 0;
     s_draw = NULL;
     GpuObj_EndDraw();
 }

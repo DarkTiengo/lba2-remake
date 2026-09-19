@@ -149,6 +149,8 @@ static const T_SETTING BootSettings[] = {
      "GPU renderer: the effects were adjusted to this machine (0 measures again outdoors)"},
     {"GpuSmoothTerrain", NULL, "gfx_smoothterrain", &TerrainGpuSmooth, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL,
      NULL, NULL, "GPU renderer: terrain cells curved into smooth hills and valleys"},
+    {"GpuGrass", NULL, "gfx_grass", &TerrainGpuGrass, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
+     "GPU renderer: blades of grass swaying in the wind where the island has grass"},
     {"GpuSky", NULL, "gfx_sky", &GpuSkyEnabled, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: procedural sky with the sun, drifting clouds and stars"},
     {"GpuStorm", NULL, "gfx_storm", &GpuStormEnabled, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,

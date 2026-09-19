@@ -180,14 +180,14 @@ int main() {
     static U8 terrainPage[65536];
     TerrainGpu_BeginCube(heights, terrainPage, NULL, 0, 0, 0);
     allocated = 0;
-    TerrainGpu_Tri(0, 0, corners, lights, POLY_TEXTURE, 0, terrainUv, TRUE);
+    TerrainGpu_Tri(0, 0, corners, lights, POLY_TEXTURE, 0, terrainUv, TRUE, 0);
     TerrainGpu_End();
     Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER_TERRAIN) != 0 &&
               vertices[0].vpos[1] == 0.0f && vertices[0].uv[2] != 0.0f,
           "authored CodeJeu water keeps its animated shoreline geometry and texture");
     TerrainGpu_BeginCube(heights, terrainPage, NULL, 0, 0, 0);
     allocated = 0;
-    TerrainGpu_Tri(0, 0, corners, lights, POLY_TEXTURE, 0, terrainUv, FALSE);
+    TerrainGpu_Tri(0, 0, corners, lights, POLY_TEXTURE, 0, terrainUv, FALSE, 0);
     TerrainGpu_End();
     Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER) == 0,
           "unmarked terrain such as animated lava or gas keeps its original material");
@@ -207,7 +207,7 @@ int main() {
         TerrainGpuSmooth = TRUE;
         TerrainGpu_BeginCube(hills, terrainPage, NULL, 0, 0, 0);
         allocated = 0;
-        TerrainGpu_Tri(3, 3, corners, lights, POLY_TEXTURE, 0, terrainUv, FALSE);
+        TerrainGpu_Tri(3, 3, corners, lights, POLY_TEXTURE, 0, terrainUv, FALSE, 0);
         Check(allocated == 0, "land triangles wait for the cube's end");
         TerrainGpu_End();
         bool above = true, raised = false, flagged = true;
@@ -224,6 +224,39 @@ int main() {
         Check(allocated == 48 && flagged, "smooth terrain cuts a land triangle into sixteen, flagged");
         Check(above && raised, "smooth terrain curves above the original plane, never below");
         TerrainGpuSmooth = FALSE;
+        MatriceWorld = saved;
+    }
+
+    /* Grass: tufts of blades on ground marked as grass (footstep 2) whose
+       texel is green; none on earth. */
+    {
+        const TYPE_MAT saved = MatriceWorld;
+        const S32 savedZ = CameraZr;
+        std::memset(&MatriceWorld, 0, sizeof(MatriceWorld));
+        MatriceWorld.F.M11 = MatriceWorld.F.M22 = MatriceWorld.F.M33 = 1.0f;
+        CameraZr = 20000;
+        static U8 palette[768];
+        palette[5 * 3] = 40, palette[5 * 3 + 1] = 120, palette[5 * 3 + 2] = 30; /* grass */
+        palette[6 * 3] = 110, palette[6 * 3 + 1] = 80, palette[6 * 3 + 2] = 50; /* earth */
+        TerrainGpuPalette = palette;
+        static U8 grassPage[65536];
+        static S16 flatGround[65 * 65];
+        for (U8 texel = 5; texel <= 6; texel++) {
+            std::memset(grassPage, texel, sizeof(grassPage));
+            TerrainGpu_BeginCube(flatGround, grassPage, NULL, 0, 0, 0);
+            TerrainGpu_Tri(3, 3, corners, lights, POLY_TEXTURE, 0, terrainUv, FALSE, 2);
+            allocated = 0;
+            TerrainGpu_End();
+            if (texel == 5) {
+                const S32 flags = (S32)vertices[0].vpos[3];
+                Check(allocated == 9 && (flags & GPUOBJ_FLAG_GRASS) != 0, "grass ground grows tufts of three blades");
+                Check(vertices[2].vpos[1] > vertices[0].vpos[1] + 100.0f, "a blade stands up from the ground");
+            } else {
+                Check(allocated == 0, "no grass grows on earth, even where the island marks grass");
+            }
+        }
+        TerrainGpuPalette = NULL;
+        CameraZr = savedZ;
         MatriceWorld = saved;
     }
     quad[0].V_Z0 = -100;

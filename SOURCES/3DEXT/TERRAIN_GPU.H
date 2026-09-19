@@ -23,6 +23,12 @@ extern "C" {
  *  triangles on a curved surface through the height map, finer near the camera. */
 extern S32 TerrainGpuSmooth;
 
+/** Grass (gfx_grass): blades standing on the ground the island marks as grass. */
+extern S32 TerrainGpuGrass;
+
+/** The scene's 768-byte RGB palette, to tell grass from the earth it borders. */
+extern const U8 *TerrainGpuPalette;
+
 /** View distance with the GPU renderer (gfx_viewdistance): 0 the classic one,
  *  1 far, 2 very far. The fog moves out and more cubes are drawn around the
  *  camera; the classic renderer keeps the original. */
@@ -42,9 +48,10 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
 /** One terrain triangle, as filled by DrawFeuillePolyZBuf. corners index the
  *  cell's corners (0 = (x, z), 1 = (x, z+1), 2 = (x+1, z+1), 3 = (x+1, z)),
  *  lights are the 8.8 vertex intensities, fillType and color what Fill_Poly
- *  got, uv the six texel coordinates (8.8) or NULL for an untextured fill. */
+ *  got, uv the six texel coordinates (8.8) or NULL for an untextured fill,
+ *  step the footstep sound the ground makes (T_HALF_POLY.SampleStep). */
 void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
-                    const U16 *uv, S32 water);
+                    const U16 *uv, S32 water, S32 step);
 
 /** Captures the main cube's camera before horizon cubes shift it. */
 void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ);

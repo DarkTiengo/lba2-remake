@@ -802,7 +802,8 @@ static void ReleasePipeline(void) {
 static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
     static float tris[GPUBVH_MAX_TRIS * 9];
     U32 n = 0;
-    const S32 skipFlags = GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_SKY | GPUOBJ_FLAG_EMISSIVE;
+    /* Grass blades are too many and too thin to cast a traced shadow. */
+    const S32 skipFlags = GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_SKY | GPUOBJ_FLAG_EMISSIVE | GPUOBJ_FLAG_GRASS;
     for (U32 d = 0; d < count && n < GPUBVH_MAX_TRIS; d++) {
         /* Only the scene: a menu's bodies live in their own projection. */
         if (!draws[d]->Scene) {
@@ -1253,7 +1254,10 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     S32 slice = -1;
     U32 glassDraw[64];
     U32 glassFirst[64];
-    float glassSlice[128];
+    float glassSlice[256];
+    /* Grass sways in the wind, harder in a storm. */
+    const float windTime = (float)fmod(seconds, 3600.0);
+    const float wind = GpuStorm_Active() ? 1.8f : 1.0f;
     SDL_Rect glassScissor[64];
     U32 nbGlass = 0;
     for (U32 i = 0; i < count; i++) {
@@ -1264,7 +1268,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
            drew it: a run of z-buffered bodies (drawn front to back, depth
            decides) shares a slice, any other body lands in front of everything
            before it; all of them in the front half, over the scene. */
-        float sliceUniform[2];
+        float sliceUniform[4] = {0.0f, 0.0f, windTime, wind};
         if (draw->Scene) {
             sliceUniform[0] = 0.5f;
             sliceUniform[1] = 0.5f;
@@ -1304,8 +1308,10 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             if (draw->HasGlow && nbGlass < SDL_arraysize(glassDraw)) {
                 glassDraw[nbGlass] = i;
                 glassFirst[nbGlass] = first;
-                glassSlice[nbGlass * 2] = sliceUniform[0];
-                glassSlice[nbGlass * 2 + 1] = sliceUniform[1];
+                glassSlice[nbGlass * 4] = sliceUniform[0];
+                glassSlice[nbGlass * 4 + 1] = sliceUniform[1];
+                glassSlice[nbGlass * 4 + 2] = windTime;
+                glassSlice[nbGlass * 4 + 3] = wind;
                 glassScissor[nbGlass] = scissor;
                 nbGlass++;
             }
@@ -1324,7 +1330,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         full.w = (int)s_targetW;
         full.h = (int)s_targetH;
         SDL_SetGPUScissor(pass, &full);
-        const float sceneSlice[2] = {0.5f, 0.5f};
+        const float sceneSlice[4] = {0.5f, 0.5f, windTime, wind};
         SDL_PushGPUVertexUniformData(cmd, 0, sceneSlice, sizeof(sceneSlice));
         T_DRAW_UNIFORMS u;
         SDL_zero(u);
@@ -1343,7 +1349,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             T_DRAW_UNIFORMS u = uniforms[i];
             u.GlassPass = 1.0f;
             SDL_SetGPUScissor(pass, &glassScissor[k]);
-            SDL_PushGPUVertexUniformData(cmd, 0, glassSlice + k * 2, sizeof(float) * 2);
+            SDL_PushGPUVertexUniformData(cmd, 0, glassSlice + k * 4, sizeof(float) * 4);
             SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(T_DRAW_UNIFORMS));
             SDL_DrawGPUPrimitives(pass, draws[i]->Count, 1, glassFirst[k], 0);
         }

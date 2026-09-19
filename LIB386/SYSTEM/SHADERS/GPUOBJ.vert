@@ -21,10 +21,23 @@ layout(location = 5) flat out vec2 v_slice;
 layout(set = 1, binding = 0) uniform Draw {
     float sliceNear; // depth where this draw's slice starts
     float sliceSize; // depth span of one slice
+    float time;      // seconds, for the grass in the wind
+    float wind;      // the wind's strength (1 a breeze, more in a storm)
 };
 
+const int FLAG_GRASS = 512;
+
 void main() {
-    gl_Position = vec4(a_clip.xy, sliceNear * a_clip.w + a_clip.z * sliceSize, a_clip.w);
+    vec4 clip = a_clip;
+    if ((int(a_vpos.w + 0.5) & FLAG_GRASS) != 0) {
+        /* A grass blade's tip bends with the wind: gusts travel over the
+           field (the phase follows the ground), each blade flutters in them. */
+        float ph = a_mat.w;
+        float gust = 0.5 + 0.5 * sin(time * 1.1 - ph * 0.8);
+        float flutter = sin(time * 4.3 + ph * 5.3);
+        clip.xy += a_uv.zw * (wind * (0.2 + 0.8 * gust + 0.15 * flutter));
+    }
+    gl_Position = vec4(clip.xy, sliceNear * clip.w + clip.z * sliceSize, clip.w);
     v_normal = a_normal;
     v_light = a_light;
     v_vpos = a_vpos;

@@ -55,6 +55,7 @@ extern "C" {
 #define GPUOBJ_FLAG_WATER_TERRAIN 64  ///< CodeJeu water retains its authored animated terrain page
 #define GPUOBJ_FLAG_DETAIL 128        ///< smooth terrain's small triangles: shadow rays use the original instead
 #define GPUOBJ_FLAG_DETAIL_ORIGIN 256 ///< the first of them carries the original triangle in normal.xyz
+#define GPUOBJ_FLAG_GRASS 512        ///< a grass blade: the tip sways by uv.zw (clip offset of the wind), phase in mat.w
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
 typedef struct {
