@@ -1,5 +1,6 @@
 #include "C_EXTERN.H"
 #include "GAMEMENU.H" /* Menu_IsModern */
+#include <SVGA/GPUOBJ.H> /* GpuObj_UntagBox */
 #include "CONSOLE/CONSOLE.H"
 #include "CONTROL.H"
 #include "DIRECTORIES.H"
@@ -661,11 +662,46 @@ static T_INV_SLOT s_invSlots[MAX_BOX_INVENTORY];
 static char s_invName[256];
 static S32 s_invPanelX1 = 0, s_invPanelY1 = 0; ///< the panel's corner while it opens
 
+/* A card over [x0,x1] x [y0,y1] minus the box z (the zoomed object's): up to
+   four pieces around it, so nothing is drawn over the object. */
+static void CardAround(float x0, float y0, float x1, float y1, const float *z, const T_UIOVERLAY_CARD *style) {
+    if (z == NULL || x1 <= z[0] || x0 >= z[2] || y1 <= z[1] || y0 >= z[3]) {
+        UiOverlay_Card(x0, y0, x1, y1, style);
+        return;
+    }
+    const float my0 = y0 > z[1] ? y0 : z[1];
+    const float my1 = y1 < z[3] ? y1 : z[3];
+    if (z[1] > y0) {
+        UiOverlay_Card(x0, y0, x1, z[1], style);
+    }
+    if (z[3] < y1) {
+        UiOverlay_Card(x0, z[3], x1, y1, style);
+    }
+    if (z[0] > x0) {
+        UiOverlay_Card(x0, my0, z[0], my1, style);
+    }
+    if (z[2] < x1) {
+        UiOverlay_Card(z[2], my0, x1, my1, style);
+    }
+}
+
 static void InvModern_Publish(void) {
     if (!s_invModern) {
         return;
     }
     UiOverlay_ClearLayer(UIOVERLAY_LAYER_PAGE);
+
+    /* The selected object zoomed over the grid: the panel's shading and the
+       other slots' cards stay off it, its own card is drawn last. */
+    float zoomBox[4];
+    const float *zoom = NULL;
+    if (FlagZoomed >= 2 && InvSelect >= 0 && InvSelect < MAX_BOX_INVENTORY && s_invSlots[InvSelect].Valid) {
+        zoomBox[0] = (float)s_invSlots[InvSelect].X0;
+        zoomBox[1] = (float)s_invSlots[InvSelect].Y0;
+        zoomBox[2] = (float)s_invSlots[InvSelect].X1;
+        zoomBox[3] = (float)s_invSlots[InvSelect].Y1;
+        zoom = zoomBox;
+    }
 
     if (s_invPanelX1 == INV_END_X) {
         /* Darken the panel between the slots only: the slots hold 3D objects the
@@ -682,7 +718,7 @@ static void InvModern_Publish(void) {
             const float bottom = row == INV_NBOBJ_Y ? (float)INV_END_Y - 4.0f
                                                     : (float)(INV_START_Y + INV_INTER_Y + (INV_SIZEO_Y + INV_INTER_Y) * row);
             if (bottom > top) {
-                UiOverlay_Card(left, top, right, bottom, &band);
+                CardAround(left, top, right, bottom, zoom, &band);
             }
             if (row == INV_NBOBJ_Y) {
                 break;
@@ -693,7 +729,7 @@ static void InvModern_Publish(void) {
                 const float x0 = col == 0 ? left : (float)(INV_START_X + INV_INTER_X + (INV_SIZEO_X + INV_INTER_X) * col - INV_INTER_X);
                 const float x1 = col == INV_NBOBJ_X ? right : (float)(INV_START_X + INV_INTER_X + (INV_SIZEO_X + INV_INTER_X) * col);
                 if (x1 > x0) {
-                    UiOverlay_Card(x0, y0, x1, y1, &band);
+                    CardAround(x0, y0, x1, y1, zoom, &band);
                 }
             }
         }
@@ -723,9 +759,20 @@ static void InvModern_Publish(void) {
     }
 
     const float pulse = 0.5f + 0.5f * (float)sin((double)TimerRefHR / 1000.0 * 3.0);
-    for (S32 n = 0; n < MAX_BOX_INVENTORY; n++) {
+    /* With a zoomed object, its slot comes last, over the others. */
+    const S32 count = zoom != NULL ? MAX_BOX_INVENTORY + 1 : MAX_BOX_INVENTORY;
+    for (S32 k = 0; k < count; k++) {
+        const S32 n = k < MAX_BOX_INVENTORY ? k : InvSelect;
+        if (zoom != NULL && k < MAX_BOX_INVENTORY && n == InvSelect) {
+            continue;
+        }
         const T_INV_SLOT *slot = &s_invSlots[n];
         if (!slot->Valid) {
+            continue;
+        }
+        /* A slot the zoomed object covers is hidden under it. */
+        if (zoom != NULL && n != InvSelect && (float)slot->X1 > zoom[0] && (float)slot->X0 < zoom[2] &&
+            (float)slot->Y1 > zoom[1] && (float)slot->Y0 < zoom[3]) {
             continue;
         }
         T_UIOVERLAY_CARD card;
@@ -1155,6 +1202,10 @@ void OpenInventory() {
     //	Shade All Inventory
     BackupAngles(INV_START_X, INV_START_Y, INV_END_X, INV_END_Y);
     ShadeBoxBlk(INV_START_X + 1, INV_START_Y + 1, INV_END_X - 1, INV_END_Y - 1, SHADE_INVENT_LVL);
+    /* Shading keeps the darkest pixels as they were: with the GPU renderer they
+       would still show the scene's colours through the panel. */
+    GpuObj_UntagBox(INV_START_X, INV_START_Y, INV_END_X, INV_END_Y);
+    GpuObj_UntagBox(INV_NAME_X0, INV_NAME_Y0, INV_NAME_X1, INV_NAME_Y1);
     if (!s_invModern)
         DrawCadre(INV_START_X, INV_START_Y, INV_END_X, INV_END_Y, ALL_ANGLES);
     RestoreAngles(INV_START_X, INV_START_Y, INV_END_X, INV_END_Y);
