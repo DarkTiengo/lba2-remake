@@ -1276,7 +1276,8 @@ void *GpuRender_CreateRenderer(void *sdlWindow) {
     }
 
     GpuObjAvailable = TRUE;
-    Log_Info("GPU        objects rendered by %s", SDL_GetGPUDeviceDriver(s_device));
+    Log_Info("GPU        objects rendered by %s on %s", SDL_GetGPUDeviceDriver(s_device),
+             SDL_GetStringProperty(SDL_GetGPUDeviceProperties(s_device), SDL_PROP_GPU_DEVICE_NAME_STRING, "?"));
     return renderer;
 }
 
