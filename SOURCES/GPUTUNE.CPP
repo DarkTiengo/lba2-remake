@@ -125,6 +125,12 @@ void GpuTune_Frame(void) {
         s_frame = 0;
         return;
     }
+    /* Measure the frame the effects are actually judged on. With the free
+       camera the scenery is recaptured whenever the camera moves, which costs
+       several times an idle frame, so a tuner that only ever saw a still camera
+       approved settings that broke the moment the player touched the stick. */
+    FirstTime = AFF_ALL_FLIP;
+
     s_frame++;
     if (s_frame <= TUNE_SETTLE) {
         return;

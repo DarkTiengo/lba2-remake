@@ -171,9 +171,11 @@ Every analog camera source goes through `ApplyManualCameraNudge` ([EXTFUNC.CPP](
 - **Drive.** Orbiting selects a tight lerp divisor (`cam_smooth`, default 2) instead of the auto-follow's distance-scaled one, and re-arms `FollowCamReengageDelay` each frame. In steady state the camera moves at the speed asked for, lagging the target by twice the per-frame step.
 - **Release.** The lerp ramps *up* to the stick's speed over about four frames and has nothing to ramp it back down, so the orbit would otherwise stop dead from full speed. The last speed is decayed by `cam_glide` percent per frame and fed back through the same nudge, spending the tail over several frames. Because it goes through the nudge, `AddBetaCam` moves with it and the angle the camera settles on is the one the follow update recomputes.
 
+**Mouse deltas are normalised against 1080 lines.** They arrive in frame pixels, so the same hand movement turned the camera further the taller the frame was. 1080 keeps the sensitivity it has always had there, and shorter frames stop being sluggish for the same motion.
+
 `FollowCamForgetManualGesture()` ends a gesture outright, called from the per-frame check for camera zone / cutscene / interior / camera-off and from `CameraCenter`. Without it the tail resumes on a camera the player has since re-aimed, and the stale "gesture under way" flag makes the next nudge skip its realign.
 
-The follow-through is tuned for the stick, which springs back to centre so "no input this frame" reliably means released. A mouse held still reports the same thing while still being driven, which is #514.
+The follow-through is tuned for the stick, which springs back to centre so "no input this frame" reliably means released. A mouse held still reports the same thing while still being driven (#514), so the mouse path drops the stored speed on a still frame: holding the pointer still stops the camera where it is, and a flick — whose last frames did carry speed — still eases out. `test_followcam_mouse_release.sh` pins both halves, and fails on a build without it.
 
 **Timing is in frames, not milliseconds.** The lerp divisors and the glide decay are per-frame, so a gesture's ease-in and tail last the same number of frames at any rate and therefore a different wall-clock time: the release tail measures about 112 ms at 60 fps and 198 ms at 30. This is the existing convention rather than something the follow-through introduced, but it means any test asserting a duration has to pin `--fixed-dt`.
 
@@ -266,6 +268,7 @@ Fixtures live in `tests/automation/`, with `camlib.sh` turning a run into a per-
 | `autocam_orbit_snap` | a 1-unit touch moves the camera 1 unit, with a turn's worth of rotation pending |
 | `followcam_hold` | the angle survives the hero turning underneath it |
 | `followcam_ceiling` | the eye stops under the cloud ceiling, and eases back out rather than snapping |
+| `followcam_mouse_release` | a mouse held still stops the camera; letting go still eases out |
 | `followcam_release` | letting go eases down instead of halting |
 | `followcam_tracking` | the camera orbits at the speed asked for |
 | `followcam_recenter` | the classic camera drifts back while walking, not while standing |
@@ -280,7 +283,6 @@ Two habits are worth keeping when adding to these. **Run a new fixture against a
 - **Rendering architecture:** A faster terrain path (GPU or structural changes) would reduce the CPU cost of per-frame `RefreshGrille`.
 - **Rebinding:** optional rebinding of zoom/tilt/pan (today numpad-heavy) for laptops and alternate layouts. The right stick already drives orbit and elevation (`cam_stick_*`).
 - **Hero-relative hold:** an angle held as an offset from the hero's facing cannot express a held world heading, which is what makes turning while the stick is down still drag the camera. #351 proposes anchoring horizontal rotation to the overworld instead, retiring that whole class rather than correcting instances of it.
-- **Mouse follow-through:** the release tail suits a stick that springs back to centre, not a pointer held still (#514).
 - **Decor occlusion and clipping:** #363.
 - **Auto camera vs terrain / decor:** the eased ground/occlusion clearance above now ports the terrain half of `SearchCameraPos` (an earlier always-on snap was reverted for fighting the orbit; easing fixes that). Still open: decor/scenery occlusion (the classic path also tests `TestZVDecors`), and the eye leaving the cube on far authored cameras (the clearance is skipped there, matching the classic out-of-cube guard).
 - **Decor occlusion:** the ground clearance clears terrain only; the classic path also tests scenery boxes (`TestZVDecors`). Porting that would let the camera clear buildings/props too, not just landscape.

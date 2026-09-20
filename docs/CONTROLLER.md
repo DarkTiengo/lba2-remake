@@ -4,6 +4,13 @@ How the manual camera works and which input sources drive it.
 
 ## Manual camera (Auto camera mode)
 
+Set from Options → Advanced options → Camera: which camera runs outdoors, whether
+the mouse drives it (off, held on the right button, or always), mouse and stick
+sensitivity, invert vertical, and whether the rotation is held or re-centres. The
+cvars below still reach everything, including the per-axis split the menu sets
+together. Mouse deltas are normalised against 1080 lines, so the same hand
+movement turns the camera the same amount whatever the frame height.
+
 In exterior scenes with Auto camera (`FollowCamera`) on, the player can orbit,
 tilt, and zoom the follow camera. Every manual source feeds one shared routine,
 `ApplyManualCameraNudge` in [SOURCES/EXTFUNC.CPP](../SOURCES/EXTFUNC.CPP), which

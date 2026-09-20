@@ -2489,10 +2489,28 @@ S32 GereExtKeys(U32 key)
                 if (rawY > -MOUSE_CAM_DEAD_ZONE AND rawY < MOUSE_CAM_DEAD_ZONE)
                     rawY = 0;
 
-                S32 dx = rawX * MouseCameraSensX / MouseCameraDivisor;
-                S32 dy = rawY * MouseCameraSensY / MouseCameraDivisor;
+                /* The deltas arrive in frame pixels, so the same hand movement
+                   turns the camera further the taller the frame is. Normalised
+                   against 1080, which is what most of this is played at: that
+                   height keeps the sensitivity it has always had, and the
+                   shorter ones stop being sluggish for the same motion. */
+                S32 height = (S32)ModeDesiredY;
+                if (height < 1)
+                    height = 1;
+                S32 dx = rawX * MouseCameraSensX * 1080 / (MouseCameraDivisor * height);
+                S32 dy = rawY * MouseCameraSensY * 1080 / (MouseCameraDivisor * height);
                 if (MouseCameraInvertY)
                     dy = -dy;
+
+                /* A mouse held still is still being driven; a stick that reports
+                   nothing has been let go. The release tail is the stick's
+                   behaviour (see the glide below), and spending it under a
+                   paused drag is what makes the pointer coast away from where it
+                   stopped. Dropping the stored speed here ends the gesture's
+                   tail the moment the hand stops, and keeps it for a flick, where
+                   the last frames did carry speed. */
+                if (dx == 0)
+                    ManualCameraGlideBeta = 0;
 
                 flag |= ApplyManualCameraNudge(dx, dy, 0);
             }
@@ -2548,11 +2566,11 @@ S32 GereExtKeys(U32 key)
          *
          * Tuned for the stick, which springs back to centre, so "no input this
          * frame" reliably means the player let go. A mouse held still reports the
-         * same thing while very much still being driven, so a paused drag coasts
-         * and a flick overshoots where the pointer stopped. Wrong for the mouse,
-         * and worth splitting the two sources apart; left shared for now because
-         * the pad is the one that has to be right, being the only control some
-         * setups have. */
+         * same thing while very much still being driven, which used to make a
+         * paused drag coast away from where the pointer stopped. The mouse path
+         * above now drops the stored speed on a still frame, so what reaches here
+         * from a mouse is a flick that was still moving when it ended -- which is
+         * the case the tail is for. */
         if (!ManualCameraOrbitActive AND ManualCameraGlideBeta != 0) {
             /* The console sets cvars without going through the config's range
              * check, so clamp where it is used: at 100 the tail is a fixed point
