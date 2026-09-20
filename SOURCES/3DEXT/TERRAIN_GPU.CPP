@@ -10,6 +10,7 @@
 #include <SVGA/GPUOBJ.H>
 #include <SVGA/GPUWATER.H>
 
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -32,6 +33,13 @@ static S32 s_waterPlane = FALSE;
 static S32 s_skyPlane = FALSE;
 static float s_waterCameraX = 0.0f;
 static float s_waterCameraZ = 0.0f;
+
+/* Which cube the capture is in, which is also the key of everything cached per
+   cube below. Set before each cube is loaded (TerrainGpu_SetWaterCube) and for
+   the island as a whole (TerrainGpu_SetWaterScene). */
+static S32 s_island = 0;
+static S32 s_cubeX = 0;
+static S32 s_cubeZ = 0;
 
 /* Camera-space position of every vertex of the cube being drawn. */
 static float s_grid[GRID_SIDE * GRID_SIDE][3];
@@ -133,6 +141,91 @@ static float CurveHeight(float x, float z) {
     return CatmullRom(row[0], row[1], row[2], row[3], t);
 }
 
+/* The curve is a property of the cube's height map, not of the view: the camera
+   turns and every point of it is unchanged. It used to be worked out again for
+   every smoothed vertex of every frame -- four Catmull-Rom runs over a 4x4
+   neighbourhood, forty-eight vertices a triangle, every cube in the ring -- which
+   is most of what the capture costs while the camera moves.
+
+   Cached per cube at the resolution the subdivision asks for, and filled point by
+   point as cells are drawn, so a cube seen edge-on never pays for the rest of
+   itself. The key is the cube's place in the island: a cube's heights are read
+   from the island's data when it loads and do not change while it is played, so
+   the same place is always the same curve. Points that are not on the
+   subdivision's grid (a grass tuft stands anywhere in its cell) are worked out
+   as before. */
+#define CURVE_SUBDIV 4 ///< SmoothTri's n: sub-points per cell side
+#define CURVE_SIDE ((GRID_SIDE - 1) * CURVE_SUBDIV + 1)
+#define CURVE_CACHE_CUBES 9
+
+typedef struct {
+    S32 Island, CubeX, CubeZ;
+    S32 Used;      ///< nothing cached yet
+    float *Height; ///< CURVE_SIDE * CURVE_SIDE, valid where Filled says so
+    U8 *Filled;
+} T_CURVE_CACHE;
+
+static T_CURVE_CACHE s_curveCache[CURVE_CACHE_CUBES];
+static T_CURVE_CACHE *s_curve = NULL; ///< the entry for the cube being captured
+
+/* The entry for this cube, taking a spare one or the next in turn. */
+static void CurveCacheSelect(void) {
+    s_curve = NULL;
+    T_CURVE_CACHE *spare = NULL;
+    for (S32 i = 0; i < CURVE_CACHE_CUBES; i++) {
+        T_CURVE_CACHE *c = &s_curveCache[i];
+        if (c->Used AND c->Island == s_island AND c->CubeX == s_cubeX AND c->CubeZ == s_cubeZ) {
+            s_curve = c;
+            return;
+        }
+        if (spare == NULL AND !c->Used) {
+            spare = c;
+        }
+    }
+    if (spare == NULL) {
+        /* Every entry is another cube's. The ring is drawn in a fixed order, so
+           taking them in turn keeps the cube being walked away from. */
+        static S32 next = 0;
+        spare = &s_curveCache[next];
+        next = (next + 1) % CURVE_CACHE_CUBES;
+    }
+    if (spare->Height == NULL) {
+        spare->Height = (float *)malloc((size_t)CURVE_SIDE * CURVE_SIDE * sizeof(float));
+        spare->Filled = (U8 *)malloc((size_t)CURVE_SIDE * CURVE_SIDE);
+        if (spare->Height == NULL OR spare->Filled == NULL) {
+            /* No cache: the curve is still computed, just never kept. */
+            return;
+        }
+    }
+    spare->Island = s_island;
+    spare->CubeX = s_cubeX;
+    spare->CubeZ = s_cubeZ;
+    spare->Used = TRUE;
+    memset(spare->Filled, 0, (size_t)CURVE_SIDE * CURVE_SIDE);
+    s_curve = spare;
+}
+
+/* CurveHeight through the cube's cache where the point is on its grid. */
+static float CachedCurveHeight(float x, float z) {
+    if (s_curve == NULL OR s_curve->Height == NULL) {
+        return CurveHeight(x, z);
+    }
+    const float gx = x * (float)CURVE_SUBDIV;
+    const float gz = z * (float)CURVE_SUBDIV;
+    const S32 ix = (S32)(gx + 0.5f);
+    const S32 iz = (S32)(gz + 0.5f);
+    if (ix < 0 OR ix >= CURVE_SIDE OR iz < 0 OR iz >= CURVE_SIDE OR gx - (float)ix > 0.01f OR
+        (float)ix - gx > 0.01f OR gz - (float)iz > 0.01f OR (float)iz - gz > 0.01f) {
+        return CurveHeight(x, z); /* not on the grid: a grass tuft, say */
+    }
+    const S32 at = iz * CURVE_SIDE + ix;
+    if (!s_curve->Filled[at]) {
+        s_curve->Height[at] = CurveHeight(x, z);
+        s_curve->Filled[at] = 1;
+    }
+    return s_curve->Height[at];
+}
+
 #define SMOOTH_MAX_OFFSET 220.0f
 #define SMOOTH_MAX_SINK 0.0f
 #define SMOOTH_FADE_NEAR 18000.0f
@@ -190,6 +283,9 @@ static void DisplacedWaterVertex(T_GPUOBJ_VERTEX *v, float x, float y, float dep
     v->normal[0] = normal[0] * m->F.M11 + normal[1] * m->F.M12 + normal[2] * m->F.M13;
     v->normal[1] = normal[0] * m->F.M21 + normal[1] * m->F.M22 + normal[2] * m->F.M23;
     v->normal[2] = -(normal[0] * m->F.M31 + normal[1] * m->F.M32 + normal[2] * m->F.M33);
+    /* The contact pass compares the fixed sea datum to the fixed shoreline;
+       the renderer subtracts this interpolated vertical displacement there. */
+    v->normal[3] = height;
     v->vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_WATER);
     v->light[0] = (float)CameraXLight;
     v->light[1] = (float)CameraYLight;
@@ -225,7 +321,7 @@ static float SmoothOffset(float gx, float gz, float flat, float cornerWeight) {
     border = (float)(GRID_SIDE - 1) - gx < border ? (float)(GRID_SIDE - 1) - gx : border;
     border = (float)(GRID_SIDE - 1) - gz < border ? (float)(GRID_SIDE - 1) - gz : border;
     border = border > 1.0f ? 1.0f : border;
-    float offset = CurveHeight(gx, gz) - flat;
+    float offset = CachedCurveHeight(gx, gz) - flat;
     /* Rounding a hill or a crest raises it; only hollows sink, and
        barely: a sunk fold would open a gap onto what lies behind. */
     offset = offset < -SMOOTH_MAX_SINK ? -SMOOTH_MAX_SINK : (offset > SMOOTH_MAX_OFFSET ? SMOOTH_MAX_OFFSET : offset);
@@ -477,6 +573,7 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
     s_nbSmoothTris = 0;
     s_nbGrassTris = 0;
     memset(s_flatCorner, 0, sizeof(s_flatCorner));
+    CurveCacheSelect();
 
     /* LongWorldRotatePoint then LongProjectPoint's camera offsets, in float. */
     const TYPE_MAT *m = &MatriceWorld;
@@ -631,6 +728,7 @@ void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S3
 }
 
 void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ) {
+    s_island = island;
     TerrainGpu_SetWaterCube(cubeX, cubeZ);
     const TYPE_MAT *m = &MatriceWorld;
     const float x[3] = {m->F.M11, m->F.M21, m->F.M31};
@@ -667,6 +765,8 @@ void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ) {
 }
 
 void TerrainGpu_SetWaterCube(S32 cubeX, S32 cubeZ) {
+    s_cubeX = cubeX;
+    s_cubeZ = cubeZ;
     s_waterCameraX = (float)CameraX + (float)cubeX * 32768.0f;
     s_waterCameraZ = (float)CameraZ + (float)cubeZ * 32768.0f;
 }
