@@ -105,6 +105,15 @@
 #define FOLLOW_CAM_GROUND_MIN_STEP 40           /* minimum lift change per eased frame (units) */
 #define FOLLOW_CAM_GROUND_SNAP 40               /* snap lift to target within this many units */
 
+/* Ceiling clearance: the island's cloud ceiling (Sky_Y) is a solid plane to the
+   GPU renderer's depth, so an eye that rises above it sees a floor of cloud with
+   the world hidden under it (the software painter always draws sky behind, which
+   is why the classic camera never met this). The free camera is kept under it,
+   eased exactly like the ground lift. */
+#define FOLLOW_CAM_CEILING_DEFAULT 1             /* master enable (cam_ceiling) */
+#define FOLLOW_CAM_CEILING_CLEARANCE_DEFAULT 200 /* keep the eye this far under the ceiling */
+#define FOLLOW_CAM_CEILING_MAX_DROP 20000        /* clamp the total eye drop (units) */
+
 /* Gamepad right-stick camera ------------------------------------------------*/
 #define GAMEPAD_CAM_SENS_DEFAULT 5 /* default right-stick sensitivity (1-10 range) */
 /* Defaults for the runtime GamepadCamMaxBeta / GamepadCamMaxAlpha globals

@@ -63,12 +63,19 @@ extern S32 FollowCamHDDistGain;       /* HD recompose distance pull (% boom per 
 extern S32 FollowCamHDLeanGain;       /* HD recompose forward-lean cut (% per 1.0 of k-1) */
 extern S32 FollowCamGround;           /* smooth terrain ground-clearance lift (1=on) */
 extern S32 FollowCamGroundClearance;  /* keep the eye this far above the ground under it */
+extern S32 FollowCamCeiling;          /* keep the eye under the island's cloud ceiling (1=on) */
+extern S32 FollowCamCeilingClearance; /* keep the eye this far under that ceiling */
 extern S32 FollowCamManualHoldFrames; /* manual-override hold length (cvar cam_manual_hold) */
 extern S32 FollowCamHoldAngle;        /* hold manual rotation, no auto-recenter drift (cvar cam_hold_angle) */
 
 /* Live state other TUs read or write. The rest of the smoothing state is
  * private to FOLLOWCAM.CPP. */
 extern S32 FollowCamBaseDist;      /* player's chosen zoom distance (0 = uninitialised) */
+
+/* How far the last update held the eye under the island's cloud ceiling.
+ * AffGrilleExt re-derives the eye from the boom before drawing the scenery, and
+ * applies this, so the world is not drawn from an eye above the ceiling. */
+extern S32 FollowCam_EyeCeilingDrop(void);
 extern S32 FollowCamReengageDelay; /* frames before auto-center resumes after manual pan */
 extern S32 FollowCamManualHold;    /* frames the pitch/distance auto-assist yields after a manual nudge */
 

@@ -332,6 +332,17 @@ void AffGrilleExt() {
     SetFollowCamera(VueOffsetX, VueOffsetY, VueOffsetZ,
                     AlphaCam, BetaCam, GammaCam,
                     VueDistance);
+    /* The boom's eye, held under the cloud ceiling as the Auto camera held it.
+       Without this the scenery is drawn from an eye above the ceiling, and the
+       ceiling — a solid plane to the GPU renderer's depth — hides the island
+       under it. */
+    {
+        const S32 ceilingDrop = FollowCam_EyeCeilingDrop();
+        if (ceilingDrop != 0) {
+            SetPosCamera(CameraX, CameraY - ceilingDrop, CameraZ);
+            SetTargetCamera(VueOffsetX, VueOffsetY, VueOffsetZ, GammaCam);
+        }
+    }
     Water_SetScene(Island, CurrentCubeX, CurrentCubeY);
     TerrainGpu_SetWaterScene(Island, CurrentCubeX, CurrentCubeY);
 

@@ -1,4 +1,5 @@
 #include "C_EXTERN.H"
+#include "3DEXT/TERRAIN.H" /* Sky_Y: the island's cloud ceiling */
 
 #include "CONSOLE/CONSOLE.H" /* Console_RegisterCvar, for this module's own cvars */
 #include "FOLLOWCAM.H"
@@ -28,6 +29,8 @@ S32 FollowCamHDDistGain = FOLLOW_CAM_HD_DIST_GAIN_DEFAULT;
 S32 FollowCamHDLeanGain = FOLLOW_CAM_HD_LEAN_GAIN_DEFAULT;
 S32 FollowCamGround = FOLLOW_CAM_GROUND_DEFAULT;
 S32 FollowCamGroundClearance = FOLLOW_CAM_GROUND_CLEARANCE_DEFAULT;
+S32 FollowCamCeiling = FOLLOW_CAM_CEILING_DEFAULT;
+S32 FollowCamCeilingClearance = FOLLOW_CAM_CEILING_CLEARANCE_DEFAULT;
 S32 FollowCamManualHoldFrames = FOLLOW_CAM_MANUAL_HOLD_DEFAULT;
 S32 FollowCamHoldAngle = FOLLOW_CAM_HOLD_ANGLE_DEFAULT;
 
@@ -51,7 +54,8 @@ S32 FollowCamManualHold = 0;            /* frames the pitch/distance auto-assist
 static S32 FollowCamPrevBaseDist = -1;  /* dirty: zoom from GereExtKeys (numpad * /) */
 static S32 FollowCamPrevAlphaCam = -1;  /* dirty: numpad +/- elevation while follow */
 static S32 FollowCamEyeLift = 0;        /* ground clearance: eased eye lift above terrain */
-static S32 FollowCamGroundSettling = 0; /* ground clearance: lift still easing (keeps the dirty check live while the hero stands still) */
+static S32 FollowCamGroundSettling = 0; /* ground/ceiling clearance: lift or drop still easing (keeps the dirty check live while the hero stands still) */
+static S32 FollowCamEyeDrop = 0;        /* ceiling clearance: eased eye drop under the cloud ceiling */
 
 /* This file's live settings, applied to the rule in FOLLOWCAM_MATH.H (which the
  * host test covers). Callers pass 0 instead inside a camera zone, so an authored
@@ -113,12 +117,16 @@ void FollowCamTrace(void) {
     }
     primed = TRUE;
 
+    /* eye and sky are the ceiling clearance's two numbers: where the eye ended
+     * up this frame and the ceiling it must stay under. They are read by the
+     * fixtures, and by anyone wondering why a view went white. */
     Log_Info("[cam] heroBeta %4d add %4d beta %4d target %4d step %5d delay %3d orbit %d moving %d "
-             "zone %d forced %d cine %d follow %d ext %d vue %d alpha %4d dist %6d",
+             "zone %d forced %d cine %d follow %d ext %d vue %d alpha %4d dist %6d eye %6d sky %6d",
              (int)ptr3d->Beta, (int)AddBetaCam, (int)BetaCam, (int)FollowCamTargetBeta,
              (int)step, (int)FollowCamReengageDelay, (int)ManualCameraOrbitActive, (int)moving,
              (int)CameraZone, (int)FlagCameraForcee, (int)CinemaMode, (int)FollowCamera,
-             (int)(CubeMode == CUBE_EXTERIEUR), (int)VueCamera, (int)AlphaCam, (int)VueDistance);
+             (int)(CubeMode == CUBE_EXTERIEUR), (int)VueCamera, (int)AlphaCam, (int)VueDistance,
+             (int)CameraY, (int)Sky_Y);
 
     prevBeta = BetaCam;
     prevX = ptr3d->X;
@@ -131,6 +139,18 @@ void FollowCamTrace(void) {
  * they finish easing while the hero stands still). */
 static S32 FollowCamNeedsUpdate(T_OBJ_3D *ptr3d, S32 catchupDiff) {
     return ptr3d->X != FollowCamPrevHeroX OR ptr3d->Y != FollowCamPrevHeroY OR ptr3d->Z != FollowCamPrevHeroZ OR ptr3d->Beta != FollowCamPrevHeroBeta OR AddBetaCam != FollowCamPrevAddBeta OR(catchupDiff > FOLLOW_CAM_ROT_THRESHOLD OR catchupDiff < -FOLLOW_CAM_ROT_THRESHOLD) OR FollowCamBaseDist != FollowCamPrevBaseDist OR AlphaCam != FollowCamPrevAlphaCam OR FollowCamGroundSettling OR FollowCamManualHold;
+}
+
+/* How far the last update had to hold the eye under the cloud ceiling, for the
+ * scenery draw, which re-derives the eye from the boom and would otherwise draw
+ * the world from an eye above it — with the ceiling in the way of everything.
+ * 0 when the camera is not the Auto camera's to place.
+ *
+ * The ground lift is deliberately not included: AffGrilleExt has always
+ * discarded it, so the exterior has never been drawn from a lifted eye, and
+ * making it live here would change how the shipped ground clearance looks. */
+S32 FollowCam_EyeCeilingDrop(void) {
+    return (FollowCamera AND CubeMode == CUBE_EXTERIEUR) ? FollowCamEyeDrop : 0;
 }
 
 /* Per-frame Auto-camera update (exterior). Extracted from the main loop:
@@ -346,10 +366,12 @@ void UpdateFollowCameraExt(void) {
                              * the orbit (which is what sank the earlier always-on
                              * attempt). Skipped out-of-cube, where
                              * CalculAltitudeObjet is invalid. */
+            const S32 ex = CameraX, ey = CameraY, ez = CameraZ;
+            S32 effLift = 0;   /* ground clearance, faded by autoFactor */
+            S32 settling = 0;  /* either clearance still easing */
             if (FollowCamGround
                     AND CameraX >= 0 AND CameraX <= 32768 AND CameraZ >= 0 AND CameraZ <= 32768) {
                 S32 hx = ptr3d->X, hy = ptr3d->Y, hz = ptr3d->Z;
-                S32 ex = CameraX, ey = CameraY, ez = CameraZ;
                 S32 targetEyeY = ey; /* never push the eye lower */
 
                 /* Sample fractions along hero(0)->eye(100). Start
@@ -394,20 +416,66 @@ void UpdateFollowCameraExt(void) {
                 /* Keep the dirty check live until the lift
                                  * settles, so it converges even while the hero
                                  * stands still (e.g. at the foot of a hill). */
-                FollowCamGroundSettling = (FollowCamEyeLift != targetLift) ? 1 : 0;
+                settling = (FollowCamEyeLift != targetLift) ? 1 : 0;
 
                 /* Fade the lift + re-aim out under manual control
                                  * (autoFactor 0): the re-aim would otherwise pin
                                  * the pitch to the geometry and override the
                                  * player's tilt. At autoFactor 0 effLift is 0, so
                                  * the player's own angle from CameraCenter stands. */
-                S32 effLift = FollowCamEyeLift * autoFactor / 100;
-                if (effLift > 0) {
-                    SetPosCamera(ex, ey + effLift, ez);
-                    SetTargetCamera(VueOffsetX, VueOffsetY, VueOffsetZ, GammaCam);
+                effLift = FollowCamEyeLift * autoFactor / 100;
+            }
+
+            /* Ceiling clearance. The island's cloud ceiling (Sky_Y) is a solid
+             * plane to the GPU renderer's depth, so an eye risen above it sees a
+             * floor of cloud with the world hidden under it; the software
+             * painter always draws the sky behind, which is why only the free
+             * camera meets this. Keep the eye under it, eased like the lift.
+             * Unlike the lift this does not fade under manual control: the eye
+             * rises above the ceiling exactly when the player tilts up, which is
+             * when the constraint is needed. Where a hill and the ceiling ask for
+             * opposite things the ceiling wins: sinking towards a slope hides
+             * less than a white screen. */
+            S32 targetDrop = 0;
+            if (FollowCamCeiling AND CubeMode == CUBE_EXTERIEUR
+                    AND Sky_Y > ptr3d->Y + FollowCamCeilingClearance) {
+                targetDrop = (ey + effLift) - (Sky_Y - FollowCamCeilingClearance);
+                if (targetDrop < 0)
+                    targetDrop = 0;
+                if (targetDrop > FOLLOW_CAM_CEILING_MAX_DROP)
+                    targetDrop = FOLLOW_CAM_CEILING_MAX_DROP;
+            }
+            {
+                /* Taken in full the moment it is needed, given back a step at a
+                 * time. Easing into it would let a quick tilt ride over the
+                 * ceiling for the few frames the ease lags behind -- and those
+                 * frames are the whole bug, a white flash of cloud. Easing out
+                 * of it is what keeps tilting back down from cutting. The eye
+                 * itself still moves smoothly on the way in: it is held against
+                 * the ceiling, not moved away from it. */
+                S32 d = targetDrop - FollowCamEyeDrop;
+                if (d >= 0) {
+                    FollowCamEyeDrop = targetDrop;
+                } else if (d < -FOLLOW_CAM_GROUND_SNAP) {
+                    S32 step = d / FOLLOW_CAM_GROUND_EASE;
+                    if (step > -FOLLOW_CAM_GROUND_MIN_STEP)
+                        step = -FOLLOW_CAM_GROUND_MIN_STEP;
+                    FollowCamEyeDrop += step;
+                } else {
+                    FollowCamEyeDrop = targetDrop;
                 }
-            } else {
-                FollowCamGroundSettling = 0;
+                if (FollowCamEyeDrop != targetDrop)
+                    settling = 1;
+            }
+            FollowCamGroundSettling = settling;
+
+            /* One move for both: the eye the classic recenter would have set,
+             * lifted over the ground and held under the ceiling. Kept for the
+             * scenery draw too: AffGrilleExt re-derives the eye from the boom
+             * (SetFollowCamera) and reapplies the ceiling drop there. */
+            if (effLift - FollowCamEyeDrop != 0) {
+                SetPosCamera(ex, ey + effLift - FollowCamEyeDrop, ez);
+                SetTargetCamera(VueOffsetX, VueOffsetY, VueOffsetZ, GammaCam);
             }
         } else {
             VueDistance = FollowCamEffectiveDist;
@@ -494,6 +562,12 @@ static const T_SETTING FollowCamSettings[] = {
     {"FollowCamGroundClearance", NULL, "cam_ground_clear", &FollowCamGroundClearance, SETTING_CLAMP,
      FOLLOW_CAM_GROUND_CLEARANCE_DEFAULT, 0, 20000, NULL, NULL, NULL, NULL,
      "Ground clearance: keep the eye this far above the ground under it"},
+    {"FollowCamCeiling", NULL, "cam_ceiling", &FollowCamCeiling, SETTING_TRUTHY,
+     FOLLOW_CAM_CEILING_DEFAULT, 0, 1, NULL, NULL, NULL, NULL,
+     "Auto cam: keep the eye under the island's cloud ceiling"},
+    {"FollowCamCeilingClearance", NULL, "cam_ceiling_clear", &FollowCamCeilingClearance, SETTING_CLAMP,
+     FOLLOW_CAM_CEILING_CLEARANCE_DEFAULT, 0, 20000, NULL, NULL, NULL, NULL,
+     "Ceiling clearance: keep the eye this far under the cloud ceiling"},
     {"FollowCamManualHoldFrames", NULL, "cam_manual_hold", &FollowCamManualHoldFrames, SETTING_CLAMP,
      FOLLOW_CAM_MANUAL_HOLD_DEFAULT, 0, FOLLOW_CAM_MANUAL_HOLD_MAX, NULL, NULL, NULL, NULL,
      "Frames the pitch/distance auto-assist yields after a manual camera nudge"},

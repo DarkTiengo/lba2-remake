@@ -211,6 +211,14 @@ A smooth port of the classic `SearchCameraPos` terrain awareness onto the follow
 
 The difference from the classic path is that the lift **eases** toward its target every frame (`FollowCamEyeLift`, tuned by `FOLLOW_CAM_GROUND_*`) instead of snapping. An earlier always-on snap fought the orbit and was reverted; easing is what makes it safe to run every frame. A `FollowCamGroundSettling` flag keeps the dirty check live until the lift converges, so it finishes even while the hero stands still. Active at every resolution (world awareness, not HD-specific), skipped in camera zones and when the eye leaves the cube (where `CalculAltitudeObjet` is invalid). It clears terrain only; decor/scenery occlusion is not yet handled.
 
+### Ceiling clearance
+
+The island's cloud ceiling (`Sky_Y`, from the cube's own data) is a textured plane the engine draws over the world. The software painter always draws it *behind* everything, so the classic camera could rise through it and never show it. The GPU renderer gives it depth, and then an eye above it sees a floor of cloud with the island hidden underneath — a white screen with the actors floating in it. The free camera reaches that state in one gesture: at the elevation limit the boom puts the eye thousands of units over the ceiling while the hero stands below it.
+
+`cam_ceiling` (default on, clearance `cam_ceiling_clear`, 200) keeps the eye under it while the hero is below it, in `UpdateFollowCameraExt` beside the ground lift. The asymmetry is deliberate and is what the fixture pins: the drop is taken **in full the moment it is needed** and **given back a step at a time**. Easing into it would let a quick tilt ride over the ceiling for the frames the ease lags behind, and those frames are the whole bug. The eye itself still moves smoothly on the way in, because it is held against the ceiling rather than moved away from it. Where a hill and the ceiling ask for opposite things the ceiling wins: sinking toward a slope hides less than a white screen.
+
+**The scenery is drawn from an eye the camera does not hold.** `AffGrilleExt` ([SOURCES/EXTFUNC.CPP](../SOURCES/EXTFUNC.CPP)) opens with its own `SetFollowCamera(VueOffsetX, …, VueDistance)`, which re-derives the eye from the boom and discards whatever the update left in `CameraX/Y/Z`. So the ceiling drop is re-applied there (`FollowCam_EyeCeilingDrop`), or the world would be drawn from the eye the constraint had just ruled out. Worth knowing for anything else that positions the eye: **the ground lift is subject to the same erasure and is therefore not visible in the exterior render at all.** It is left that way here rather than fixed in passing, because making it live changes how the shipped ground clearance looks and that deserves its own change.
+
 **Eased state is self-correcting; latched state is not.** The distinction decides what a discontinuity
 (a scene change, a camera zone, a recentre) has to reset. `FollowCamEyeLift` and the spring arm converge on
 whatever the new situation asks for a frame at a time, so carrying a stale value across costs a short glide
@@ -233,7 +241,7 @@ See [CONFIG.md](CONFIG.md) for persistence and [MENU.md](MENU.md) for the menu e
 
 The camera resisted iteration for a long time because nothing about it was asserted: a change was judged by playing, and a regression arrived as a field report. A 75 degree snap from a 1 unit stick touch survived two releases that way.
 
-**`camtrace <0|1>`** logs one line per frame: the angles, how far `BetaCam` moved and who moved it, the re-engage countdown, whether an orbit is driving, and `zone` / `forced` / `cine` / `follow` / `ext` / `vue` / `alpha` / `dist` for which camera holds the view. It is emitted from the main loop rather than from the Auto camera's update, so it reports camera zones, cutscenes, interiors and the classic camera, none of which run that update. `target` is maintained by the Auto camera alone and reads stale when `follow` is 0.
+**`camtrace <0|1>`** logs one line per frame: the angles, how far `BetaCam` moved and who moved it, the re-engage countdown, whether an orbit is driving, `zone` / `forced` / `cine` / `follow` / `ext` / `vue` / `alpha` / `dist` for which camera holds the view, and `eye` / `sky` — where the eye ended up and the ceiling it must stay under, which is what to read when a view goes white. It is emitted from the main loop rather than from the Auto camera's update, so it reports camera zones, cutscenes, interiors and the classic camera, none of which run that update. `target` is maintained by the Auto camera alone and reads stale when `follow` is 0.
 
 **`camnudge <dBeta> [dAlpha] [frames]`** feeds the same per-frame nudge the mouse drag and the right stick feed, at the same point in the frame, so the analog camera can be driven without a device.
 
@@ -247,6 +255,7 @@ Fixtures live in `tests/automation/`, with `camlib.sh` turning a run into a per-
 | --- | --- |
 | `autocam_orbit_snap` | a 1-unit touch moves the camera 1 unit, with a turn's worth of rotation pending |
 | `followcam_hold` | the angle survives the hero turning underneath it |
+| `followcam_ceiling` | the eye stops under the cloud ceiling, and eases back out rather than snapping |
 | `followcam_release` | letting go eases down instead of halting |
 | `followcam_tracking` | the camera orbits at the speed asked for |
 | `followcam_recenter` | the classic camera drifts back while walking, not while standing |
@@ -285,6 +294,7 @@ Two habits are worth keeping when adding to these. **Run a new fixture against a
 | Follow cam tuning       | SOURCES/FOLLOWCAM_CFG.H    | All `FOLLOW_CAM_*` build-time constants                                             |
 | Auto cam HD recompose   | SOURCES/FOLLOWCAM.CPP, FOLLOWCAM_CFG.H | `FollowCamHDExcess`, `FollowCamHD{Recompose,PitchGain,DistGain,LeanGain}`, `cam_hd*` cvars |
 | Ground/occlusion clearance | SOURCES/FOLLOWCAM.CPP, FOLLOWCAM_CFG.H | `FollowCamEyeLift`, `FollowCamGroundSettling`, `FollowCamGround`, `FollowCamGroundClearance`, `cam_ground*` cvars |
+| Ceiling clearance | SOURCES/FOLLOWCAM.CPP, SOURCES/EXTFUNC.CPP | `FollowCamEyeDrop`, `FollowCamCeiling`, `FollowCamCeilingClearance`, `FollowCam_EyeCeilingDrop`, `cam_ceiling*` cvars |
 | Orbit gesture state     | SOURCES/EXTFUNC.CPP        | `FollowCamAdoptAngle`, `FollowCamForgetManualGesture`, `ApplyManualCameraNudge`, `cam_glide` |
 | Camera zone dispatch    | SOURCES/OBJECT.CPP         | `SetZoneCamera`, `ZONE_ON` / `ZONE_ACTIVE` / `ZONE_OBLIGATOIRE` (COMMON.H), `AllCameras` |
 | Camera trace            | SOURCES/FOLLOWCAM.CPP      | `FollowCamTrace`, `camtrace` / `camnudge` console commands |
