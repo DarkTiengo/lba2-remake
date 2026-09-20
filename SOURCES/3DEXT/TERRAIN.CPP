@@ -739,6 +739,55 @@ S32 OffPosCamera[3] = {
 
 extern S32 PtrProjectPoint(S32 xw, S32 yw, S32 zw);
 
+/* Whether the cube the camera has just been placed in front of can be left out
+   entirely. The original had this test here and left it commented out (below),
+   which the classic 3 x 3 ring could afford: eight neighbours, drawn in a fixed
+   order. The GPU renderer's wider ring is twenty-five cubes or forty-nine, most
+   of them behind the camera, and each one is loaded, has its 65 x 65 vertices
+   projected and its cells walked before anything decides they are off screen.
+
+   Conservative by construction: a cube is skipped only when every one of its
+   corners, at ground level and above the highest terrain, projects past the same
+   edge of the clip window. A cube with any corner behind the near plane is drawn,
+   because a corner behind the camera projects nowhere meaningful and the cube may
+   still cover the screen. So the frame is the same frame; it is reached without
+   drawing what cannot be seen. */
+#define CUBE_TOP_Y 12000 /* above any terrain in a cube */
+
+static S32 CubeOutOfView(void) {
+    static const S32 cornerX[4] = {0, 32767, 32767, 0};
+    static const S32 cornerZ[4] = {0, 0, 32767, 32767};
+    /* Each stays true only while every corner is outside that side of the view.
+       The tests are the frustum's own planes, all through the eye, written
+       without the divide: a corner behind the camera has no screen position to
+       compare, but it still sits on one side of a plane. */
+    S32 outNear = TRUE, outLeft = TRUE, outRight = TRUE, outAbove = TRUE, outBelow = TRUE;
+
+    for (S32 i = 0; i < 8; i++) {
+        LongWorldRotatePoint(cornerX[i & 3], (i < 4) ? 0 : CUBE_TOP_Y, cornerZ[i & 3]);
+        const double zr = (double)(CameraZr - Z0);
+        const double px = (double)(X0 - CameraXr) * (double)FRatioX;
+        const double py = (double)(Y0 - CameraYr) * (double)FRatioX * (double)FRatioY;
+
+        if (zr > (double)NearClip) {
+            outNear = FALSE;
+        }
+        if (px - (double)(ClipXMin - XCentre) * zr >= 0.0) {
+            outLeft = FALSE;
+        }
+        if (px - (double)(ClipXMax - XCentre) * zr <= 0.0) {
+            outRight = FALSE;
+        }
+        if (py - (double)(ClipYMin - YCentre) * zr >= 0.0) {
+            outAbove = FALSE;
+        }
+        if (py - (double)(ClipYMax - YCentre) * zr <= 0.0) {
+            outBelow = FALSE;
+        }
+    }
+    return outNear OR outLeft OR outRight OR outAbove OR outBelow;
+}
+
 void DrawHorizon2ZBuf() {
     S32 flag = FALSE;
     S32 cx = CameraX;
@@ -825,6 +874,11 @@ void DrawHorizon2ZBuf() {
 #else
                     SetPosCamera(cx - OffPosCamera[TerrainTri->x + 1] + TerrainTri->x * Reglage, cy, cz - OffPosCamera[TerrainTri->y + 1] + TerrainTri->y * Reglage);
 #endif
+                    /* Only for the GPU renderer's wider ring: the classic
+                       3 x 3 keeps the path it was verified with. */
+                    if (radius > 1 AND CubeOutOfView()) {
+                        continue;
+                    }
                     TerrainGpu_SetWaterCube(x, y);
                     if (LoadCube(x, y)) {
                         AffichageTerrainZBuf();
