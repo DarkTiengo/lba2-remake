@@ -96,8 +96,10 @@ void Clear3dExt() {
 }
 
 /*──────────────────────────────────────────────────────────────────────────*/
-// Positionne la caméra pour la 3d Extérieure
-void Init3DExtView(void) {
+/* The exterior projection, which both the scene setup and the scenery draw
+   apply: the latter because the near plane depends on which camera is running
+   and the player can change that without leaving the cube. */
+static void Ext_SetProjection(void) {
     // Derive the projection origin from the framebuffer dimensions so the 3D
     // world centres on the rendered area for any render-space width/height.
     // At the default 640x480 this is the original (320, 240) — the hardcoded
@@ -126,8 +128,17 @@ void Init3DExtView(void) {
     S32 nearClip = CLIP_NEAR;
     if (frameY > 480)
         nearClip = CLIP_NEAR * 480 / frameY;
+    /* The free camera brings the eye close to the ground, where the classic
+       plane would drop the cells right in front of it. */
+    if (FollowCamera)
+        nearClip = FOLLOW_CAM_NEAR_CLIP;
     SetProjection((S32)(ModeDesiredX / 2), (S32)(ModeDesiredY / 2),
                   nearClip, champX, champZ);
+}
+
+// Positionne la caméra pour la 3d Extérieure
+void Init3DExtView(void) {
+    Ext_SetProjection();
     SetFollowCamera(VueOffsetX, VueOffsetY, VueOffsetZ,
                     AlphaCam, BetaCam, GammaCam,
                     VueDistance);
@@ -329,6 +340,16 @@ void InitGrilleExt(U32 numcube) {
 /*──────────────────────────────────────────────────────────────────────────*/
 // Affiche la grille complète à la position actuelle de la caméra
 void AffGrilleExt() {
+    /* The camera can be switched from the menu without leaving the cube, and the
+       two cameras do not share a near plane. */
+    {
+        static S32 s_projFollow = -1;
+        const S32 follow = FollowCamera ? 1 : 0;
+        if (s_projFollow != follow) {
+            s_projFollow = follow;
+            Ext_SetProjection();
+        }
+    }
     SetFollowCamera(VueOffsetX, VueOffsetY, VueOffsetZ,
                     AlphaCam, BetaCam, GammaCam,
                     VueDistance);

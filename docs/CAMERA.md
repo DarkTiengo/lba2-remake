@@ -219,6 +219,14 @@ The island's cloud ceiling (`Sky_Y`, from the cube's own data) is a textured pla
 
 **The scenery is drawn from an eye the camera does not hold.** `AffGrilleExt` ([SOURCES/EXTFUNC.CPP](../SOURCES/EXTFUNC.CPP)) opens with its own `SetFollowCamera(VueOffsetX, …, VueDistance)`, which re-derives the eye from the boom and discards whatever the update left in `CameraX/Y/Z`. So the ceiling drop is re-applied there (`FollowCam_EyeCeilingDrop`), or the world would be drawn from the eye the constraint had just ruled out. Worth knowing for anything else that positions the eye: **the ground lift is subject to the same erasure and is therefore not visible in the exterior render at all.** It is left that way here rather than fixed in passing, because making it live changes how the shipped ground clearance looks and that deserves its own change.
 
+### Near plane
+
+The exterior near plane is `CLIP_NEAR` (3000, scaled down at tall frames in `Init3DExtView`), and the terrain does not clip against it: `AffichageTerrainZBuf` marks any grid vertex inside it 32 and `MaskVisible` then drops the whole cell (`SOURCES/3DEXT/TERRAIN.CPP`). At the classic camera's distance nothing ever reaches inside it. The free camera does — tilt down, zoom in, and the ground in front of the hero, a nearby derrick, whatever is closest, is simply not drawn. The hole is left at the frame's clear colour, which is the fog colour, which the composite's `IsSky` then reads as sky: the modern sky gets painted into a hole in the ground.
+
+With the Auto camera the near plane is `FOLLOW_CAM_NEAR_CLIP` (400) instead, close enough that the cells it drops are behind the eye. That is a smaller change than clipping the terrain per cell and it fixes the same thing; per-cell clipping stays available if the plane ever has to move further in. Applied in `Ext_SetProjection`, from both the scene setup and `AffGrilleExt`, because the player can switch camera without leaving the cube and the two do not share a plane.
+
+A near plane that close reaches the other half of the problem: the terrain's screen coordinates are truncated to 16 bits (`ptrs->X2D = (S16)Xp`), and a vertex just past the plane projects beyond that and wraps, smearing its cell across the frame. The projection loop now drops such a vertex the way `DRAWSKY.CPP` has always dropped its own — under `FollowCamera` only, so the classic path keeps the code it was verified with.
+
 **Eased state is self-correcting; latched state is not.** The distinction decides what a discontinuity
 (a scene change, a camera zone, a recentre) has to reset. `FollowCamEyeLift` and the spring arm converge on
 whatever the new situation asks for a frame at a time, so carrying a stale value across costs a short glide
@@ -294,6 +302,7 @@ Two habits are worth keeping when adding to these. **Run a new fixture against a
 | Follow cam tuning       | SOURCES/FOLLOWCAM_CFG.H    | All `FOLLOW_CAM_*` build-time constants                                             |
 | Auto cam HD recompose   | SOURCES/FOLLOWCAM.CPP, FOLLOWCAM_CFG.H | `FollowCamHDExcess`, `FollowCamHD{Recompose,PitchGain,DistGain,LeanGain}`, `cam_hd*` cvars |
 | Ground/occlusion clearance | SOURCES/FOLLOWCAM.CPP, FOLLOWCAM_CFG.H | `FollowCamEyeLift`, `FollowCamGroundSettling`, `FollowCamGround`, `FollowCamGroundClearance`, `cam_ground*` cvars |
+| Near plane | SOURCES/EXTFUNC.CPP, SOURCES/3DEXT/TERRAIN.CPP | `Ext_SetProjection`, `FOLLOW_CAM_NEAR_CLIP`, the 16-bit guard in `AffichageTerrainZBuf` |
 | Ceiling clearance | SOURCES/FOLLOWCAM.CPP, SOURCES/EXTFUNC.CPP | `FollowCamEyeDrop`, `FollowCamCeiling`, `FollowCamCeilingClearance`, `FollowCam_EyeCeilingDrop`, `cam_ceiling*` cvars |
 | Orbit gesture state     | SOURCES/EXTFUNC.CPP        | `FollowCamAdoptAngle`, `FollowCamForgetManualGesture`, `ApplyManualCameraNudge`, `cam_glide` |
 | Camera zone dispatch    | SOURCES/OBJECT.CPP         | `SetZoneCamera`, `ZONE_ON` / `ZONE_ACTIVE` / `ZONE_OBLIGATOIRE` (COMMON.H), `AllCameras` |

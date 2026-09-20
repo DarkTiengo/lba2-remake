@@ -114,6 +114,15 @@
 #define FOLLOW_CAM_CEILING_CLEARANCE_DEFAULT 200 /* keep the eye this far under the ceiling */
 #define FOLLOW_CAM_CEILING_MAX_DROP 20000        /* clamp the total eye drop (units) */
 
+/* Near plane for the free camera. The classic near plane is CLIP_NEAR (3000,
+   scaled down at tall frames), and the terrain rejects whole cells that reach
+   inside it (TERRAIN.CPP's MaskVisible marks them 32), which a camera tilted
+   down or zoomed in reaches easily: the ground in front of the hero disappears,
+   leaving a hole the sky is then painted into. The classic camera never gets
+   close enough for it to show; the free camera does, so it gets a near plane
+   close enough that the cells it would drop are behind the eye anyway. */
+#define FOLLOW_CAM_NEAR_CLIP 400
+
 /* Gamepad right-stick camera ------------------------------------------------*/
 #define GAMEPAD_CAM_SENS_DEFAULT 5 /* default right-stick sensitivity (1-10 range) */
 /* Defaults for the runtime GamepadCamMaxBeta / GamepadCamMaxAlpha globals

@@ -1,6 +1,7 @@
 #include "DEFINES.H"
 #include "../PERSO.H"
 #include "../C_EXTERN.H" /* PtrPal */
+#include "../FOLLOWCAM.H"  /* FollowCamera: the free camera reaches the near plane */
 
 #include <SVGA/SCREEN.H>
 #include <SVGA/GPUOBJ.H> /* GpuObj_RefreshTags */
@@ -903,6 +904,20 @@ void AffichageTerrainZBuf(void) {
             } else if ((zr < ClipZFar)
                            AND LongProjectPoint(X0, Y0, Z0)) {
                 U8 flag;
+
+                /* The screen coordinates below are truncated to 16 bits. A
+                   vertex just past the near plane projects far beyond that and
+                   wraps, smearing its cell across the frame. The free camera's
+                   near plane is close enough to reach those, so it is guarded
+                   here, in the shape DRAWSKY.CPP has always used; the classic
+                   camera never projects one and keeps its untested path. */
+                if (FollowCamera AND (Xp != (S32)(S16)Xp OR Yp != (S32)(S16)Yp)) {
+                    *ptra = 32;
+                    ptra++;
+                    ptrm++;
+                    ptrs++;
+                    continue;
+                }
 
                 flag = 16;
 
