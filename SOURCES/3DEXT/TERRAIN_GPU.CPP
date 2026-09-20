@@ -68,6 +68,7 @@ static S16 s_heights[GRID_SIDE * GRID_SIDE];
 
 /* Grass (gfx_grass): blades standing on the ground the island marks as grass. */
 S32 TerrainGpuGrass = TRUE;
+S32 TerrainGpuFastFill = TRUE;
 const U8 *TerrainGpuPalette = NULL;
 
 /* The footstep sound of grass (T_HALF_POLY.SampleStep): the island's own mark
@@ -591,10 +592,10 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
     }
 }
 
-void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
-                    const U16 *uv, S32 water, S32 step) {
+S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
+                   const U16 *uv, S32 water, S32 step) {
     if (s_draw == NULL) {
-        return;
+        return FALSE;
     }
 
     float mode;
@@ -688,7 +689,7 @@ void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S3
             t->PerVertexShade = perVertexShade;
             t->ConstantShade = constantShade;
             t->Color = color;
-            return;
+            return TRUE;
         }
         for (S32 i = 0; i < 3; i++) {
             s_flatCorner[(zi + kCZ[corners[i] & 3]) * GRID_SIDE + xi + kCX[corners[i] & 3]] = 1;
@@ -697,7 +698,7 @@ void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S3
 
     T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(3);
     if (v == NULL) {
-        return;
+        return FALSE;
     }
     static const S32 kCornerX[4] = {0, 0, 1, 1};
     static const S32 kCornerZ[4] = {0, 1, 1, 0};
@@ -725,8 +726,11 @@ void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S3
             v[i].uv[3] = (p[0] * m->F.M13 + p[1] * m->F.M23 - p[2] * m->F.M33 + s_waterCameraZ) / 512.0f;
         }
     }
-}
 
+    /* The colour is the GPU's from here on, unless the material said otherwise:
+       the software fill only has to leave a tagged, depth-correct pixel. */
+    return mode != (float)GPUOBJ_MODE_PASS AND !water;
+}
 void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ) {
     s_island = island;
     TerrainGpu_SetWaterCube(cubeX, cubeZ);

@@ -49,9 +49,15 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
  *  cell's corners (0 = (x, z), 1 = (x, z+1), 2 = (x+1, z+1), 3 = (x+1, z)),
  *  lights are the 8.8 vertex intensities, fillType and color what Fill_Poly
  *  got, uv the six texel coordinates (8.8) or NULL for an untextured fill,
- *  step the footstep sound the ground makes (T_HALF_POLY.SampleStep). */
-void TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
-                    const U16 *uv, S32 water, S32 step);
+ *  step the footstep sound the ground makes (T_HALF_POLY.SampleStep).
+ *  Returns TRUE when the GPU will draw this triangle's colour, so the software
+ *  fill beside it is only needed for its tag and its depth. */
+S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
+                   const U16 *uv, S32 water, S32 step);
+
+/* The software terrain fill is flat where the GPU covers it (gfx_fastterrain):
+ * the pixel is wanted for its tag and its depth, not for its colour. */
+extern S32 TerrainGpuFastFill;
 
 /** Captures the main cube's camera before horizon cubes shift it. */
 void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ);
