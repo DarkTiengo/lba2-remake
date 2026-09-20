@@ -49,7 +49,7 @@ lba2.cfg stores user preferences and last-save info. Read at startup, written at
 | LastSave | string | Player name, max 100 chars | (empty) | Used for quick load |
 | Shadow | int | 1–3 | 3 | Overwritten by DetailLevel when leaving Options. 1=none on extras, 2=no impact shadows, 3=full |
 | AllCameras | int | 0, 1 | 1 | 0=OFF, 1=ON |
-| FollowCamera | int | 0, 1 | 0 | Auto camera (user-facing name; Enhanced Edition–style third-person follow in exterior). Config key stays `FollowCamera` for stability. 0=classic (default), 1=auto. Also reads legacy key `AutoCameraCenter` |
+| FollowCamera | int | 0, 1 | the renderer's | Auto camera (user-facing name; Enhanced Edition–style third-person follow in exterior). Config key stays `FollowCamera` for stability. 0=classic, 1=auto. **A file that does not name it takes the renderer's camera**: free with the GPU renderer, classic with the classic one (`ReadConfigFile`, after `GpuRenderer` is known). A file that names it is obeyed, so the first run decides and the player's own choice stands after that. Also reads legacy key `AutoCameraCenter` |
 | ReverseStereo | int | 0, 1 | 0 | 0=OFF, 1=ON |
 | DetailLevel | int | 0–3 | 3 | 0=min (no rain, no sea, no horizon), 1=486, 2=base Pentium, 3=max. Drives Shadow, RainEnable, MaxPolySea, FlagDrawHorizon |
 | FullScreen | int | 0, 1 | 1 | 0=small videos, 1=fullscreen videos. Invalid values → 1 |
@@ -123,7 +123,7 @@ lba2.cfg stores user preferences and last-save info. Read at startup, written at
 | Key | Purpose | Source | Menu |
 |-----|---------|--------|------|
 | MenuMouse | Optional mouse UX in game menus (`FlagMenuMouse` in code). Default 1 (on). Set 0 to match classic keyboard/joystick-only menus. See [MENU.md](MENU.md) | ReadConfigFile / WriteConfigFile | Options → Advanced options |
-| FollowCamera | Auto camera for exterior scenes (0=classic, 1=auto). Community addition, not in original game; menu label is "Auto camera" / "Classic camera" | ReadConfigFile / WriteConfigFile | Options → Advanced options |
+| FollowCamera | Auto camera for exterior scenes (0=classic, 1=auto). Community addition, not in original game; defaults to the renderer's camera | ReadConfigFile / WriteConfigFile | Options → Advanced options → Camera |
 | TextureFilter, DitherShading | Software-rasterizer smoothing, both off by default. Console cvars `gfx_texfilter` / `gfx_dither` | ReadConfigFile / WriteConfigFile | console only |
 | GpuRenderer | Classic or GPU renderer. Console cvar `gfx_gpu` | ReadConfigFile / WriteConfigFile | Display menu (Renderer row) |
 

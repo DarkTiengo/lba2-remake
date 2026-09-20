@@ -655,6 +655,16 @@ static void cmd_ui_dispatch(int argc, const char *argv[]) {
         Console_Print("ui gpu-effects -> %s", argv[2]);
         return;
     }
+    if (argc >= 3 && !strcmp(argv[1], "camera")) {
+        /* Camera page, opened from Advanced options. */
+        if (Console_GetCaptureBlackBg()) {
+            memset(Log, 0, (size_t)ModeDesiredX * (size_t)ModeDesiredY);
+            memset(Screen, 0, (size_t)ModeDesiredX * (size_t)ModeDesiredY);
+        }
+        Camera_MainCapture(argv[2]);
+        Console_Print("ui camera -> %s", argv[2]);
+        return;
+    }
     if (argc >= 3 && !strcmp(argv[1], "gpu-scenery")) {
         /* Scenery page, opened from GPU effects. */
         if (Console_GetCaptureBlackBg()) {

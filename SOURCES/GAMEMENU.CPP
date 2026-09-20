@@ -123,6 +123,12 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_GPU_AUTOTUNE 2138
 #define MENU_ID_GPU_SCENERY 2139
 #define MENU_ID_GPU_GRASS 2140
+#define MENU_ID_CAMERA 2141
+#define MENU_ID_CAM_MOUSE 2142
+#define MENU_ID_CAM_MOUSE_SENS 2143
+#define MENU_ID_CAM_STICK_SENS 2144
+#define MENU_ID_CAM_INVERT 2145
+#define MENU_ID_CAM_HOLD 2146
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -262,6 +268,32 @@ U16 GpuLightingMenu[] = {
     MENU_ID_GPU_SPECULAR,
 };
 
+// Camera page, opened from Advanced options: which camera runs outdoors and how
+// the mouse and the right stick drive it. Interiors are isometric and cannot be
+// rotated at all (SetAngleCamera zeroes the angles there), which is why the
+// camera row says so.
+U16 CameraMenu[] = {
+    0,   // selected
+    7,   // nb entries
+    260, // y center
+    0,   // .dia num
+
+    0,
+    26, // menu precedent
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_FOLLOW_CAMERA,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_CAM_MOUSE,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_CAM_MOUSE_SENS,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_CAM_STICK_SENS,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_CAM_INVERT,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_CAM_HOLD,
+};
+
 // Set when a selector changed the rows of its page; DoGameMenu then returns
 // MENU_ID_MENU_REBUILD.
 static S32 s_menuRebuild = FALSE;
@@ -339,7 +371,7 @@ U16 AdvancedOptionMenu[] = {
     0,
     MENU_ID_MOVIE_CAMERA,
     0,
-    MENU_ID_FOLLOW_CAMERA,
+    MENU_ID_CAMERA,
     0,
     MENU_ID_VIDEO_SIZE,
     0,
@@ -600,6 +632,43 @@ static void Display_CycleOption(S32 id, S32 dir) {
         TerrainGpuGrass ^= 1;
         break;
 
+    case MENU_ID_FOLLOW_CAMERA:
+        FollowCamera ^= 1;
+        break;
+
+    case MENU_ID_CAM_MOUSE:
+        /* Off, held on the right button, or always looking. */
+        if (!FlagMouseCamera) {
+            FlagMouseCamera = TRUE;
+            FlagMouseCameraDrag = TRUE;
+        } else if (FlagMouseCameraDrag) {
+            FlagMouseCameraDrag = FALSE;
+        } else {
+            FlagMouseCamera = FALSE;
+            FlagMouseCameraDrag = TRUE;
+        }
+        break;
+
+    case MENU_ID_CAM_MOUSE_SENS:
+        /* Both axes together: the split stays a cvar, for whoever wants it. */
+        MouseCameraSensX = MouseCameraSensX % 10 + 1;
+        MouseCameraSensY = MouseCameraSensX;
+        break;
+
+    case MENU_ID_CAM_STICK_SENS:
+        GamepadCameraSensX = GamepadCameraSensX % 10 + 1;
+        GamepadCameraSensY = GamepadCameraSensX;
+        break;
+
+    case MENU_ID_CAM_INVERT:
+        MouseCameraInvertY ^= 1;
+        GamepadCameraInvertY = MouseCameraInvertY;
+        break;
+
+    case MENU_ID_CAM_HOLD:
+        FollowCamHoldAngle ^= 1;
+        break;
+
     case MENU_ID_GPU_VIEW_DISTANCE:
         /* Takes effect as cubes are loaded, every frame outdoors. */
         TerrainGpuViewDistance = (TerrainGpuViewDistance + (dir < 0 ? 2 : 1)) % 3;
@@ -844,8 +913,42 @@ static void BuildCustomMenuText(S32 num, char *string) {
                        GetLocalizedMenuLabel(GpuObjUiScale ? MENU_LABEL_VAL_UI_CLASSIC : MENU_LABEL_VAL_UI_NATIVE));
         break;
 
+    case MENU_ID_CAMERA:
+        CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(MENU_LABEL_CAMERA_PAGE));
+        break;
+
     case MENU_ID_FOLLOW_CAMERA:
-        CopyUtf8ToCp850(string, 256, GetLocalizedMenuLabel(FollowCamera ? MENU_LABEL_AUTO_CAMERA : MENU_LABEL_CLASSIC_CAMERA));
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_CAMERA),
+                       GetLocalizedMenuLabel(FollowCamera ? MENU_LABEL_VAL_FREE : MENU_LABEL_VAL_CLASSIC));
+        break;
+
+    case MENU_ID_CAM_MOUSE:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_CAM_MOUSE),
+                       GetLocalizedMenuLabel(!FlagMouseCamera      ? MENU_LABEL_VAL_OFF
+                                             : FlagMouseCameraDrag ? MENU_LABEL_VAL_CAM_DRAG
+                                                                   : MENU_LABEL_VAL_CAM_ALWAYS));
+        break;
+
+    case MENU_ID_CAM_MOUSE_SENS:
+    case MENU_ID_CAM_STICK_SENS: {
+        char value[8];
+        const S32 level = (num == MENU_ID_CAM_MOUSE_SENS) ? MouseCameraSensX : GamepadCameraSensX;
+        snprintf(value, sizeof(value), "%d", (int)level);
+        FormatSelector(string,
+                       GetLocalizedMenuLabel(num == MENU_ID_CAM_MOUSE_SENS ? MENU_LABEL_OPT_CAM_MOUSE_SENS
+                                                                          : MENU_LABEL_OPT_CAM_STICK_SENS),
+                       value);
+        break;
+    }
+
+    case MENU_ID_CAM_INVERT:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_CAM_INVERT),
+                       GetLocalizedMenuLabel(MouseCameraInvertY ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_CAM_HOLD:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_CAM_HOLD),
+                       GetLocalizedMenuLabel(FollowCamHoldAngle ? MENU_LABEL_VAL_FREE : MENU_LABEL_VAL_CAM_RECENTER));
         break;
 
     case MENU_ID_DISPLAY_TEXT:
@@ -4127,6 +4230,10 @@ void GpuScenery_MainCapture(const char *path) {
     MenuPage_MainCapture(GpuSceneryMenu, path);
 }
 
+void Camera_MainCapture(const char *path) {
+    MenuPage_MainCapture(CameraMenu, path);
+}
+
 void Advanced_MainCapture(const char *path) {
     MenuPage_MainCapture(AdvancedOptionMenu, path);
 }
@@ -4441,6 +4548,31 @@ S32 GereDisplayMenu(void) {
 /*══════════════════════════════════════════════════════════════════════════*/
 /*──────────────────────────────────────────────────────────────────────────*/
 
+// Camera page: which camera runs outdoors, and how the mouse and the right
+// stick drive it. Opened from Advanced options.
+static void GereCameraMenu(void) {
+    S32 flag = 0;
+    while (!flag) {
+        const S32 select = DoGameMenu(CameraMenu);
+        switch (select) {
+        case 26:
+        case 1000:
+            flag = 1;
+            break;
+
+        case MENU_ID_FOLLOW_CAMERA:
+        case MENU_ID_CAM_MOUSE:
+        case MENU_ID_CAM_MOUSE_SENS:
+        case MENU_ID_CAM_STICK_SENS:
+        case MENU_ID_CAM_INVERT:
+        case MENU_ID_CAM_HOLD:
+            Display_CycleOption(select, 1);
+            break;
+        }
+    }
+    WaitNoInput();
+}
+
 S32 GereAdvancedOptionsMenu(void) {
     S32 select;
     S32 flag = 0;
@@ -4469,8 +4601,8 @@ S32 GereAdvancedOptionsMenu(void) {
             AllCameras ^= 1;
             break;
 
-        case MENU_ID_FOLLOW_CAMERA:
-            FollowCamera ^= 1;
+        case MENU_ID_CAMERA:
+            GereCameraMenu();
             break;
 
         case MENU_ID_VIDEO_SIZE:

@@ -142,7 +142,9 @@ A zone writes `BetaCam` directly, so it is one of the writers described above an
 
 ## Auto camera (`FollowCamera` — community addition, not in the original game)
 
-Config key `FollowCamera` (0 = classic, 1 = auto; default 0). Also reads legacy key `AutoCameraCenter` for backward compatibility. Toggled in Options → Advanced options ("Auto camera" / "Classic camera" — localized). Off by default so the original camera behavior is preserved.
+Config key `FollowCamera` (0 = classic, 1 = auto). Also reads legacy key `AutoCameraCenter` for backward compatibility. Set in Options → Advanced options → Camera, along with the mouse and stick settings that until now lived only in the cfg and the console.
+
+**The default is the renderer's camera**: a cfg that does not name `FollowCamera` takes the free camera under the GPU renderer and the classic one under the classic renderer (`ReadConfigFile`, once `GpuRenderer` is known). A cfg that names it is obeyed, so the first run decides and the player's choice stands after that. The headless fixtures and the recorded baselines run without the GPU renderer, which is what keeps them on the classic camera.
 
 When enabled in exterior mode (and not in a camera zone or cinema), the implementation is a third-person follow with several coupled pieces (tuning in `FOLLOWCAM_CFG.H`, logic in [SOURCES/FOLLOWCAM.CPP](../SOURCES/FOLLOWCAM.CPP) / `EXTFUNC.CPP`):
 

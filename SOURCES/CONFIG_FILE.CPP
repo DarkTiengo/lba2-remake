@@ -61,6 +61,7 @@ static S32 StoredVSync = TRUE;
    behind, and a row no flag touches keeps its value either way. */
 static T_SETTING_SOURCE SourceTexFilter = SETTING_FROM_DEFAULT;
 static T_SETTING_SOURCE SourceGpuRenderer = SETTING_FROM_DEFAULT;
+static T_SETTING_SOURCE SourceFollowCamera = SETTING_FROM_DEFAULT;
 static T_SETTING_SOURCE SourceFixedTimestep = SETTING_FROM_DEFAULT;
 static T_SETTING_SOURCE SourceVSync = SETTING_FROM_DEFAULT;
 
@@ -113,7 +114,8 @@ static const T_SETTING BootSettings[] = {
     {"AllCameras", NULL, NULL, &AllCameras, SETTING_RAW, TRUE, SETTING_MIN_NONE, SETTING_MAX_NONE, NULL, NULL, NULL},
     /* User-facing name: "Auto camera" (menu/docs); the legacy spelling is read
        so an existing cfg keeps working. The camera module owns its cvar. */
-    {"FollowCamera", "AutoCameraCenter", NULL, &FollowCamera, SETTING_OR_DEFAULT, FALSE, 0, 1, NULL, NULL, NULL},
+    {"FollowCamera", "AutoCameraCenter", NULL, &FollowCamera, SETTING_OR_DEFAULT, FALSE, 0, 1, NULL, NULL, NULL,
+     &SourceFollowCamera},
     {"DetailLevel", NULL, NULL, &DetailLevel, SETTING_CLAMP, MAX_DETAIL_LEVEL, 0, MAX_DETAIL_LEVEL, NULL, NULL, NULL},
     {"FullScreen", NULL, NULL, &VideoFullScreen, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL},
     {"DisplayFullScreen", NULL, NULL, &DisplayFullScreen, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL},
@@ -233,6 +235,16 @@ void ReadConfigFile(void) {
             EnvGpuRenderer = atoi(env) != 0 ? TRUE : FALSE;
             GpuObjEnabled = EnvGpuRenderer;
         }
+    }
+
+    /* The free camera is the modern renderer's camera: a player who has never
+       said which camera they want gets the one that goes with the renderer they
+       are running, and the classic renderer keeps the 1997 camera. Only the
+       default: a cfg that names FollowCamera, however it got there, is obeyed.
+       This is also what keeps the headless fixtures and the recorded baselines
+       on the classic camera, since they run without the GPU renderer. */
+    if (SourceFollowCamera == SETTING_FROM_DEFAULT) {
+        FollowCamera = GpuObjEnabled ? TRUE : FALSE;
     }
 
     if (Control_HasVSync())

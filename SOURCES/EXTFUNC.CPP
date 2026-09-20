@@ -96,6 +96,10 @@ void Clear3dExt() {
 }
 
 /*──────────────────────────────────────────────────────────────────────────*/
+/* Which camera the live projection was built for, so the scenery draw can tell
+   whether anything has to be rebuilt: -1 until the scene sets one up. */
+static S32 s_projFollow = -1;
+
 /* The exterior projection, which both the scene setup and the scenery draw
    apply: the latter because the near plane depends on which camera is running
    and the player can change that without leaving the cube. */
@@ -134,6 +138,7 @@ static void Ext_SetProjection(void) {
         nearClip = FOLLOW_CAM_NEAR_CLIP;
     SetProjection((S32)(ModeDesiredX / 2), (S32)(ModeDesiredY / 2),
                   nearClip, champX, champZ);
+    s_projFollow = FollowCamera ? 1 : 0;
 }
 
 // Positionne la caméra pour la 3d Extérieure
@@ -341,14 +346,11 @@ void InitGrilleExt(U32 numcube) {
 // Affiche la grille complète à la position actuelle de la caméra
 void AffGrilleExt() {
     /* The camera can be switched from the menu without leaving the cube, and the
-       two cameras do not share a near plane. */
-    {
-        static S32 s_projFollow = -1;
-        const S32 follow = FollowCamera ? 1 : 0;
-        if (s_projFollow != follow) {
-            s_projFollow = follow;
-            Ext_SetProjection();
-        }
+       two cameras do not share a near plane. Only then: the scene setup has
+       already built the projection, and rebuilding it here for nothing would put
+       an extra projection through the recorder the corpus hashes. */
+    if (s_projFollow != (FollowCamera ? 1 : 0)) {
+        Ext_SetProjection();
     }
     SetFollowCamera(VueOffsetX, VueOffsetY, VueOffsetZ,
                     AlphaCam, BetaCam, GammaCam,
