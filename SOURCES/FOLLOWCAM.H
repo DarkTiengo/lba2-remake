@@ -63,6 +63,7 @@ extern S32 FollowCamHDDistGain;       /* HD recompose distance pull (% boom per 
 extern S32 FollowCamHDLeanGain;       /* HD recompose forward-lean cut (% per 1.0 of k-1) */
 extern S32 FollowCamGround;           /* smooth terrain ground-clearance lift (1=on) */
 extern S32 FollowCamGroundClearance;  /* keep the eye this far above the ground under it */
+extern S32 FollowCamDecor;            /* shorten the boom rather than reach through scenery (1=on) */
 extern S32 FollowCamCeiling;          /* keep the eye under the island's cloud ceiling (1=on) */
 extern S32 FollowCamCeilingClearance; /* keep the eye this far under that ceiling */
 extern S32 FollowCamManualHoldFrames; /* manual-override hold length (cvar cam_manual_hold) */

@@ -1,5 +1,7 @@
 #include "C_EXTERN.H"
-#include "3DEXT/TERRAIN.H" /* Sky_Y: the island's cloud ceiling */
+#include "3DEXT/TERRAIN.H"  /* Sky_Y: the island's cloud ceiling */
+#include "3DEXT/DECORS.H"   /* TestZVDecors: the scenery boxes the boom must not reach through */
+#include "3DEXT/VAR_EXT.H"  /* ListDecors, NbObjDecors */
 
 #include "CONSOLE/CONSOLE.H" /* Console_RegisterCvar, for this module's own cvars */
 #include "FOLLOWCAM.H"
@@ -29,6 +31,7 @@ S32 FollowCamHDDistGain = FOLLOW_CAM_HD_DIST_GAIN_DEFAULT;
 S32 FollowCamHDLeanGain = FOLLOW_CAM_HD_LEAN_GAIN_DEFAULT;
 S32 FollowCamGround = FOLLOW_CAM_GROUND_DEFAULT;
 S32 FollowCamGroundClearance = FOLLOW_CAM_GROUND_CLEARANCE_DEFAULT;
+S32 FollowCamDecor = FOLLOW_CAM_DECOR_DEFAULT;
 S32 FollowCamCeiling = FOLLOW_CAM_CEILING_DEFAULT;
 S32 FollowCamCeilingClearance = FOLLOW_CAM_CEILING_CLEARANCE_DEFAULT;
 S32 FollowCamManualHoldFrames = FOLLOW_CAM_MANUAL_HOLD_DEFAULT;
@@ -139,6 +142,49 @@ void FollowCamTrace(void) {
  * they finish easing while the hero stands still). */
 static S32 FollowCamNeedsUpdate(T_OBJ_3D *ptr3d, S32 catchupDiff) {
     return ptr3d->X != FollowCamPrevHeroX OR ptr3d->Y != FollowCamPrevHeroY OR ptr3d->Z != FollowCamPrevHeroZ OR ptr3d->Beta != FollowCamPrevHeroBeta OR AddBetaCam != FollowCamPrevAddBeta OR(catchupDiff > FOLLOW_CAM_ROT_THRESHOLD OR catchupDiff < -FOLLOW_CAM_ROT_THRESHOLD) OR FollowCamBaseDist != FollowCamPrevBaseDist OR AlphaCam != FollowCamPrevAlphaCam OR FollowCamGroundSettling OR FollowCamManualHold;
+}
+
+/* The longest boom that does not reach through scenery, given where the eye is
+ * now. The sight line is sampled from the hero outward and each sample tested
+ * against the decor boxes, which is the half of the classic SearchCameraPos the
+ * eased ground clearance never ported (TestZVDecors, SOURCES/3DEXT/DECORS.CPP).
+ * The first sample inside a box ends the boom just short of it.
+ *
+ * The samples are what this costs: FOLLOW_CAM_DECOR_STEPS of them against every
+ * decor in the cube, against the classic path's (VueDistance - 1000) / 512.
+ * Returns dist unchanged when nothing is in the way. */
+static S32 FollowCamDecorDist(S32 hx, S32 hy, S32 hz, S32 ex, S32 ey, S32 ez, S32 dist) {
+    if (!FollowCamDecor OR ListDecors == NULL OR NbObjDecors <= 0) {
+        return dist;
+    }
+    for (S32 i = 1; i <= FOLLOW_CAM_DECOR_STEPS; i++) {
+        /* Sampled from a little way out: the boxes around what the camera is
+         * aiming at are the ground it stands on and the building it is standing
+         * in, and treating those as obstacles pins the boom to its minimum
+         * wherever the hero is. The classic march starts out at 1000 for the
+         * same reason. */
+        const S32 f = FOLLOW_CAM_DECOR_FROM +
+                      i * (100 - FOLLOW_CAM_DECOR_FROM) / FOLLOW_CAM_DECOR_STEPS;
+        const S32 sx = hx + (ex - hx) * f / 100;
+        const S32 sy = hy + (ey - hy) * f / 100;
+        const S32 sz = hz + (ez - hz) * f / 100;
+        T_DECORS *ptrdec = ListDecors;
+        for (S32 d = 0; d < NbObjDecors; d++, ptrdec++) {
+            /* A box holding what the camera looks at is the scenery the hero is
+             * on or in, not something between the two. */
+            if (TestZVDecors(hx, hy, hz, ptrdec)) {
+                continue;
+            }
+            if (TestZVDecors(sx, sy, sz, ptrdec)) {
+                S32 allowed = dist * f / 100 - FOLLOW_CAM_DECOR_MARGIN;
+                if (allowed < FOLLOW_CAM_DECOR_MIN_DIST) {
+                    allowed = FOLLOW_CAM_DECOR_MIN_DIST;
+                }
+                return (allowed < dist) ? allowed : dist;
+            }
+        }
+    }
+    return dist;
 }
 
 /* How far the last update had to hold the eye under the cloud ceiling, for the
@@ -366,6 +412,25 @@ void UpdateFollowCameraExt(void) {
                              * the orbit (which is what sank the earlier always-on
                              * attempt). Skipped out-of-cube, where
                              * CalculAltitudeObjet is invalid. */
+            /* Scenery clearance: with the eye placed, see whether the sight
+             * line crosses a building on its way there and, if it does, bring
+             * the boom in until it does not. Taken in full at once, so the
+             * camera never spends a frame inside a wall; given back by the
+             * spring arm's own recovery once the way is clear. */
+            if (FollowCamDecor) {
+                /* From what the camera is aiming at, which is where the boom
+                 * starts, not the hero's feet. */
+                const S32 clear = FollowCamDecorDist(VueOffsetX, VueOffsetY, VueOffsetZ,
+                                                     CameraX, CameraY, CameraZ,
+                                                     FollowCamEffectiveDist);
+                if (clear < FollowCamEffectiveDist) {
+                    FollowCamEffectiveDist = clear;
+                    VueDistance = FollowCamHDShrink(FollowCamEffectiveDist, hdExcess, FollowCamHDDistGain,
+                                                    FOLLOW_CAM_HD_DIST_MAX_PULL);
+                    CameraCenter(3);
+                }
+            }
+
             const S32 ex = CameraX, ey = CameraY, ez = CameraZ;
             S32 effLift = 0;   /* ground clearance, faded by autoFactor */
             S32 settling = 0;  /* either clearance still easing */
@@ -562,6 +627,9 @@ static const T_SETTING FollowCamSettings[] = {
     {"FollowCamGroundClearance", NULL, "cam_ground_clear", &FollowCamGroundClearance, SETTING_CLAMP,
      FOLLOW_CAM_GROUND_CLEARANCE_DEFAULT, 0, 20000, NULL, NULL, NULL, NULL,
      "Ground clearance: keep the eye this far above the ground under it"},
+    {"FollowCamDecor", NULL, "cam_decor", &FollowCamDecor, SETTING_TRUTHY,
+     FOLLOW_CAM_DECOR_DEFAULT, 0, 1, NULL, NULL, NULL, NULL,
+     "Auto cam: shorten the boom rather than reach through scenery"},
     {"FollowCamCeiling", NULL, "cam_ceiling", &FollowCamCeiling, SETTING_TRUTHY,
      FOLLOW_CAM_CEILING_DEFAULT, 0, 1, NULL, NULL, NULL, NULL,
      "Auto cam: keep the eye under the island's cloud ceiling"},

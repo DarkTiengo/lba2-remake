@@ -123,6 +123,18 @@
    close enough that the cells it would drop are behind the eye anyway. */
 #define FOLLOW_CAM_NEAR_CLIP 400
 
+/* Scenery clearance. The eased ground lift clears terrain; the classic
+   SearchCameraPos also tested the decor boxes (TestZVDecors), which this path
+   never did, so the boom reached straight through the Citadel's buildings. The
+   answer here is the spring arm rather than a lift: where the sight line enters
+   a decor box, the arm is shortened to stop just short of it, taken in full at
+   once and given back by the spring's own recovery. */
+#define FOLLOW_CAM_DECOR_DEFAULT 1    /* master enable (cam_decor) */
+#define FOLLOW_CAM_DECOR_MARGIN 400   /* stop the eye this far before the box */
+#define FOLLOW_CAM_DECOR_STEPS 12     /* samples along the sight line */
+#define FOLLOW_CAM_DECOR_FROM 35      /* % of the way out the samples start */
+#define FOLLOW_CAM_DECOR_MIN_DIST 2500 /* never pull the arm in past this */
+
 /* Gamepad right-stick camera ------------------------------------------------*/
 #define GAMEPAD_CAM_SENS_DEFAULT 5 /* default right-stick sensitivity (1-10 range) */
 /* Defaults for the runtime GamepadCamMaxBeta / GamepadCamMaxAlpha globals

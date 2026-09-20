@@ -215,6 +215,16 @@ A smooth port of the classic `SearchCameraPos` terrain awareness onto the follow
 
 The difference from the classic path is that the lift **eases** toward its target every frame (`FollowCamEyeLift`, tuned by `FOLLOW_CAM_GROUND_*`) instead of snapping. An earlier always-on snap fought the orbit and was reverted; easing is what makes it safe to run every frame. A `FollowCamGroundSettling` flag keeps the dirty check live until the lift converges, so it finishes even while the hero stands still. Active at every resolution (world awareness, not HD-specific), skipped in camera zones and when the eye leaves the cube (where `CalculAltitudeObjet` is invalid). It clears terrain only; decor/scenery occlusion is not yet handled.
 
+### Scenery clearance
+
+The ground clearance above ports the terrain half of the classic `SearchCameraPos`. The other half is the decor boxes it also tested (`TestZVDecors`, [SOURCES/3DEXT/DECORS.CPP](../SOURCES/3DEXT/DECORS.CPP)), which this path never had: orbiting beside a building put the camera behind it, or inside it, with the hero hidden — the most common "this is broken" moment the free camera has.
+
+`cam_decor` (default on) answers it with the spring arm rather than a lift. Once `CameraCenter(3)` has placed the eye, the sight line from what the camera aims at (`VueOffset*`, where the boom starts) to the eye is sampled, and each sample tested against every decor box in the cube. The first sample inside a box ends the boom just short of it (`FOLLOW_CAM_DECOR_MARGIN`, floor `FOLLOW_CAM_DECOR_MIN_DIST`), the eye is re-placed, and the ground and ceiling clearances then run on the new position. Taken in full at once, so the camera never spends a frame inside a wall; given back by the spring arm's own recovery, about a second, once the way is clear.
+
+**The boxes around what the camera aims at are skipped.** They are the ground the hero stands on and the building they are standing in, and counting those as obstacles pins the boom to its minimum wherever the hero happens to be — which is exactly what the first version did, in every scene. The samples also start a third of the way out, the same reason the classic march starts at 1000.
+
+It costs `FOLLOW_CAM_DECOR_STEPS` samples against every decor in the cube (12 × 31 on Desert Island), against the classic path's `(VueDistance - 1000) / 512` of the same. Skipped in camera zones with the rest of the update. Actors are not tested: the classic path's `TestCameraPosObjets` is a separate question, and a camera that dodged every passing character would be worse than one that does not.
+
 ### Ceiling clearance
 
 The island's cloud ceiling (`Sky_Y`, from the cube's own data) is a textured plane the engine draws over the world. The software painter always draws it *behind* everything, so the classic camera could rise through it and never show it. The GPU renderer gives it depth, and then an eye above it sees a floor of cloud with the island hidden underneath — a white screen with the actors floating in it. The free camera reaches that state in one gesture: at the elevation limit the boom puts the eye thousands of units over the ceiling while the hero stands below it.
@@ -269,6 +279,7 @@ Fixtures live in `tests/automation/`, with `camlib.sh` turning a run into a per-
 | `followcam_hold` | the angle survives the hero turning underneath it |
 | `followcam_ceiling` | the eye stops under the cloud ceiling, and eases back out rather than snapping |
 | `followcam_mouse_release` | a mouse held still stops the camera; letting go still eases out |
+| `followcam_decor` | the boom stops short of a building instead of reaching through it |
 | `followcam_release` | letting go eases down instead of halting |
 | `followcam_tracking` | the camera orbits at the speed asked for |
 | `followcam_recenter` | the classic camera drifts back while walking, not while standing |
@@ -283,9 +294,7 @@ Two habits are worth keeping when adding to these. **Run a new fixture against a
 - **Rendering architecture:** A faster terrain path (GPU or structural changes) would reduce the CPU cost of per-frame `RefreshGrille`.
 - **Rebinding:** optional rebinding of zoom/tilt/pan (today numpad-heavy) for laptops and alternate layouts. The right stick already drives orbit and elevation (`cam_stick_*`).
 - **Hero-relative hold:** an angle held as an offset from the hero's facing cannot express a held world heading, which is what makes turning while the stick is down still drag the camera. #351 proposes anchoring horizontal rotation to the overworld instead, retiring that whole class rather than correcting instances of it.
-- **Decor occlusion and clipping:** #363.
-- **Auto camera vs terrain / decor:** the eased ground/occlusion clearance above now ports the terrain half of `SearchCameraPos` (an earlier always-on snap was reverted for fighting the orbit; easing fixes that). Still open: decor/scenery occlusion (the classic path also tests `TestZVDecors`), and the eye leaving the cube on far authored cameras (the clearance is skipped there, matching the classic out-of-cube guard).
-- **Decor occlusion:** the ground clearance clears terrain only; the classic path also tests scenery boxes (`TestZVDecors`). Porting that would let the camera clear buildings/props too, not just landscape.
+- **Auto camera vs terrain / decor:** the eased ground/occlusion clearance above now ports the terrain half of `SearchCameraPos` (an earlier always-on snap was reverted for fighting the orbit; easing fixes that). Still open: the eye leaving the cube on far authored cameras (the clearance is skipped there, matching the classic out-of-cube guard). Scenery occlusion is handled by the boom, above.
 - **Manual camera at tall heights:** the recompose runs on every apply, including while mouse/stick-orbiting, so the manual cam inherits the HD framing fix. Widening the manual `AlphaCam`/`FollowCamBaseDist` clamps with `k` and normalizing raw mouse deltas by render height are open refinements for fine manual control at 1080p+.
 
 ## Code reference
@@ -307,6 +316,7 @@ Two habits are worth keeping when adding to these. **Run a new fixture against a
 | Auto cam HD recompose   | SOURCES/FOLLOWCAM.CPP, FOLLOWCAM_CFG.H | `FollowCamHDExcess`, `FollowCamHD{Recompose,PitchGain,DistGain,LeanGain}`, `cam_hd*` cvars |
 | Ground/occlusion clearance | SOURCES/FOLLOWCAM.CPP, FOLLOWCAM_CFG.H | `FollowCamEyeLift`, `FollowCamGroundSettling`, `FollowCamGround`, `FollowCamGroundClearance`, `cam_ground*` cvars |
 | Near plane | SOURCES/EXTFUNC.CPP, SOURCES/3DEXT/TERRAIN.CPP | `Ext_SetProjection`, `FOLLOW_CAM_NEAR_CLIP`, the 16-bit guard in `AffichageTerrainZBuf` |
+| Scenery clearance | SOURCES/FOLLOWCAM.CPP, FOLLOWCAM_CFG.H | `FollowCamDecorDist`, `FollowCamDecor`, `FOLLOW_CAM_DECOR_*`, `cam_decor` cvar |
 | Ceiling clearance | SOURCES/FOLLOWCAM.CPP, SOURCES/EXTFUNC.CPP | `FollowCamEyeDrop`, `FollowCamCeiling`, `FollowCamCeilingClearance`, `FollowCam_EyeCeilingDrop`, `cam_ceiling*` cvars |
 | Orbit gesture state     | SOURCES/EXTFUNC.CPP        | `FollowCamAdoptAngle`, `FollowCamForgetManualGesture`, `ApplyManualCameraNudge`, `cam_glide` |
 | Camera zone dispatch    | SOURCES/OBJECT.CPP         | `SetZoneCamera`, `ZONE_ON` / `ZONE_ACTIVE` / `ZONE_OBLIGATOIRE` (COMMON.H), `AllCameras` |
