@@ -116,9 +116,16 @@ static U32 s_mirroredVerts = 0;
 static U32 s_statUploaded = 0; ///< vertices copied to the mirror, for LBA2_GPU_STATS
 static U32 s_mirroredEpoch = 0;
 static const SDL_GPUBuffer *s_mirroredBuffer = NULL;
-/* The vertices travel through their own transfer buffer, mapped once a
-   present: the shared one is mapped for every page and would be cycled,
-   at its full size, as often. */
+/* The vertices travel through their own transfer buffer, mapped once a present:
+   the shared one is mapped for every page and would be cycled, at its full size,
+   as often. It is kept small and used a slice at a time, because the map cycles
+   it every present and the driver then carries a copy of whatever it is sized
+   for. Sizing it for the whole mirror meant carrying tens of megabytes that only
+   a repack ever sends at once; a slice at a time bounds that. Frame time did not
+   measurably change either way (three runs each, 26.6-30.5 ms against
+   27.2-28.1 ms on a machine whose orbiting frame varies by a fifth), so this is
+   memory rather than speed. */
+#define GPURENDER_VERTEX_SLICE (4u << 20)
 static SDL_GPUTransferBuffer *s_vertexTransfer = NULL;
 static U32 s_vertexTransferCapacity = 0;
 /* The soft shadows' vertices, rebuilt every frame, in a buffer of their own. */
@@ -1042,38 +1049,44 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
     return n;
 }
 
-/* Copies into the mirror the vertices [from, to) of GpuObjVerts, and the
-   frame's shadow vertices into their own buffer, through one mapping. */
+/* Copies into the mirror the vertices [from, to) of GpuObjVerts, and the frame's
+   shadow vertices into their own buffer, a slice at a time. */
 static void UploadVertices(SDL_GPUCopyPass *pass, U32 from, U32 to, U32 shadows) {
-    const U32 mirrorBytes = (to - from) * (U32)sizeof(T_GPUOBJ_VERTEX);
-    const U32 shadowBytes = shadows * (U32)sizeof(T_GPUOBJ_VERTEX);
-    if (mirrorBytes + shadowBytes == 0) {
-        return;
-    }
-    U8 *mapped = (U8 *)SDL_MapGPUTransferBuffer(s_device, s_vertexTransfer, true);
-    if (mapped == NULL) {
-        return;
-    }
-    memcpy(mapped, GpuObjVerts + from, mirrorBytes);
-    memcpy(mapped + mirrorBytes, GpuObjShadowVerts, shadowBytes);
-    SDL_UnmapGPUTransferBuffer(s_device, s_vertexTransfer);
-
+    const U32 vsize = (U32)sizeof(T_GPUOBJ_VERTEX);
+    const U32 perSlice = GPURENDER_VERTEX_SLICE / vsize;
     SDL_GPUTransferBufferLocation source;
     SDL_zero(source);
     source.transfer_buffer = s_vertexTransfer;
     SDL_GPUBufferRegion region;
     SDL_zero(region);
-    if (mirrorBytes > 0) {
+
+    for (U32 at = from; at < to; at += perSlice) {
+        const U32 count = (to - at > perSlice) ? perSlice : (to - at);
+        U8 *mapped = (U8 *)SDL_MapGPUTransferBuffer(s_device, s_vertexTransfer, true);
+        if (mapped == NULL) {
+            return;
+        }
+        memcpy(mapped, GpuObjVerts + at, count * vsize);
+        SDL_UnmapGPUTransferBuffer(s_device, s_vertexTransfer);
+        source.offset = 0;
         region.buffer = s_vertexBuffer;
-        region.offset = from * (U32)sizeof(T_GPUOBJ_VERTEX);
-        region.size = mirrorBytes;
+        region.offset = at * vsize;
+        region.size = count * vsize;
         SDL_UploadToGPUBuffer(pass, &source, &region, false);
     }
-    if (shadowBytes > 0 && s_shadowBuffer != NULL) {
-        source.offset = mirrorBytes;
+
+    if (shadows > 0 && s_shadowBuffer != NULL) {
+        const U32 bytes = shadows * vsize;
+        U8 *mapped = (U8 *)SDL_MapGPUTransferBuffer(s_device, s_vertexTransfer, true);
+        if (mapped == NULL) {
+            return;
+        }
+        memcpy(mapped, GpuObjShadowVerts, bytes);
+        SDL_UnmapGPUTransferBuffer(s_device, s_vertexTransfer);
+        source.offset = 0;
         region.buffer = s_shadowBuffer;
         region.offset = 0;
-        region.size = shadowBytes;
+        region.size = bytes;
         SDL_UploadToGPUBuffer(pass, &source, &region, false);
     }
 }
@@ -1584,7 +1597,8 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_device);
     if (cmd == NULL || !EnsureTransfer(need) ||
         (count > 0 && !EnsureVertexBuffer(nbVerts * (U32)sizeof(T_GPUOBJ_VERTEX))) ||
-        (count > 0 && !EnsureVertexTransfer(nbVerts * (U32)sizeof(T_GPUOBJ_VERTEX) + shadowBytes)) ||
+        (count > 0 && !EnsureVertexTransfer(shadowBytes > GPURENDER_VERTEX_SLICE ? shadowBytes
+                                                                                 : GPURENDER_VERTEX_SLICE)) ||
         (shadowVerts > 0 && !EnsureShadowBuffer(shadowBytes))) {
         if (bvhThread != NULL) {
             SDL_WaitThread(bvhThread, NULL);
