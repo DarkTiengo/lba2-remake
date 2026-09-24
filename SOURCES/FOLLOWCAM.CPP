@@ -225,6 +225,28 @@ void FollowCam_AimAt(S32 x, S32 y, S32 z) {
  * and again, whipping the view a third of the way round the world each time.
  * So the boom comes in instead, and the classic cut is kept as the last resort
  * for a hero who stays hidden with the arm already at its shortest. */
+/* A camera zone has claimed the view with an authored boom (its Info6, written
+ * straight into VueDistance). The arm takes that length, so that when the shot
+ * lets go the spring eases back out to the player's own distance rather than the
+ * view jumping there in one frame -- thousands of units, on every walk in and
+ * out of the shots that cover the rocks by the cow on Citadel Island. The
+ * companion to FollowCamAdoptAngle, which does the same for the angle. */
+void FollowCam_AdoptDistance(S32 dist) {
+    if (!FollowCamera OR dist <= 0) {
+        return;
+    }
+    if (FollowCamBaseDist == 0) {
+        FollowCamBaseDist = FOLLOW_CAM_INITIAL_DIST;
+    }
+    if (dist > FollowCamBaseDist) {
+        dist = FollowCamBaseDist;
+    }
+    if (dist < FOLLOW_CAM_DECOR_MIN_DIST) {
+        dist = FOLLOW_CAM_DECOR_MIN_DIST;
+    }
+    FollowCamEffectiveDist = dist;
+}
+
 S32 FollowCam_TargetHidden(void) {
     if (!FollowCamHidden OR !FollowCamera OR CubeMode != CUBE_EXTERIEUR) {
         return FALSE; /* the caller cuts back behind the hero, as it always did */

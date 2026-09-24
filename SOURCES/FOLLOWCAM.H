@@ -94,6 +94,10 @@ extern void FollowCam_AimAt(S32 x, S32 y, S32 z);
  * did -- the classic camera, a room, or a hero still hidden with the boom
  * already as short as it goes. */
 extern S32 FollowCam_TargetHidden(void);
+
+/* A camera zone has taken the view with an authored boom: the arm adopts its
+ * length, so the shot letting go eases rather than cuts. */
+extern void FollowCam_AdoptDistance(S32 dist);
 extern S32 FollowCamReengageDelay; /* frames before auto-center resumes after manual pan */
 extern S32 FollowCamManualHold;    /* frames the pitch/distance auto-assist yields after a manual nudge */
 

@@ -1870,6 +1870,16 @@ restartloop:
         if (CameraZone OR CinemaMode OR CubeMode != CUBE_EXTERIEUR OR !FollowCamera)
             FollowCamForgetManualGesture();
 
+        /* While a shot owns the view, its authored boom is the arm's length. The
+         * Auto camera's own update does not run under a zone, so without this it
+         * comes back with the length it had before the shot and the view cuts to
+         * it the moment the hero steps out -- thousands of units, on every walk
+         * in and out of the shots around the cow on Citadel Island. Adopted here
+         * rather than where the zone is applied, so a save loaded inside a shot
+         * is covered too. */
+        if (CameraZone AND CubeMode == CUBE_EXTERIEUR)
+            FollowCam_AdoptDistance(VueDistance);
+
         if (!CameraZone) {
             if (!CinemaMode) {
                 // AlphaCam (touches '+' et '-' *)

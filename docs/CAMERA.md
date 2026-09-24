@@ -231,6 +231,8 @@ The clearances above act on what the camera can work out in advance. The rendere
 
 `cam_hidden` (default on) hands that verdict to the Auto camera instead: `FollowCam_TargetHidden` brings the boom in by `FOLLOW_CAM_HIDDEN_PULL` for each frame the hero is reported covered, down to the same floor the scenery clearance uses, and the spring recovery gives it back once he is in sight. The angle is untouched, and the frame is not drawn twice — the camera simply closes in over the next few frames, which is what a third-person camera does. The classic cut is kept for the cases the boom cannot answer: the classic camera, a room, and a hero still hidden with the arm already as short as it goes (`FOLLOW_CAM_HIDDEN_GIVE_UP`, about a second and a half), so the player is never left staring at a wall.
 
+**Leaving an authored shot.** A camera zone writes its own boom into `VueDistance`, and the Auto camera's update does not run while the shot owns the view, so the arm used to come back with the length it had before the shot and the view cut to it in a single frame. `FollowCam_AdoptDistance` takes the shot's length while it holds the view, and the spring eases back out to the player's distance when it lets go. Entering a shot still cuts, as it does for the classic camera. [ZONES.md](ZONES.md) has the rest of the handover.
+
 ### Ceiling clearance
 
 The island's cloud ceiling (`Sky_Y`, from the cube's own data) is a textured plane the engine draws over the world. The software painter always draws it *behind* everything, so the classic camera could rise through it and never show it. The GPU renderer gives it depth, and then an eye above it sees a floor of cloud with the island hidden underneath — a white screen with the actors floating in it. The free camera reaches that state in one gesture: at the elevation limit the boom puts the eye thousands of units over the ceiling while the hero stands below it.
@@ -297,7 +299,8 @@ Fixtures live in `tests/automation/`, with `camlib.sh` turning a run into a per-
 | `camzone_model` | the two shapes a camera zone comes in |
 | `camzone_hold` | both cameras leave an authored shot in the same place |
 | `followcam_hd_eye` | the scenery is drawn from the camera the update decided on, above 480 lines |
-| `followcam_hidden` | a hero behind the scenery brings the boom in instead of whipping the view round |
+| `followcam_hidden` | a hero behind the scenery brings the boom in instead of throwing the player's camera away |
+| `camzone_release` | leaving an authored shot eases the boom back instead of cutting to it |
 
 Two habits are worth keeping when adding to these. **Run a new fixture against a build without the thing it guards** and confirm it fails there; several of these passed at first because their setup never happened rather than because the engine was right. And **assert the cause when the symptom is unobservable**: the realign runs in the input pass, before the camera update logs anything, so on a working engine the divergence it corrects leaves no trace at all.
 
@@ -331,6 +334,7 @@ Two habits are worth keeping when adding to these. **Run a new fixture against a
 | Scenery clearance | SOURCES/FOLLOWCAM.CPP, FOLLOWCAM_CFG.H | `FollowCamDecorDist`, `FollowCamDecor`, `FOLLOW_CAM_DECOR_*`, `cam_decor` cvar |
 | Ceiling clearance | SOURCES/FOLLOWCAM.CPP, SOURCES/EXTFUNC.CPP | `FollowCamEyeDrop`, `FollowCamCeiling`, `FollowCamCeilingClearance`, `FollowCam_EyeOffset`, `FollowCam_AimAt`, `cam_ceiling*` cvars |
 | Hidden hero | SOURCES/FOLLOWCAM.CPP, SOURCES/OBJECT.CPP | `FollowCam_TargetHidden`, `FollowCamHidden`, `FOLLOW_CAM_HIDDEN_*`, `cam_hidden` cvar |
+| Shot handover | SOURCES/FOLLOWCAM.CPP, SOURCES/PERSO.CPP | `FollowCam_AdoptDistance`, `FollowCamAdoptAngle` (EXTFUNC), see [ZONES.md](ZONES.md) |
 | Orbit gesture state     | SOURCES/EXTFUNC.CPP        | `FollowCamAdoptAngle`, `FollowCamForgetManualGesture`, `ApplyManualCameraNudge`, `cam_glide` |
 | Camera zone dispatch    | SOURCES/OBJECT.CPP         | `SetZoneCamera`, `ZONE_ON` / `ZONE_ACTIVE` / `ZONE_OBLIGATOIRE` (COMMON.H), `AllCameras` |
 | Camera trace            | SOURCES/FOLLOWCAM.CPP      | `FollowCamTrace`, `camtrace` / `camnudge` console commands |
