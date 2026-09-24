@@ -45,6 +45,7 @@ extern "C" {
 #define GPUOBJ_MODE_ORB 8       ///< lit glossy sphere inside the unit disc, colour in mat.yzw
 #define GPUOBJ_MODE_SHADOW 9    ///< soft ground shadow: ellipse coords in uv.zw, strength and softness in mat.yz
 #define GPUOBJ_MODE_SILHOUETTE 10 ///< a body's shadow projected on the ground from the sun or a light
+#define GPUOBJ_MODE_SPRITE 11     ///< an extra's sprite: coverage from the atlas, colour from the software frame, its own depth
 
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)

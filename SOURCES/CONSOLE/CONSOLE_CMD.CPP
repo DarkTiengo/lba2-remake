@@ -18,6 +18,7 @@
 #include <POLYGON/POLYFILT.H>
 
 extern S32 GfxDitherShading;
+#include "../EXTRA.H" /* ThrowExtra, for the `extra` verb */
 #include "../CONFIG.H"
 #include "../GAMEMENU.H"
 #include "../MUSIC.H"
@@ -1932,6 +1933,42 @@ static void cmd_autotune(int argc, const char *argv[]) {
     Console_Print("gfx_autotune: every effect on, measuring outdoors (see the log)");
 }
 
+/* Drops a sprite extra where the hero stands, which is the only way to put one
+   in front of the camera on purpose: extras are spawned by scripts and by
+   fights, and the renderer work on them (depth, occlusion) needs one on demand. */
+static void cmd_extra(int argc, const char *argv[]) {
+    if (argc < 2) {
+        Console_Print("Usage: extra <sprite> [height] [dx] [dz]");
+        return;
+    }
+    long num = 0, height = 0, dx = 0, dz = 0;
+    if (!console_parse_signed(argv[1], &num) || num < 0 || num > 32767) {
+        Console_Print("extra: bad sprite number");
+        return;
+    }
+    if (argc >= 3 && !console_parse_signed(argv[2], &height)) {
+        Console_Print("extra: bad height");
+        return;
+    }
+    if (argc >= 4 && !console_parse_signed(argv[3], &dx)) {
+        Console_Print("extra: bad dx");
+        return;
+    }
+    if (argc >= 5 && !console_parse_signed(argv[4], &dz)) {
+        Console_Print("extra: bad dz");
+        return;
+    }
+    T_OBJ_3D *hero = &ListObjet[NUM_PERSO].Obj;
+    const S32 slot = ThrowExtra(NUM_PERSO, hero->X + (S32)dx, hero->Y + (S32)height, hero->Z + (S32)dz, (S16)num, 0,
+                                0, 0, 0, 0);
+    if (slot < 0) {
+        Console_Print("extra: no free slot");
+        return;
+    }
+    Console_Print("extra: sprite %d at (%d,%d,%d)", (int)num, (int)(hero->X + dx), (int)(hero->Y + height),
+                  (int)(hero->Z + dz));
+}
+
 static void cmd_behaviour(int argc, const char *argv[]) {
     if (argc >= 2) {
         S32 n = atoi(argv[1]);
@@ -2586,6 +2623,10 @@ void Console_RegisterAll(void) {
     Console_RegisterCommandEx("gfx_autotune", cmd_autotune, "Adjust the GPU effects to this machine",
                               "gfx_autotune",
                               "Turns every effect on, then off one by one outdoors until frames fit 60 fps.");
+    Console_RegisterCommandEx("extra", cmd_extra, "Drop a sprite extra where the hero stands",
+                              "extra <sprite> [height] [dx] [dz]",
+                              "Spawns one of the raw sprites as an extra, still where it landed, so the "
+                              "renderer's sprite path can be looked at on purpose rather than waited for.");
     Console_RegisterCommandEx("behaviour", cmd_behaviour, "Read/set hero behaviour (comportement)",
                               "behaviour [0..13]", "0=Normal 1=Sportif 2=Aggressive 3=Discreet 4=Protopack. Routes through SetComportement.");
     Console_RegisterCommandEx("weapon", cmd_weapon, "Read/set hero active weapon",

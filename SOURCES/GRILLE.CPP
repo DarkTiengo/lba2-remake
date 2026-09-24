@@ -2,6 +2,7 @@
 #include "BEZIER.H" /* ShadowCorner */
 #include "DIRECTORIES.H"
 #include "GRILLE_GPU.H"
+#include "SPRITE_GPU.H"
 
 #include <3D/PROJREC.H>
 #include <SVGA/SCREEN.H>
@@ -273,6 +274,7 @@ void InitGrille(U32 numcube) {
     CreateMaskGph(BufferBrick, BufferMaskBrick);
 
     GrilleGpu_Reset();
+    SpriteGpu_Reset(); /* the atlas the bricks share now holds another scene's sprites */
 
     ManageSystem(); // for streaming
 

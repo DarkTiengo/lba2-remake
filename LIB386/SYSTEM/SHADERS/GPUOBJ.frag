@@ -116,6 +116,7 @@ const int MODE_BRICK = 7;
 const int MODE_ORB = 8;
 const int MODE_SHADOW = 9;
 const int MODE_SILHOUETTE = 10;
+const int MODE_SPRITE = 11;
 
 /* Must match ISO_DEPTH_RANGE in AFF_GPU.CPP: bricks and iso bodies share depth. */
 const float ISO_DEPTH_RANGE = 524288.0;
@@ -392,6 +393,22 @@ void main() {
         if (o_shadow.r < 0.004 && o_shadow.g < 0.004) {
             discard;
         }
+        return;
+    }
+
+    if (mode == MODE_SPRITE) {
+        /* An extra's sprite. Coverage comes from the atlas cell, so the shape is
+           the sprite's own; the colour is left to the software frame, which has
+           it filtered as every other 2D pixel is; and the depth is the quad's,
+           which is the whole point -- it is what lets the terrain or a body hide
+           a sprite the software painter would have drawn over them. */
+        if (texelFetch(u_atlas, ivec2(floor(v_uv.xy)), 0).g < 0.5) {
+            discard;
+        }
+        o_color = vec4(0.0); /* alpha 0: show the software frame here */
+        o_id = vec4(id, 0.0, 0.0, 1.0);
+        o_light = vec4(min(DynamicLight(v_vpos.xyz, vec3(0.0, 1.0, 0.0), false), vec3(2.0)) * 0.5, 0.0);
+        o_shadow = vec4(0.0, 0.0, PackDistance(v_vpos.xyz, false));
         return;
     }
 

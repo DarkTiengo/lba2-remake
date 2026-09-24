@@ -21,6 +21,7 @@
 
 #include <OBJECT/AFF_GPU.H>
 #include "3DEXT/TERRAIN.H" /* Sky_Y */
+#include "SPRITE_GPU.H"  /* extras with a real depth */
 #include <3D/CAMERA.H>
 #include <SVGA/GPUSKY.H>
 #include <SVGA/GPUSTORM.H>
@@ -5316,9 +5317,19 @@ S32 AffOneObject(T_SORT *pt) {
                                   HQR_Get(HQRPtrSpriteRaw, num),
                                   PtrTransPal);
             } else {
+                /* The GPU draws the same rectangle at the extra's depth, so the
+                   scenery can hide it; the software blit below is still what
+                   tags the pixels and what colours them. PtrProjectPoint above
+                   left the extra's rotated position, hence its depth, in Z0. */
+                const S32 spriteDepth = CameraZr - Z0;
+                void *spriteData = HQR_Get(HQRPtrSpriteRaw, num);
+                const S32 onGpu = !orb AND SpriteGpu_Begin(num, spriteData, SpriteX, SpriteY, ScaleFactorSprite);
                 ScaleSprite(0, SpriteX, SpriteY,
                             ScaleFactorSprite, ScaleFactorSprite,
-                            HQR_Get(HQRPtrSpriteRaw, num));
+                            spriteData);
+                if (onGpu) {
+                    SpriteGpu_End(spriteDepth);
+                }
             }
             if (orb) {
                 AffGpu_OrbEnd(Xp, Yp, PtrPal);

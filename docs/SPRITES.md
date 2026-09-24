@@ -46,6 +46,10 @@ followed by `Delta_X * Delta_Y` palette-indexed bytes (color 0 = transparent). A
 
 The hot-spot is what the engine places at `(x, y)`: `screen_x = x + Hot_X`. In the scaled blitter, the hot-spot itself is scaled by `factorx` so the visual centre of the sprite stays put as the sprite shrinks.
 
+## On the GPU (exteriors)
+
+With the GPU renderer, an extra is also drawn as a quad at its own depth, so the scenery can hide it; the software blit stays, carrying the tag and the colour. See [GPU_RENDERER.md](GPU_RENDERER.md) ("Sprites are depth-tested outdoors") and [SOURCES/SPRITE_GPU.CPP](../SOURCES/SPRITE_GPU.CPP).
+
 ## Render primitives
 
 Three blit primitives. All three live in `LIB386/SVGA/`, declared in `LIB386/H/SVGA/`, and write to the `Log` framebuffer using `TabOffLine` / `ModeDesiredX`. Clipping uses `ClipXMin` / `ClipXMax` / `ClipYMin` / `ClipYMax`. They report the touched bounding box back via `ScreenXMin` … `ScreenYMax`.

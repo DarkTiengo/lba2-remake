@@ -1,5 +1,6 @@
 #include "3DEXT/TERRAIN_GPU.H"
 #include <SVGA/GPUSKY.H>
+#include "SPRITE_GPU.H"
 #include "GPUTUNE.H"
 #include <SVGA/GPUSTORM.H>
 #include "C_EXTERN.H"
@@ -151,6 +152,8 @@ static const T_SETTING BootSettings[] = {
      "GPU renderer: the effects were adjusted to this machine (0 measures again outdoors)"},
     {"GpuSmoothTerrain", NULL, "gfx_smoothterrain", &TerrainGpuSmooth, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL,
      NULL, NULL, "GPU renderer: terrain cells curved into smooth hills and valleys"},
+    {"GpuSprites", NULL, "gfx_sprites", &GpuObjSprites, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
+     "GPU renderer: sprites outdoors are depth-tested, so the scenery can hide them"},
     {"GpuFastTerrain", NULL, "gfx_fastterrain", &TerrainGpuFastFill, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL,
      NULL, NULL,
      "GPU renderer: the software terrain fill is flat where the GPU covers it (its colour is the GPU's)"},
