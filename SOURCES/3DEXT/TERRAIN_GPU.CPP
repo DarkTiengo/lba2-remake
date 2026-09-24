@@ -283,7 +283,7 @@ static void DisplacedWaterVertex(T_GPUOBJ_VERTEX *v, float x, float y, float dep
     AffGpu_ViewVertex(v, x + height * m->F.M12, y + height * m->F.M22, depth - height * m->F.M32);
     v->normal[0] = normal[0] * m->F.M11 + normal[1] * m->F.M12 + normal[2] * m->F.M13;
     v->normal[1] = normal[0] * m->F.M21 + normal[1] * m->F.M22 + normal[2] * m->F.M23;
-    v->normal[2] = -(normal[0] * m->F.M31 + normal[1] * m->F.M32 + normal[2] * m->F.M33);
+    v->normal[2] = normal[0] * m->F.M31 + normal[1] * m->F.M32 + normal[2] * m->F.M33;
     /* The contact pass compares the fixed sea datum to the fixed shoreline;
        the renderer subtracts this interpolated vertical displacement there. */
     v->normal[3] = height;

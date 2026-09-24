@@ -353,6 +353,11 @@ void main() {
        view-space point is projected onto the scene's world-up axis, which is
        valid for both rotated perspective scenery and isometric rooms. */
     o_height = dot(v_vpos.xyz, upDir.xyz);
+    /* The broad sea's depth and visible pixels follow its raised mesh, but
+       shoreline contact compares the fixed sea datum to fixed CodeJeu coast. */
+    if ((Flags() & FLAG_WATER) != 0 && (Flags() & FLAG_WATER_TERRAIN) == 0) {
+        o_height -= v_normal.w;
+    }
 
     if (mode == MODE_SILHOUETTE) {
         /* A body flattened on the ground: the sun's shadow (r) or a light's (g,
