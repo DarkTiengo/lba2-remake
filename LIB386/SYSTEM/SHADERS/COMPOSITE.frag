@@ -59,6 +59,8 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 stormLight; // xyz toward the flash in scene space, w exterior
     vec4 stormUp;    // xyz world up, w seconds since the strike
     vec4 stormView;  // the scene's window in frame uv (x0, y0, x1, y1): cinema bars outside
+    vec4 stormGroundX; // xyz the world's X axis in scene space, w the camera's world X
+    vec4 stormGroundZ; // and its Z axis, w the camera's world Z
     vec4 skyFog;     // rgb the fog colour at the horizon, w: 1 the GPU draws the sky, 2 above the clouds
     vec4 skyUp;      // xyz world up in scene space, w daylight
     vec4 skyX;       // xyz the world's X axis, w cloud cover
@@ -810,9 +812,10 @@ float RainSplash(vec3 pos, vec3 n, float t) {
     if (dot(n, up) < 0.75) {
         return 0.0;
     }
-    vec3 a = normalize(cross(up, abs(up.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)));
-    vec3 b = cross(up, a);
-    vec2 g = vec2(dot(pos, a), dot(pos, b));
+    /* The grid is the world's, not the camera's: a scene point's world X is the
+       camera's plus its projection on the world's X axis. Gridded in scene
+       space, every splash would slide along the ground as the camera orbits. */
+    vec2 g = vec2(dot(pos, stormGroundX.xyz) + stormGroundX.w, dot(pos, stormGroundZ.xyz) + stormGroundZ.w);
     const float CELL = 300.0;
     vec2 cell = floor(g / CELL);
     float sum = 0.0;

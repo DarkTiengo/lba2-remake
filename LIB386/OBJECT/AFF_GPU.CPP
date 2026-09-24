@@ -792,7 +792,12 @@ static void UpdateSceneLight(void) {
         const S32 savedX = X0;
         const S32 savedY = Y0;
         const S32 savedZ = Z0;
-        /* The world's axes too: the sky is anchored to them. */
+        /* The world's axes too: the sky is anchored to them, and the rain's
+           ground grid. Where the camera stands goes with them, taken at the
+           same moment, so a scene point can be put back in the world. */
+        GpuObjCameraPos[0] = (float)CameraX;
+        GpuObjCameraPos[1] = (float)CameraY;
+        GpuObjCameraPos[2] = (float)CameraZ;
         LongRotatePoint(&MatriceWorld, 4096, 0, 0);
         GpuObjWorldX[0] = (float)X0 / 4096.0f;
         GpuObjWorldX[1] = (float)Y0 / 4096.0f;

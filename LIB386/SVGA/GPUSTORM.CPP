@@ -182,4 +182,15 @@ void GpuStorm_GetUniforms(float *out, float frameW, float frameH) {
     out[13] = up[1];
     out[14] = up[2];
     out[15] = age;
+    /* The ground grid the splashes stand on, in the world: a scene point's
+       world X is the camera's plus its projection on the world's X axis, which
+       is what keeps a splash on its puddle while the camera turns around it. */
+    out[20] = GpuObjWorldX[0];
+    out[21] = GpuObjWorldX[1];
+    out[22] = GpuObjWorldX[2];
+    out[23] = GpuObjCameraPos[0];
+    out[24] = GpuObjWorldZ[0];
+    out[25] = GpuObjWorldZ[1];
+    out[26] = GpuObjWorldZ[2];
+    out[27] = GpuObjCameraPos[2];
 }

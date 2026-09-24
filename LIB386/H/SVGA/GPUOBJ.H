@@ -128,6 +128,8 @@ extern float GpuObjSunDir[3];
 extern float GpuObjUpDir[3];
 extern float GpuObjWorldX[3]; ///< the world's X axis in scene space (3D)
 extern float GpuObjWorldZ[3]; ///< and its Z axis
+extern float GpuObjCameraPos[3]; ///< where the camera stands in the world, taken with those axes: a
+                                 ///< scene point's world coordinate is this plus its projection on them
 extern S32 GpuObjSunExterior;
 extern float GpuObjFocal; ///< frame pixels per scene unit at depth 1 (3D), per unit (iso)
 extern S32 GpuObjRayTrace;  ///< shadows ray traced over every body and the terrain outdoors (gfx_raytrace)

@@ -32,7 +32,7 @@ void GpuStorm_Strike(void);
 /** Rain falls or a flash is lit: the composite must run. */
 S32 GpuStorm_Active(void);
 
-#define GPUSTORM_UNIFORM_FLOATS 20
+#define GPUSTORM_UNIFORM_FLOATS 28
 
 /** The composite's storm block, for a frame of frameW x frameH pixels:
  *  rain (on, seconds, density, flash), bolt (x and horizon in frame uv, seed,
