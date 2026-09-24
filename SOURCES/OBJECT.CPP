@@ -5041,6 +5041,13 @@ S32 AffOneObject(T_SORT *pt) {
                                           AND TestNumObjFollow // protec boucle infinie
                                               AND !CameraZone) {
                             TestNumObjFollow = FALSE;
+                            /* The Auto camera answers this by bringing the boom
+                               in over the next frames, which keeps the angle the
+                               player is holding; only if it declines does the
+                               classic cut behind the hero stand. */
+                            if (FollowCam_TargetHidden()) {
+                                return FALSE;
+                            }
                             CameraCenter(1);
                             return TRUE;
                         }

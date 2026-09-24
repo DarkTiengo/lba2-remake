@@ -10,6 +10,7 @@
 #include "SETTINGS.H"
 #include "INPUT.H"
 #include <SYSTEM/KEYBOARD_KEYS.H>
+#include <3D/GETANG3D.H>
 #include <SYSTEM/LOG.H>
 
 /* FollowCamera refreshes terrain with AFF_ALL_FLIP every movement frame.
@@ -32,6 +33,7 @@ S32 FollowCamHDLeanGain = FOLLOW_CAM_HD_LEAN_GAIN_DEFAULT;
 S32 FollowCamGround = FOLLOW_CAM_GROUND_DEFAULT;
 S32 FollowCamGroundClearance = FOLLOW_CAM_GROUND_CLEARANCE_DEFAULT;
 S32 FollowCamDecor = FOLLOW_CAM_DECOR_DEFAULT;
+S32 FollowCamHidden = FOLLOW_CAM_HIDDEN_DEFAULT;
 S32 FollowCamCeiling = FOLLOW_CAM_CEILING_DEFAULT;
 S32 FollowCamCeilingClearance = FOLLOW_CAM_CEILING_CLEARANCE_DEFAULT;
 S32 FollowCamManualHoldFrames = FOLLOW_CAM_MANUAL_HOLD_DEFAULT;
@@ -59,6 +61,9 @@ static S32 FollowCamPrevAlphaCam = -1;  /* dirty: numpad +/- elevation while fol
 static S32 FollowCamEyeLift = 0;        /* ground clearance: eased eye lift above terrain */
 static S32 FollowCamGroundSettling = 0; /* ground/ceiling clearance: lift or drop still easing (keeps the dirty check live while the hero stands still) */
 static S32 FollowCamEyeDrop = 0;        /* ceiling clearance: eased eye drop under the cloud ceiling */
+static S32 FollowCamEyeNet = 0;         /* what the two clearances together move the eye by, for the render */
+static S32 FollowCamHiddenNow = 0;      /* the renderer found the hero behind the scenery this frame */
+static S32 FollowCamHiddenFrames = 0;   /* how long it has been saying so */
 
 /* This file's live settings, applied to the rule in FOLLOWCAM_MATH.H (which the
  * host test covers). Callers pass 0 instead inside a camera zone, so an authored
@@ -195,8 +200,42 @@ static S32 FollowCamDecorDist(S32 hx, S32 hy, S32 hz, S32 ex, S32 ey, S32 ez, S3
  * The ground lift is deliberately not included: AffGrilleExt has always
  * discarded it, so the exterior has never been drawn from a lifted eye, and
  * making it live here would change how the shipped ground clearance looks. */
-S32 FollowCam_EyeCeilingDrop(void) {
-    return (FollowCamera AND CubeMode == CUBE_EXTERIEUR) ? FollowCamEyeDrop : 0;
+/* Point the camera at a place after the eye has been moved off the boom.
+ *
+ * Not SetTargetCamera, which is what this used to call: that one reads the
+ * world's height out of CameraZ and its depth out of CameraY (LIB386/3D/
+ * CAMERA.CPP, upstream's own swap; the classic forced camera is its only other
+ * caller, so it stays exactly as it is). Handed an eye a few hundred units
+ * lower, it answered with a camera turned most of the way round the world and
+ * pitched at the ground -- and since SetAngleCamera rebuilds the world matrix
+ * and the light with it, the scene's shading and shadows swung with it. That is
+ * what tilting near the cloud ceiling looked like. The angles from the eye to
+ * the place, taken the right way round. */
+void FollowCam_AimAt(S32 x, S32 y, S32 z) {
+    GetAngleVector3D(x - CameraX, y - CameraY, z - CameraZ);
+    SetAngleCamera(X0, Y0, GammaCam);
+}
+
+/* The renderer drew the hero and found nothing of him left: the scenery is in
+ * front of every pixel (DrawRecover, SOURCES/OBJECT.CPP). The classic camera
+ * answers by cutting straight back behind him, which is right for a camera that
+ * was always behind him anyway. With the free camera it throws away the angle
+ * the player chose, and where the scenery is broken up -- the rocks around the
+ * cow on Citadel Island are the place this was reported from -- it fires again
+ * and again, whipping the view a third of the way round the world each time.
+ * So the boom comes in instead, and the classic cut is kept as the last resort
+ * for a hero who stays hidden with the arm already at its shortest. */
+S32 FollowCam_TargetHidden(void) {
+    if (!FollowCamHidden OR !FollowCamera OR CubeMode != CUBE_EXTERIEUR) {
+        return FALSE; /* the caller cuts back behind the hero, as it always did */
+    }
+    FollowCamHiddenNow = TRUE;
+    return FollowCamHiddenFrames < FOLLOW_CAM_HIDDEN_GIVE_UP
+           OR FollowCamEffectiveDist > FOLLOW_CAM_DECOR_MIN_DIST;
+}
+
+S32 FollowCam_EyeOffset(void) {
+    return (FollowCamera AND CubeMode == CUBE_EXTERIEUR) ? FollowCamEyeNet : 0;
 }
 
 /* Per-frame Auto-camera update (exterior). Extracted from the main loop:
@@ -374,6 +413,20 @@ void UpdateFollowCameraExt(void) {
                     FollowCamEffectiveDist = FollowCamBaseDist;
             }
 
+            /* Hidden hero: bring the boom in a step for every frame the
+             * renderer reports him covered, down to the same floor the scenery
+             * clearance uses. The spring recovery above gives it back as soon
+             * as he is in sight again, so this is a dip, not a new distance. */
+            if (FollowCamHiddenNow) {
+                FollowCamHiddenFrames++;
+                FollowCamEffectiveDist -= FOLLOW_CAM_HIDDEN_PULL;
+                if (FollowCamEffectiveDist < FOLLOW_CAM_DECOR_MIN_DIST)
+                    FollowCamEffectiveDist = FOLLOW_CAM_DECOR_MIN_DIST;
+            } else {
+                FollowCamHiddenFrames = 0;
+            }
+            FollowCamHiddenNow = FALSE;
+
             /* HD recompose (render-time only; logical AlphaCam and
                              * FollowCamBaseDist are left untouched and restored
                              * below). Pull the boom in so the subject fills the
@@ -398,6 +451,17 @@ void UpdateFollowCameraExt(void) {
             VueDistance = renderDist;
             CameraCenter(3);
             AlphaCam = saveAlphaCam;
+            /* Place the eye once more with the angle the render will use. The
+             * clearances below measure a view and then move the eye of it, and
+             * the view they must measure is the one AffGrilleExt draws: it
+             * re-derives the eye from AlphaCam and VueDistance, so the pitch the
+             * HD recompose just added is not in it. Measured against the
+             * recomposed eye instead, the ceiling drop came out a thousand units
+             * too large and the render sank that far into the ground, taking the
+             * scene's light and shadows round with it. */
+            if (hdExcess) {
+                CameraCenter(3);
+            }
 
             /* Terrain occlusion clearance: a smooth port of the
                              * classic SearchCameraPos awareness. CameraCenter(3)
@@ -538,9 +602,10 @@ void UpdateFollowCameraExt(void) {
              * lifted over the ground and held under the ceiling. Kept for the
              * scenery draw too: AffGrilleExt re-derives the eye from the boom
              * (SetFollowCamera) and reapplies the ceiling drop there. */
-            if (effLift - FollowCamEyeDrop != 0) {
-                SetPosCamera(ex, ey + effLift - FollowCamEyeDrop, ez);
-                SetTargetCamera(VueOffsetX, VueOffsetY, VueOffsetZ, GammaCam);
+            FollowCamEyeNet = effLift - FollowCamEyeDrop;
+            if (FollowCamEyeNet != 0) {
+                SetPosCamera(ex, ey + FollowCamEyeNet, ez);
+                FollowCam_AimAt(VueOffsetX, VueOffsetY, VueOffsetZ);
             }
         } else {
             VueDistance = FollowCamEffectiveDist;
@@ -549,6 +614,7 @@ void UpdateFollowCameraExt(void) {
              * mid-ease when the hero enters a camera zone keeps the dirty
              * check true forever, re-rendering the terrain every idle frame. */
             FollowCamGroundSettling = 0;
+            FollowCamEyeNet = 0;
         }
 
         FirstTime = AFF_ALL_FLIP;
@@ -576,6 +642,9 @@ void FollowCamResetToView(void) {
     /* Drop the smoothed ground lift so the recenter starts from the clean reset
      * position instead of gliding down from a stale terrain-occluder lift. */
     FollowCamEyeLift = 0;
+    FollowCamEyeNet = 0;
+    FollowCamHiddenNow = 0;
+    FollowCamHiddenFrames = 0;
     FollowCamGroundSettling = 0;
 }
 
@@ -630,6 +699,9 @@ static const T_SETTING FollowCamSettings[] = {
     {"FollowCamDecor", NULL, "cam_decor", &FollowCamDecor, SETTING_TRUTHY,
      FOLLOW_CAM_DECOR_DEFAULT, 0, 1, NULL, NULL, NULL, NULL,
      "Auto cam: shorten the boom rather than reach through scenery"},
+    {"FollowCamHidden", NULL, "cam_hidden", &FollowCamHidden, SETTING_TRUTHY,
+     FOLLOW_CAM_HIDDEN_DEFAULT, 0, 1, NULL, NULL, NULL, NULL,
+     "Auto cam: bring the boom in when the scenery hides the hero, rather than cutting behind him"},
     {"FollowCamCeiling", NULL, "cam_ceiling", &FollowCamCeiling, SETTING_TRUTHY,
      FOLLOW_CAM_CEILING_DEFAULT, 0, 1, NULL, NULL, NULL, NULL,
      "Auto cam: keep the eye under the island's cloud ceiling"},

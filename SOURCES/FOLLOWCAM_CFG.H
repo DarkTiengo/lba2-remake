@@ -135,6 +135,11 @@
 #define FOLLOW_CAM_DECOR_FROM 35      /* % of the way out the samples start */
 #define FOLLOW_CAM_DECOR_MIN_DIST 2500 /* never pull the arm in past this */
 
+/* Hidden hero (the renderer's own DrawRecover verdict) --------------------- */
+#define FOLLOW_CAM_HIDDEN_DEFAULT 1   /* master enable (cam_hidden) */
+#define FOLLOW_CAM_HIDDEN_PULL 700    /* boom units to come in per hidden frame */
+#define FOLLOW_CAM_HIDDEN_GIVE_UP 90  /* hidden frames at the shortest arm before the classic cut */
+
 /* Gamepad right-stick camera ------------------------------------------------*/
 #define GAMEPAD_CAM_SENS_DEFAULT 5 /* default right-stick sensitivity (1-10 range) */
 /* Defaults for the runtime GamepadCamMaxBeta / GamepadCamMaxAlpha globals

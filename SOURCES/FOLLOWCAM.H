@@ -64,6 +64,7 @@ extern S32 FollowCamHDLeanGain;       /* HD recompose forward-lean cut (% per 1.
 extern S32 FollowCamGround;           /* smooth terrain ground-clearance lift (1=on) */
 extern S32 FollowCamGroundClearance;  /* keep the eye this far above the ground under it */
 extern S32 FollowCamDecor;            /* shorten the boom rather than reach through scenery (1=on) */
+extern S32 FollowCamHidden;           /* bring the boom in when the scenery hides the hero (1=on) */
 extern S32 FollowCamCeiling;          /* keep the eye under the island's cloud ceiling (1=on) */
 extern S32 FollowCamCeilingClearance; /* keep the eye this far under that ceiling */
 extern S32 FollowCamManualHoldFrames; /* manual-override hold length (cvar cam_manual_hold) */
@@ -73,10 +74,26 @@ extern S32 FollowCamHoldAngle;        /* hold manual rotation, no auto-recenter 
  * private to FOLLOWCAM.CPP. */
 extern S32 FollowCamBaseDist;      /* player's chosen zoom distance (0 = uninitialised) */
 
-/* How far the last update held the eye under the island's cloud ceiling.
- * AffGrilleExt re-derives the eye from the boom before drawing the scenery, and
- * applies this, so the world is not drawn from an eye above the ceiling. */
-extern S32 FollowCam_EyeCeilingDrop(void);
+/* What the two clearances together moved the eye by in the last update: the
+ * ground lift up, the ceiling drop down. AffGrilleExt re-derives the eye from
+ * the boom before drawing the scenery and applies this again, or the world is
+ * drawn from an eye the camera already ruled out -- and, since the drop is
+ * measured against the lifted eye, applying only the drop sinks the view by
+ * exactly the lift. */
+extern S32 FollowCam_EyeOffset(void);
+
+/* Point the camera at a world place from wherever the eye now stands, rebuilding
+ * the world matrix and the scene's light with it. For the callers that move the
+ * eye off the boom. Not SetTargetCamera, whose axes are swapped (see the
+ * definition). */
+extern void FollowCam_AimAt(S32 x, S32 y, S32 z);
+
+/* The renderer found the followed object completely covered by the scenery.
+ * TRUE when the Auto camera has taken it on (it brings the boom in over the
+ * next frames); FALSE when the caller should cut back behind him as it always
+ * did -- the classic camera, a room, or a hero still hidden with the boom
+ * already as short as it goes. */
+extern S32 FollowCam_TargetHidden(void);
 extern S32 FollowCamReengageDelay; /* frames before auto-center resumes after manual pan */
 extern S32 FollowCamManualHold;    /* frames the pitch/distance auto-assist yields after a manual nudge */
 

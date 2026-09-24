@@ -10,6 +10,9 @@
 # y 765..5931, z 7654..9653 in that cube) and the camera is tilted down and orbited past it, so
 # the building is between the camera and the hero for part of the turn.
 #
+# `cam_hidden` is off in both runs: a building between the camera and the hero hides him, so that
+# mechanism shortens the boom for its own reasons and neither run would be measuring this one.
+#
 # Local-only (needs retail data + the tracked corpus save). Not in host_quick CI.
 TESTNAME=followcam_decor
 . "$(dirname "$0")/lib.sh"
@@ -27,7 +30,7 @@ trap 'rm -f "$blocked" "$through"' EXIT
 
 orbit_past_the_building() { # <log> <cam_decor>
     ctl_headless --load "$SAVE" --fixed-dt 16 \
-        --exec "cam_follow 1; cam_hold_angle 1; camtrace 1; cam_decor $2" \
+        --exec "cam_follow 1; cam_hold_angle 1; camtrace 1; cam_decor $2; cam_hidden 0" \
         --exec-at 10 "teleport 16000 1360 10500" \
         --exec-at 30 "camnudge 0 -40 40" \
         --exec-at 90 "camnudge 8 0 150" \

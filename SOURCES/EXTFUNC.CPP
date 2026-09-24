@@ -13,6 +13,7 @@
 
 #include <stdio.h>
 
+#include <SYSTEM/LOG.H>
 #include <SVGA/SCREEN.H>
 #include <SYSTEM/KEYBOARD_KEYS.H>
 #include <SYSTEM/MOUSE.H>
@@ -355,15 +356,27 @@ void AffGrilleExt() {
     SetFollowCamera(VueOffsetX, VueOffsetY, VueOffsetZ,
                     AlphaCam, BetaCam, GammaCam,
                     VueDistance);
-    /* The boom's eye, held under the cloud ceiling as the Auto camera held it.
-       Without this the scenery is drawn from an eye above the ceiling, and the
-       ceiling — a solid plane to the GPU renderer's depth — hides the island
-       under it. */
+    /* The eye as the Auto camera left it: lifted over the ground it would have
+       sunk into, held under the cloud ceiling (a solid plane to the GPU
+       renderer's depth, which would otherwise hide the island under it). The
+       boom above put the eye back where the angles alone say, so both are
+       applied again here. */
     {
-        const S32 ceilingDrop = FollowCam_EyeCeilingDrop();
-        if (ceilingDrop != 0) {
-            SetPosCamera(CameraX, CameraY - ceilingDrop, CameraZ);
-            SetTargetCamera(VueOffsetX, VueOffsetY, VueOffsetZ, GammaCam);
+        const S32 eyeOffset = FollowCam_EyeOffset();
+        if (eyeOffset != 0) {
+            SetPosCamera(CameraX, CameraY + eyeOffset, CameraZ);
+            FollowCam_AimAt(VueOffsetX, VueOffsetY, VueOffsetZ);
+        }
+        /* `camtrace`: the camera the scenery is actually drawn from. The Auto
+           camera's own trace reports what it decided; this reports what the
+           render made of it, and the two parting company is a defect of its own
+           (an eye measured against one view and moved in another). */
+        if (DbgCamTrace) {
+            Log_Info("[camdraw] eye %6d %6d %6d aim %6d %6d %6d alpha %4d beta %4d dist %6d "
+                     "want_alpha %4d want_beta %4d offset %5d",
+                     (int)CameraX, (int)CameraY, (int)CameraZ, (int)VueOffsetX, (int)VueOffsetY,
+                     (int)VueOffsetZ, (int)CameraAlpha, (int)CameraBeta, (int)VueDistance, (int)AlphaCam,
+                     (int)BetaCam, (int)eyeOffset);
         }
     }
     Water_SetScene(Island, CurrentCubeX, CurrentCubeY);
