@@ -9,6 +9,7 @@
 #include <SVGA/GPUOBJ.H>
 #include <SVGA/GPUWATER.H>
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -111,7 +112,77 @@ int main() {
     Plane(TRUE, quad);
     Check(vertices[0].vpos[1] != crestY && vertices[0].normal[1] != 1.0f,
           "analytic waves displace mesh vertices and normals");
+    Check(vertices[0].vpos[1] - vertices[0].normal[3] == (float)quad[0].V_Y0,
+          "contact height keeps the undisplaced sea datum while depth stays raised");
     const float translatedHeight = vertices[0].vpos[1];
+
+    /* Test the production mesh against its original plane under two camera
+       rotations. The contact attachment projects onto the rotated world up. */
+    {
+        const TYPE_MAT saved = MatriceWorld;
+        STRUC_CLIPVERTEX tiltedQuad[4];
+        std::memcpy(tiltedQuad, quad, sizeof(tiltedQuad));
+        for (S32 i = 0; i < 4; i++) {
+            tiltedQuad[i].V_Y0 = 125;
+        }
+        const float c = 0.70710678f;
+        for (S32 rotation = 0; rotation < 2; rotation++) {
+            std::memset(&MatriceWorld, 0, sizeof(MatriceWorld));
+            if (rotation == 0) {
+                MatriceWorld.F.M11 = 1.0f;
+                MatriceWorld.F.M22 = MatriceWorld.F.M33 = c;
+                MatriceWorld.F.M23 = -c;
+                MatriceWorld.F.M32 = c;
+            } else {
+                MatriceWorld.F.M11 = MatriceWorld.F.M22 = c;
+                MatriceWorld.F.M12 = -c;
+                MatriceWorld.F.M21 = c;
+                MatriceWorld.F.M33 = 1.0f;
+            }
+            TerrainGpu_SetWaterScene(0, 8, 9);
+            Plane(TRUE, tiltedQuad);
+            bool datum = allocated == 384;
+            bool raised = false, lowered = false;
+            const S32 cornerX[6] = {0, 0, 1, 0, 1, 1};
+            const S32 cornerZ[6] = {0, 1, 1, 0, 1, 0};
+            const float up[3] = {MatriceWorld.F.M12, MatriceWorld.F.M22, MatriceWorld.F.M32};
+            for (S32 zi = 0; zi < 8; zi++) {
+                for (S32 xi = 0; xi < 8; xi++) {
+                    for (S32 k = 0; k < 6; k++) {
+                        const T_GPUOBJ_VERTEX *v = &vertices[(zi * 8 + xi) * 6 + k];
+                        const float original[3] = {
+                            512.0f + 1024.0f * (float)(xi + cornerX[k]),
+                            125.0f,
+                            -1024.0f - 1024.0f * (float)(zi + cornerZ[k])};
+                        const float originalHeight = original[0] * up[0] + original[1] * up[1] + original[2] * up[2];
+                        const float displacedHeight = v->vpos[0] * up[0] + v->vpos[1] * up[1] + v->vpos[2] * up[2];
+                        const float height = v->normal[3];
+                        datum = datum && std::fabs(displacedHeight - height - originalHeight) < 0.1f;
+                        for (S32 axis = 0; axis < 3; axis++) {
+                            datum = datum && std::fabs(v->vpos[axis] - original[axis] - height * up[axis]) < 0.1f;
+                        }
+                        float sampledNormal[3];
+                        GpuWater_SampleSurface(v->uv[2] * 512.0f, v->uv[3] * 512.0f, NULL, sampledNormal);
+                        const float expectedNormal[3] = {
+                            sampledNormal[0] * MatriceWorld.F.M11 + sampledNormal[1] * MatriceWorld.F.M12 +
+                                sampledNormal[2] * MatriceWorld.F.M13,
+                            sampledNormal[0] * MatriceWorld.F.M21 + sampledNormal[1] * MatriceWorld.F.M22 +
+                                sampledNormal[2] * MatriceWorld.F.M23,
+                            sampledNormal[0] * MatriceWorld.F.M31 + sampledNormal[1] * MatriceWorld.F.M32 +
+                                sampledNormal[2] * MatriceWorld.F.M33};
+                        for (S32 axis = 0; axis < 3; axis++) {
+                            datum = datum && std::fabs(v->normal[axis] - expectedNormal[axis]) < 0.001f;
+                        }
+                        raised = raised || height > 1.0f;
+                        lowered = lowered || height < -1.0f;
+                    }
+                }
+            }
+            Check(datum, "rotated sea mesh preserves the original world-up contact datum");
+            Check(raised && lowered, "rotated sea mesh carries positive and negative displacement");
+        }
+        MatriceWorld = saved;
+    }
 
     /* The same point from a translated camera has exactly the same phase. */
     CameraX = 512;
