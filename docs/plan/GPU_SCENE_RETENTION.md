@@ -66,6 +66,23 @@ waits for it.
 That is the second reason the CPU side comes first. Every millisecond taken off the scenery
 arrives twice: once as itself, and once as a GPU that is given enough to do to wake up.
 
+## Where the scenery phase goes, a cube at a time
+
+Measured per cube on Desert Island at 720p, orbiting, with the curved land already indexed:
+
+| | per cube | per frame (15 cubes) |
+| --- | --- | --- |
+| the cube's decor objects (`AffichageObjetDecorsZBuf`) | 0.445 ms | 6.7 ms |
+| its cells: the software fill and the capture riding along | 0.96 ms | 14.4 ms |
+| its 65 x 65 grid, placed and projected | 0.086 ms | 1.3 ms |
+
+Of the cell walk, the capture is about 5 ms a frame (measured by turning it off) and the software
+fill the rest. So **the exterior's software rasterising is around 17 ms of a 52 ms frame** and the
+capture that rides along with it about 5.
+
+That reverses the order below. Retaining the scenery saves the capture; the capture is no longer
+the biggest thing in the frame. **Step 2 is.**
+
 ## What to do about it, in order
 
 ### 1. Retain the scenery between frames
@@ -139,8 +156,12 @@ will run into. **Risk:** mechanical but wide — every shader that reads a verte
 
 ## Order and why
 
-1 first because it is self-contained, reversible behind a setting, and pays the most per unit of
-risk. 2 second because until 1 lands the software fill is not the top cost, and because it wants
+**The order changed once the numbers did.** 2 first now: the software's own rasterising of the
+exterior is 17 ms of the frame and the capture is 5. 1 second, and smaller than it looked when it
+was written. 3 is done. 4 is not a speed change at all.
+
+The reasoning that put 1 first, kept because it is still true of 1: it is self-contained,
+reversible behind a setting, and pays the most per unit of risk. 2 second because until 1 lands the software fill is not the top cost, and because it wants
 the composite's attention on its own. 3 is the one to take first if 1 turns out to want the whole
 cube ring captured and the vertex budget says no: it buys a third of the same cost with a fraction
 of the risk, and it helps 1 when 1 comes. 4 is not a speed change at all.

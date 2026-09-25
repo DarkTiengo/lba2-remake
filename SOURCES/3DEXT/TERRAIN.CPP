@@ -951,6 +951,72 @@ U32 MaskVisible(U8 *in_ptr) {
 }
 
 /*──────────────────────────────────────────────────────────────────────────*/
+/* The 65 x 65 grid of a cube placed and projected in one pass: the same
+   answers as LongWorldRotatePoint + LongProjectPoint give, without the
+   long-double round trip per point. See the note at its one call site. */
+static void FastGrid(U8 *ptra, const S16 *ptrm, T_SOMMET_ROT *ptrs) {
+    const TYPE_MAT *m = &MatriceWorld;
+    const S32 side = NB_COTE + 1;
+    /* Each column's share of the rotation, and each row's. */
+    static double colX[NB_COTE + 1], colY[NB_COTE + 1], colZ[NB_COTE + 1];
+    static double rowX[NB_COTE + 1], rowY[NB_COTE + 1], rowZ[NB_COTE + 1];
+    for (S32 i = 0; i < side; i++) {
+        const double at = (double)(i * 512);
+        colX[i] = at * (double)m->F.M11;
+        colY[i] = at * (double)m->F.M21;
+        colZ[i] = at * (double)m->F.M31;
+        rowX[i] = at * (double)m->F.M13;
+        rowY[i] = at * (double)m->F.M23;
+        rowZ[i] = at * (double)m->F.M33;
+    }
+    const double m12 = (double)m->F.M12, m22 = (double)m->F.M22, m32 = (double)m->F.M32;
+    const double camXr = (double)CameraXr, camYr = (double)CameraYr;
+    const double ratioX = (double)FRatioX, ratioY = (double)FRatioY;
+    const S32 guard16 = FollowCamera;
+
+    for (S32 iz = 0; iz < side; iz++) {
+        for (S32 ix = 0; ix < side; ix++, ptra++, ptrm++, ptrs++) {
+            const double y = (double)*ptrm;
+            const S32 X0f = (S32)lrint(colX[ix] + y * m12 + rowX[iz]);
+            const S32 Y0f = (S32)lrint(colY[ix] + y * m22 + rowY[iz]);
+            const S32 Z0f = (S32)lrint(colZ[ix] + y * m32 + rowZ[iz]);
+            const S32 zr = CameraZr - Z0f;
+
+            if (zr <= NearClip) {
+                *ptra = 32;
+                continue;
+            }
+            if (zr >= ClipZFar) {
+                *ptra = 0;
+                continue;
+            }
+            const double factor = ratioX / (double)zr;
+            const S32 xp = XCentre + (S32)lrint(((double)X0f - camXr) * factor);
+            const S32 yp = YCentre + (S32)lrint(((double)Y0f - camYr) * factor * ratioY);
+
+            /* The 16-bit truncation guard the free camera needs, as above. */
+            if (guard16 AND (xp != (S32)(S16)xp OR yp != (S32)(S16)yp)) {
+                *ptra = 32;
+                continue;
+            }
+
+            U8 flag = 16;
+            if (xp < ClipXMin)
+                flag |= 1;
+            if (xp > ClipXMax)
+                flag |= 2;
+            if (yp < ClipYMin)
+                flag |= 4;
+            if (yp > ClipYMax)
+                flag |= 8;
+            *ptra = flag;
+            ptrs->Zrot = zr;
+            ptrs->X2D = (S16)xp;
+            ptrs->Y2D = (S16)yp;
+        }
+    }
+}
+
 void AffichageTerrainZBuf(void) {
     S16 *ptrm;
     U8 *ptra;
@@ -964,6 +1030,19 @@ void AffichageTerrainZBuf(void) {
     ptrm = MapSommetY;
     ptrs = &SommetRot[0][0];
 
+    /* The grid's own placement, when the GPU renderer is the one drawing.
+       Sixty-five by sixty-five points a cube, a dozen cubes a frame, each one
+       rotated and projected through the engine's long-double path: 8 ms of an
+       orbiting frame at 720p, more than the capture that rides along with it.
+       The rotation of a regular lattice is affine, so the columns' and rows'
+       shares are worth computing once, and the rest is a multiply-add and one
+       divide a point in double precision -- which rounds to the same integers
+       everywhere the classic path's 80 bits do, bar the exact halfway cases
+       that do not survive a frame either way. The classic renderer keeps the
+       path it was verified with. */
+    if (GpuObj_Active()) {
+        FastGrid(ptra, ptrm, ptrs);
+    } else
     for (S32 z = 0; z <= NB_COTE * 512; z += 512) {
         for (S32 x = 0; x <= NB_COTE * 512; x += 512) {
             S32 zr;
