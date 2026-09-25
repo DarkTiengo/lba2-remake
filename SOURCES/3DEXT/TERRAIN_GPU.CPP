@@ -309,11 +309,14 @@ static void WaterVertex(T_GPUOBJ_VERTEX *v, const STRUC_CLIPVERTEX src[4], float
 /* How far smooth terrain lifts the point of grid position (gx, gz) whose
    original triangle lies at height flat; cornerWeight is the share of its
    corners that may curve (none at a flat-drawn triangle's). */
-static float SmoothOffset(float gx, float gz, float flat, float cornerWeight) {
-    float p[3];
-    GridPoint(gx * (float)CELL_SIZE, flat, gz * (float)CELL_SIZE, p);
+/* The curve's rise at a grid point, given how far away the point already is.
+   The caller has placed the flat point in camera space to draw it, and that
+   placement is what the distance fade needs, so it is passed in rather than
+   computed again: at four subdivisions a land triangle is 48 vertices, and the
+   second placement was half the arithmetic of each one. */
+static float SmoothOffsetAt(float gx, float gz, float flat, float cornerWeight, float depth) {
     /* How much of the curve this point takes: none far away or at the sea. */
-    float w = (SMOOTH_FADE_FAR - p[2]) / (SMOOTH_FADE_FAR - SMOOTH_FADE_NEAR);
+    float w = (SMOOTH_FADE_FAR - depth) / (SMOOTH_FADE_FAR - SMOOTH_FADE_NEAR);
     w = w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
     float shore = (flat - 64.0f) / 320.0f;
     shore = shore < 0.0f ? 0.0f : (shore > 1.0f ? 1.0f : shore);
@@ -327,6 +330,13 @@ static float SmoothOffset(float gx, float gz, float flat, float cornerWeight) {
        barely: a sunk fold would open a gap onto what lies behind. */
     offset = offset < -SMOOTH_MAX_SINK ? -SMOOTH_MAX_SINK : (offset > SMOOTH_MAX_OFFSET ? SMOOTH_MAX_OFFSET : offset);
     return offset * w * shore * border * cornerWeight;
+}
+
+/* The same, for callers that have no placed point to hand (the grass). */
+static float SmoothOffset(float gx, float gz, float flat, float cornerWeight) {
+    float p[3];
+    GridPoint(gx * (float)CELL_SIZE, flat, gz * (float)CELL_SIZE, p);
+    return SmoothOffsetAt(gx, gz, flat, cornerWeight, p[2]);
 }
 
 /* A land triangle of cell (xi, zi) cut into smaller ones lying on the curved
@@ -348,6 +358,11 @@ static S32 SmoothTri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], f
         cw[i] = s_flatCorner[g] ? 0.0f : 1.0f;
     }
     const S32 n = 4;
+    const float invN = 1.0f / (float)n;
+    /* A unit of height in camera space: the curve raises the point along it, so
+       the point is placed once, flat, and then lifted. */
+    const TYPE_MAT *mat = &MatriceWorld;
+    const float upX = mat->F.M12, upY = mat->F.M22, upZ = -mat->F.M32;
     T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts((U32)(n * n * 3));
     if (v == NULL) {
         return FALSE;
@@ -363,8 +378,8 @@ static S32 SmoothTri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], f
                 const S32 pi[3] = {half ? i + 1 : i, i + 1, i};
                 const S32 pj[3] = {j, half ? j + 1 : j, j + 1};
                 for (S32 k = 0; k < 3; k++) {
-                    const float b0 = (float)pi[k] / (float)n;
-                    const float b1 = (float)pj[k] / (float)n;
+                    const float b0 = (float)pi[k] * invN;
+                    const float b1 = (float)pj[k] * invN;
                     const float b2 = 1.0f - b0 - b1;
                     const float gx = b0 * cx[0] + b1 * cx[1] + b2 * cx[2];
                     const float gz = b0 * cz[0] + b1 * cz[1] + b2 * cz[2];
@@ -372,9 +387,12 @@ static S32 SmoothTri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], f
                        cell's diagonal, as the classic terrain lies. */
                     const float flat = b0 * ch[0] + b1 * ch[1] + b2 * ch[2];
                     float p[3];
-                    GridPoint(gx * (float)CELL_SIZE,
-                              flat + SmoothOffset(gx, gz, flat, b0 * cw[0] + b1 * cw[1] + b2 * cw[2]),
-                              gz * (float)CELL_SIZE, p);
+                    GridPoint(gx * (float)CELL_SIZE, flat, gz * (float)CELL_SIZE, p);
+                    const float rise =
+                        SmoothOffsetAt(gx, gz, flat, b0 * cw[0] + b1 * cw[1] + b2 * cw[2], p[2]);
+                    p[0] += rise * upX;
+                    p[1] += rise * upY;
+                    p[2] += rise * upZ;
                     T_GPUOBJ_VERTEX *vert = &v[out++];
                     AffGpu_ViewVertex(vert, p[0], p[1], p[2]);
                     vert->normal[3] = perVertexShade ? (b0 * (float)lights[0] + b1 * (float)lights[1] +
