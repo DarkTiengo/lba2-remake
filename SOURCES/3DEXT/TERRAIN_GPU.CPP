@@ -261,6 +261,35 @@ static void OpenDraw(U8 *page, U8 *clut, S32 fogStart, S32 fogEnd, S32 fogColor)
     s_draw->FogColor = fogColor;
 }
 
+/* Another draw with the same material as the one given, for geometry that
+   cannot share a draw with what came before it: a draw is either indexed or
+   not, and the curved land is indexed where the flat land and the grass are
+   not. Returns FALSE when no draw is available, and the caller then emits
+   nothing. */
+static S32 ReopenDraw(const T_GPUOBJ_DRAW *like) {
+    GpuObj_EndDraw();
+    s_draw = GpuObj_BeginDraw();
+    if (s_draw == NULL) {
+        return FALSE;
+    }
+    s_draw->X0 = like->X0;
+    s_draw->Y0 = like->Y0;
+    s_draw->X1 = like->X1;
+    s_draw->Y1 = like->Y1;
+    s_draw->ZBuffer = like->ZBuffer;
+    s_draw->Retainable = like->Retainable;
+    s_draw->Page = like->Page;
+    s_draw->Clut = like->Clut;
+    s_draw->HasLogical = like->HasLogical;
+    if (like->HasLogical) {
+        memcpy(s_draw->Logical, like->Logical, sizeof(s_draw->Logical));
+    }
+    s_draw->FogStart = like->FogStart;
+    s_draw->FogEnd = like->FogEnd;
+    s_draw->FogColor = like->FogColor;
+    return TRUE;
+}
+
 static void PlanePoint(const STRUC_CLIPVERTEX src[4], float u, float t, float out[5]) {
     const float a = (1.0f - u) * (1.0f - t);
     const float b = (1.0f - u) * t;
@@ -342,6 +371,70 @@ static float SmoothOffset(float gx, float gz, float flat, float cornerWeight) {
     return SmoothOffsetAt(gx, gz, flat, cornerWeight, p[2]);
 }
 
+/* The sub-grid a land triangle is cut into: which of its points each small
+   triangle's corners are. The points are shared -- fifteen of them carry
+   forty-eight corners at four subdivisions -- so they are built once and
+   indexed, which is a third of the arithmetic and a third of the memory of
+   writing every corner out.
+
+   The first three are the original triangle's own corners, in the order the
+   shadow hierarchy reads them (SMOOTH_ORIGIN_SLOTS). */
+#define SMOOTH_N 4
+#define SMOOTH_POINTS ((SMOOTH_N + 1) * (SMOOTH_N + 2) / 2)
+#define SMOOTH_TRIS (SMOOTH_N * SMOOTH_N)
+
+static S32 s_subSlot[(SMOOTH_N + 1) * (SMOOTH_N + 1)]; ///< point (pi, pj) -> its slot
+static S32 s_subPi[SMOOTH_POINTS];
+static S32 s_subPj[SMOOTH_POINTS];
+static U32 s_subIndex[SMOOTH_TRIS * 3];
+static S32 s_subReady = FALSE;
+
+static void BuildSubGrid(void) {
+    const S32 n = SMOOTH_N;
+    for (S32 k = 0; k < (n + 1) * (n + 1); k++) {
+        s_subSlot[k] = -1;
+    }
+    S32 at = 0;
+    /* The corners first: (n,0), (0,n) and (0,0) are barycentric 0, 1 and 2. */
+    const S32 cornerPi[3] = {n, 0, 0};
+    const S32 cornerPj[3] = {0, n, 0};
+    for (S32 c = 0; c < 3; c++) {
+        s_subSlot[cornerPj[c] * (n + 1) + cornerPi[c]] = at;
+        s_subPi[at] = cornerPi[c];
+        s_subPj[at] = cornerPj[c];
+        at++;
+    }
+    for (S32 pi = 0; pi <= n; pi++) {
+        for (S32 pj = 0; pj + pi <= n; pj++) {
+            if (s_subSlot[pj * (n + 1) + pi] >= 0) {
+                continue;
+            }
+            s_subSlot[pj * (n + 1) + pi] = at;
+            s_subPi[at] = pi;
+            s_subPj[at] = pj;
+            at++;
+        }
+    }
+    /* The same walk over small triangles the corners used to be written out in,
+       recorded as slots. */
+    S32 out = 0;
+    for (S32 i = 0; i < n; i++) {
+        for (S32 j = 0; j < n - i; j++) {
+            for (S32 half = 0; half < 2; half++) {
+                if (half == 1 && i + j >= n - 1) {
+                    break;
+                }
+                const S32 pi[3] = {half ? i + 1 : i, i + 1, i};
+                const S32 pj[3] = {j, half ? j + 1 : j, j + 1};
+                for (S32 k = 0; k < 3; k++) {
+                    s_subIndex[out++] = (U32)s_subSlot[pj[k] * (n + 1) + pi[k]];
+                }
+            }
+        }
+    }
+    s_subReady = TRUE;
+}
+
 /* A land triangle of cell (xi, zi) cut into smaller ones lying on the curved
    surface. The curve fades out with the distance and down at the sea's level,
    so where cells are drawn flat (far away, water) their edges stay straight
@@ -360,67 +453,64 @@ static S32 SmoothTri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], f
            then depends on its two ends only, the same from either side. */
         cw[i] = s_flatCorner[g] ? 0.0f : 1.0f;
     }
-    const S32 n = 4;
+    const S32 n = SMOOTH_N;
     const float invN = 1.0f / (float)n;
+    if (!s_subReady) {
+        BuildSubGrid();
+    }
     /* A unit of height in camera space: the curve raises the point along it, so
        the point is placed once, flat, and then lifted. */
     const TYPE_MAT *mat = &MatriceWorld;
     const float upX = mat->F.M12, upY = mat->F.M22, upZ = -mat->F.M32;
-    T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts((U32)(n * n * 3));
+    /* Where this block starts inside the draw, which is what its indices are
+       relative to: the draw's vertices are contiguous from its first. */
+    const U32 base = (U32)s_draw->Count;
+    T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(SMOOTH_POINTS);
     if (v == NULL) {
         return FALSE;
     }
-    /* Rows of small triangles over barycentric steps (i, j) of corners 0 and 1. */
-    S32 out = 0;
-    for (S32 i = 0; i < n; i++) {
-        for (S32 j = 0; j < n - i; j++) {
-            for (S32 half = 0; half < 2; half++) {
-                if (half == 1 && i + j >= n - 1) {
-                    break;
-                }
-                const S32 pi[3] = {half ? i + 1 : i, i + 1, i};
-                const S32 pj[3] = {j, half ? j + 1 : j, j + 1};
-                for (S32 k = 0; k < 3; k++) {
-                    const float b0 = (float)pi[k] * invN;
-                    const float b1 = (float)pj[k] * invN;
-                    const float b2 = 1.0f - b0 - b1;
-                    const float gx = b0 * cx[0] + b1 * cx[1] + b2 * cx[2];
-                    const float gz = b0 * cz[0] + b1 * cz[1] + b2 * cz[2];
-                    /* The original triangle's plane: straight along its edges and the
-                       cell's diagonal, as the classic terrain lies. */
-                    const float flat = b0 * ch[0] + b1 * ch[1] + b2 * ch[2];
-                    float p[3];
-                    GridPoint(gx * (float)CELL_SIZE, flat, gz * (float)CELL_SIZE, p);
-                    const float rise =
-                        SmoothOffsetAt(gx, gz, flat, b0 * cw[0] + b1 * cw[1] + b2 * cw[2], p[2]);
-                    p[0] += rise * upX;
-                    p[1] += rise * upY;
-                    p[2] += rise * upZ;
-                    T_GPUOBJ_VERTEX *vert = &v[out++];
-                    AffGpu_ViewVertex(vert, p[0], p[1], p[2]);
-                    vert->normal[3] = perVertexShade ? (b0 * (float)lights[0] + b1 * (float)lights[1] +
-                                                        b2 * (float)lights[2]) /
-                                                           256.0f
-                                                     : constantShade;
-                    vert->light[3] = mode;
-                    /* Marked for the shadow rays; the first triangle carries the
-                       original one's corners for them. */
-                    vert->vpos[3] = (float)(flags | GPUOBJ_FLAG_DETAIL | (out <= 3 ? GPUOBJ_FLAG_DETAIL_ORIGIN : 0));
-                    if (out <= 3) {
-                        const float *c = s_grid[(S32)cz[out - 1] * GRID_SIDE + (S32)cx[out - 1]];
-                        vert->normal[0] = c[0];
-                        vert->normal[1] = c[1];
-                        vert->normal[2] = -c[2];
-                    }
-                    vert->mat[0] = (float)(color & 0xFF);
-                    vert->mat[1] = 0.0f;
-                    vert->mat[2] = 65535.0f;
-                    if (uv != NULL) {
-                        vert->uv[0] = (b0 * (float)uv[0] + b1 * (float)uv[2] + b2 * (float)uv[4]) / 256.0f;
-                        vert->uv[1] = (b0 * (float)uv[1] + b1 * (float)uv[3] + b2 * (float)uv[5]) / 256.0f;
-                    }
-                }
-            }
+    U32 *ix = GpuObj_AllocIndices(SMOOTH_TRIS * 3);
+    if (ix == NULL) {
+        return FALSE; /* the draw is indexed: no half-indexed block in it */
+    }
+    for (S32 k = 0; k < SMOOTH_TRIS * 3; k++) {
+        ix[k] = base + s_subIndex[k];
+    }
+    for (S32 out = 0; out < SMOOTH_POINTS; out++) {
+        const float b0 = (float)s_subPi[out] * invN;
+        const float b1 = (float)s_subPj[out] * invN;
+        const float b2 = 1.0f - b0 - b1;
+        const float gx = b0 * cx[0] + b1 * cx[1] + b2 * cx[2];
+        const float gz = b0 * cz[0] + b1 * cz[1] + b2 * cz[2];
+        /* The original triangle's plane: straight along its edges and the
+           cell's diagonal, as the classic terrain lies. */
+        const float flat = b0 * ch[0] + b1 * ch[1] + b2 * ch[2];
+        float p[3];
+        GridPoint(gx * (float)CELL_SIZE, flat, gz * (float)CELL_SIZE, p);
+        const float rise = SmoothOffsetAt(gx, gz, flat, b0 * cw[0] + b1 * cw[1] + b2 * cw[2], p[2]);
+        p[0] += rise * upX;
+        p[1] += rise * upY;
+        p[2] += rise * upZ;
+        T_GPUOBJ_VERTEX *vert = &v[out];
+        AffGpu_ViewVertex(vert, p[0], p[1], p[2]);
+        vert->normal[3] = perVertexShade
+                              ? (b0 * (float)lights[0] + b1 * (float)lights[1] + b2 * (float)lights[2]) / 256.0f
+                              : constantShade;
+        vert->light[3] = mode;
+        /* Skipped by the shadow rays, which take one triangle a block instead
+           of sixteen: the block's first vertex says where it starts, and the
+           three it starts with are the original triangle's own corners. The
+           marker lives in mat.w -- a field the terrain does not use, and one
+           the fragment shader interpolates nothing from -- rather than in the
+           flags, which every triangle sharing the corner would inherit. */
+        vert->vpos[3] = (float)(flags | GPUOBJ_FLAG_DETAIL);
+        vert->mat[0] = (float)(color & 0xFF);
+        vert->mat[1] = 0.0f;
+        vert->mat[2] = 65535.0f;
+        vert->mat[3] = out == 0 ? 1.0f : 0.0f;
+        if (uv != NULL) {
+            vert->uv[0] = (b0 * (float)uv[0] + b1 * (float)uv[2] + b2 * (float)uv[4]) / 256.0f;
+            vert->uv[1] = (b0 * (float)uv[1] + b1 * (float)uv[3] + b2 * (float)uv[5]) / 256.0f;
         }
     }
     return TRUE;
@@ -873,15 +963,23 @@ void TerrainGpu_End(void) {
     if (s_draw == NULL) {
         return;
     }
-    /* The land triangles, now that every flat corner is known. */
-    for (S32 k = 0; k < s_nbSmoothTris; k++) {
-        const T_SMOOTH_TRI *t = &s_smoothTris[k];
-        SmoothTri(t->Xi, t->Zi, t->Corners, t->Lights, t->Mode, t->Flags, t->PerVertexShade, t->ConstantShade,
-                  t->Color, t->HasUv ? t->Uv : NULL);
+    /* The land triangles, now that every flat corner is known. Their points are
+       shared between their triangles, so they go in a draw of their own: a draw
+       is either indexed or not, and the flat land before them and the grass
+       after them are not. */
+    const T_GPUOBJ_DRAW material = *s_draw;
+    if (s_nbSmoothTris > 0 && ReopenDraw(&material)) {
+        for (S32 k = 0; k < s_nbSmoothTris; k++) {
+            const T_SMOOTH_TRI *t = &s_smoothTris[k];
+            SmoothTri(t->Xi, t->Zi, t->Corners, t->Lights, t->Mode, t->Flags, t->PerVertexShade, t->ConstantShade,
+                      t->Color, t->HasUv ? t->Uv : NULL);
+        }
     }
     s_nbSmoothTris = 0;
-    for (S32 k = 0; k < s_nbGrassTris; k++) {
-        GrassTri(&s_grassTris[k]);
+    if (s_nbGrassTris > 0 && s_draw != NULL && (s_draw->NbIndices == 0 || ReopenDraw(&material))) {
+        for (S32 k = 0; k < s_nbGrassTris; k++) {
+            GrassTri(&s_grassTris[k]);
+        }
     }
     s_nbGrassTris = 0;
     s_draw = NULL;

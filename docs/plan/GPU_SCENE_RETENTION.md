@@ -110,12 +110,17 @@ over everything, and the near-plane hole the terrain's own fill hides today.
 **Worth:** most of the remaining 14.8 ms. **Risk:** the highest of the three — it changes what the
 composite is.
 
-### 3. Fewer vertices for the same curve
+### 3. Fewer vertices for the same curve — **done**
 
 A land triangle near the camera becomes sixteen, emitted as 48 separate vertices where the sub-grid
 has only 15 distinct points: every interior point is built, written and uploaded three times over.
 An index buffer would cut the capture's arithmetic and its writes by the same three, and the
 upload with them.
+
+Landed. On Desert Island a full orbiting view fell from 242 000 vertices to 141 000, the scenery
+phase from 26.5 ms to 21.3 and the present from 33.0 to 30.5 at 720p; the frame from 62 to 52.
+Image-equivalent with and without ray tracing (1777 and 1790 pixels of a 2M-pixel capture, against
+1829 between two runs of the same build).
 
 **Worth:** most of the smooth terrain's share of the capture, which is two thirds of it. **Risk:**
 contained to the GPU plumbing — `Compact` has to move a draw's indices with its vertices (store

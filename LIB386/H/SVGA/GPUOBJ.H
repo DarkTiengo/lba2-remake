@@ -52,6 +52,13 @@ extern "C" {
    rebuild the clip position of a draw kept from an earlier frame. */
 #define GPUOBJ_SCENE_DEPTH_RANGE 131072.0f     ///< an extra's sprite: coverage from the atlas, colour from the software frame, its own depth
 
+/* Indices, for geometry whose points are shared between its triangles: the
+   smooth terrain's sub-grid has fifteen distinct points where its sixteen
+   triangles have forty-eight corners. They are relative to their draw's first
+   vertex, so compacting moves a draw's block without rewriting it. */
+#define GPUOBJ_MAX_INDICES (1u << 22)
+extern U32 *GpuObjIndices;
+
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
 #define GPUOBJ_FLAG_BAKED 4     ///< shade comes from normal.w as authored, not from lighting
@@ -59,8 +66,7 @@ extern "C" {
 #define GPUOBJ_FLAG_WATER 16    ///< eligible sea plane; shader toggle keeps the original texture available
 #define GPUOBJ_FLAG_SKY 32      ///< sky plane marker used to keep shoreline foam off the horizon
 #define GPUOBJ_FLAG_WATER_TERRAIN 64  ///< CodeJeu water retains its authored animated terrain page
-#define GPUOBJ_FLAG_DETAIL 128        ///< smooth terrain's small triangles: shadow rays use the original instead
-#define GPUOBJ_FLAG_DETAIL_ORIGIN 256 ///< the first of them carries the original triangle in normal.xyz
+#define GPUOBJ_FLAG_DETAIL 128 ///< smooth terrain's small triangles: shadow rays take the original instead, a block at a time
 #define GPUOBJ_FLAG_GRASS 512        ///< a grass blade: the tip sways by uv.zw (clip offset of the wind), phase in mat.w
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
@@ -103,6 +109,8 @@ typedef struct {
     float CapMat[9];
     float CapCam[3];
     S32 HasCapCamera; ///< the two above are set (a 3D capture, not an isometric one)
+    U32 FirstIndex;   ///< first index of the draw, when it has any
+    U32 NbIndices;    ///< 0: drawn straight from its vertices, in threes
     S32 Retainable;   ///< the exterior scenery: placed by AffGpu_ViewVertex, so it can be re-placed
     S32 Retained;     ///< kept from an earlier frame: drawn through the camera difference
 } T_GPUOBJ_DRAW;
@@ -223,6 +231,12 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void);
 /** Reserves n vertices in the open draw; NULL when the cache is full. */
 T_GPUOBJ_VERTEX *GpuObj_AllocVerts(U32 n);
 
+/** Reserves n indices in the open draw; NULL when the index cache is full, and
+ *  the caller then writes its triangles out in threes as usual. They are
+ *  relative to the draw's own first vertex. A draw either has indices for all
+ *  of its triangles or for none. */
+U32 *GpuObj_AllocIndices(U32 n);
+
 /** Snapshot Log inside the box before a body is rasterized, then close the
  *  draw and tag every pixel it changed. The box is clipped to the clip window. */
 void GpuObj_SnapshotBegin(S32 x0, S32 y0, S32 x1, S32 y1);
@@ -281,6 +295,9 @@ U32 GpuObj_VertexCount(void);
 /** Changes whenever vertices already written move (repacked or reset): the
  *  mirror must then be copied whole again. */
 U32 GpuObj_VertexEpoch(void);
+
+/** Indices written in GpuObjIndices so far. */
+U32 GpuObj_IndexCount(void);
 
 #ifdef __cplusplus
 }

@@ -16,6 +16,7 @@ S32 GpuObjEnabled = FALSE;
 S32 GpuObjAvailable = FALSE;
 
 T_GPUOBJ_VERTEX *GpuObjVerts = NULL;
+U32 *GpuObjIndices = NULL;
 U32 GpuObjVertsExhausted = 0;
 U32 GpuObjTargetHintW = 0;
 U8 *GpuObjAtlas = NULL;
@@ -99,6 +100,7 @@ static U8 s_live[MAX_DRAWS];
 static const T_GPUOBJ_DRAW *s_presentList[MAX_DRAWS];
 static U32 s_nbDraws = 0;
 static U32 s_nbVerts = 0;
+static U32 s_nbIndices = 0;
 static U32 s_vertsEpoch = 0; ///< bumped when written vertices move
 static S32 s_drawOpen = FALSE;
 static U32 s_nextId = 1;
@@ -270,6 +272,7 @@ static void Compact(void) {
 
     U32 keptDraws = 0;
     U32 keptVerts = 0;
+    U32 keptIndices = 0;
     for (U32 i = 0; i < s_nbDraws; i++) {
         if (!s_live[i]) {
             continue;
@@ -280,6 +283,14 @@ static void Compact(void) {
         }
         draw->First = keptVerts;
         keptVerts += draw->Count;
+        if (draw->NbIndices > 0) {
+            if (draw->FirstIndex != keptIndices) {
+                memmove(GpuObjIndices + keptIndices, GpuObjIndices + draw->FirstIndex,
+                        draw->NbIndices * sizeof(U32));
+            }
+            draw->FirstIndex = keptIndices;
+            keptIndices += draw->NbIndices;
+        }
         if (keptDraws != i) {
             s_draws[keptDraws] = *draw;
         }
@@ -287,6 +298,7 @@ static void Compact(void) {
     }
     s_nbDraws = keptDraws;
     s_nbVerts = keptVerts;
+    s_nbIndices = keptIndices;
     s_vertsEpoch++;
 }
 
@@ -300,6 +312,7 @@ static void ResetAll(void) {
     }
     s_nbDraws = 0;
     s_nbVerts = 0;
+    s_nbIndices = 0;
     s_vertsEpoch++;
     s_nextId = 1;
 }
@@ -357,6 +370,8 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     }
     draw->Scene = s_sceneDepth;
     draw->First = s_nbVerts;
+    draw->FirstIndex = s_nbIndices;
+    draw->NbIndices = 0;
     s_drawOpen = TRUE;
     return draw;
 }
@@ -378,6 +393,29 @@ T_GPUOBJ_VERTEX *GpuObj_AllocVerts(U32 n) {
     s_nbVerts += n;
     s_draws[s_nbDraws - 1].Count += n;
     return v;
+}
+
+U32 *GpuObj_AllocIndices(U32 n) {
+    if (!s_drawOpen) {
+        return NULL;
+    }
+    if (GpuObjIndices == NULL) {
+        GpuObjIndices = (U32 *)malloc(GPUOBJ_MAX_INDICES * sizeof(U32));
+        if (GpuObjIndices == NULL) {
+            return NULL;
+        }
+    }
+    if (s_nbIndices + n > GPUOBJ_MAX_INDICES) {
+        return NULL; /* the caller writes its triangles out in threes instead */
+    }
+    U32 *out = GpuObjIndices + s_nbIndices;
+    s_nbIndices += n;
+    s_draws[s_nbDraws - 1].NbIndices += n;
+    return out;
+}
+
+U32 GpuObj_IndexCount(void) {
+    return s_nbIndices;
 }
 
 void GpuObj_SnapshotBegin(S32 x0, S32 y0, S32 x1, S32 y1) {

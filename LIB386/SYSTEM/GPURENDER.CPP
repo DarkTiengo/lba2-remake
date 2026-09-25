@@ -109,6 +109,9 @@ static SDL_GPUTexture *s_atlas = NULL;
 
 static SDL_GPUBuffer *s_vertexBuffer = NULL;
 static U32 s_vertexCapacity = 0;
+static SDL_GPUBuffer *s_indexBuffer = NULL;
+static U32 s_indexCapacity = 0;
+static U32 s_mirroredIndices = 0;
 /* The vertex buffer mirrors GpuObjVerts: each draw lies at its own First.
    Draws are only appended, so a present copies only the vertices written
    since the last one, unless they moved (GpuObj_VertexEpoch). */
@@ -549,6 +552,28 @@ static bool EnsureVertexBuffer(U32 size) {
     return s_vertexBuffer != NULL;
 }
 
+static bool EnsureIndexBuffer(U32 size) {
+    if (size <= s_indexCapacity) {
+        return true;
+    }
+    if (s_indexBuffer) {
+        SDL_ReleaseGPUBuffer(s_device, s_indexBuffer);
+        s_indexBuffer = NULL;
+    }
+    U32 capacity = s_indexCapacity ? s_indexCapacity : (1u << 18);
+    while (capacity < size) {
+        capacity *= 2;
+    }
+    SDL_GPUBufferCreateInfo info;
+    SDL_zero(info);
+    info.usage = SDL_GPU_BUFFERUSAGE_INDEX;
+    info.size = capacity;
+    s_indexBuffer = SDL_CreateGPUBuffer(s_device, &info);
+    s_indexCapacity = s_indexBuffer ? capacity : 0;
+    s_mirroredIndices = 0;
+    return s_indexBuffer != NULL;
+}
+
 static bool EnsureVertexTransfer(U32 size) {
     if (size <= s_vertexTransferCapacity) {
         return true;
@@ -795,6 +820,12 @@ static void ReleasePipeline(void) {
         SDL_ReleaseGPUBuffer(s_device, s_vertexBuffer);
         s_vertexBuffer = NULL;
     }
+    if (s_indexBuffer) {
+        SDL_ReleaseGPUBuffer(s_device, s_indexBuffer);
+        s_indexBuffer = NULL;
+    }
+    s_indexCapacity = 0;
+    s_mirroredIndices = 0;
     if (s_shadowBuffer) {
         SDL_ReleaseGPUBuffer(s_device, s_shadowBuffer);
         s_shadowBuffer = NULL;
@@ -885,6 +916,48 @@ static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
             continue;
         }
         const T_GPUOBJ_VERTEX *v = GpuObjVerts + draws[d]->First;
+        /* An indexed draw shares its points between triangles, so the triples
+           are in the indices. Its detail triangles are the exception: their
+           original is carried by the three corner vertices the block starts
+           with, which is where the rays want it, so those are read straight
+           from the vertices below and skipped here. */
+        if (draws[d]->NbIndices > 0) {
+            const U32 *ix = GpuObjIndices + draws[d]->FirstIndex;
+            for (U32 i = 0; i + 2 < draws[d]->NbIndices && n < GPUBVH_MAX_TRIS; i += 3) {
+                const T_GPUOBJ_VERTEX *a = &v[ix[i]];
+                const S32 mode = (S32)a->light[3];
+                const S32 flags = (S32)(a->vpos[3] + 0.5f);
+                if (mode == GPUOBJ_MODE_PASS || mode == GPUOBJ_MODE_BRICK || mode == GPUOBJ_MODE_DISC ||
+                    mode == GPUOBJ_MODE_ORB || (flags & skipFlags) != 0 || (flags & GPUOBJ_FLAG_DETAIL) != 0) {
+                    continue;
+                }
+                float *o = tris + n * 9;
+                for (int k = 0; k < 3; k++) {
+                    const float *src = v[ix[i + k]].vpos;
+                    o[k * 3 + 0] = src[0];
+                    o[k * 3 + 1] = src[1];
+                    o[k * 3 + 2] = src[2];
+                }
+                n++;
+            }
+            for (U32 i = 0; i + 2 < draws[d]->Count && n < GPUBVH_MAX_TRIS; i++) {
+                const S32 flags = (S32)(v[i].vpos[3] + 0.5f);
+                if (v[i].mat[3] < 0.5f || (flags & GPUOBJ_FLAG_DETAIL) == 0 || (flags & skipFlags) != 0) {
+                    continue;
+                }
+                /* A block of small triangles: the three it starts with are the
+                   original triangle's corners, which is the one the rays take. */
+                float *o = tris + n * 9;
+                for (int k = 0; k < 3; k++) {
+                    o[k * 3 + 0] = v[i + k].vpos[0];
+                    o[k * 3 + 1] = v[i + k].vpos[1];
+                    o[k * 3 + 2] = v[i + k].vpos[2];
+                }
+                n++;
+                i += 2;
+            }
+            continue;
+        }
         for (U32 i = 0; i + 2 < draws[d]->Count && n < GPUBVH_MAX_TRIS; i += 3) {
             const S32 mode = (S32)v[i].light[3];
             const S32 flags = (S32)(v[i].vpos[3] + 0.5f);
@@ -893,14 +966,14 @@ static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
                 continue;
             }
             /* Smooth terrain: its many small triangles lie on or above the
-               original, which the rays keep, sixteen times fewer. */
-            const bool detail = (flags & GPUOBJ_FLAG_DETAIL) != 0;
-            if (detail && (flags & GPUOBJ_FLAG_DETAIL_ORIGIN) == 0) {
+               original, which the rays keep, sixteen times fewer. They come
+               indexed and are taken a block at a time above. */
+            if ((flags & GPUOBJ_FLAG_DETAIL) != 0) {
                 continue;
             }
             float *o = tris + n * 9;
             for (int k = 0; k < 3; k++) {
-                const float *src = detail ? v[i + k].normal : v[i + k].vpos;
+                const float *src = v[i + k].vpos;
                 o[k * 3 + 0] = src[0];
                 o[k * 3 + 1] = src[1];
                 o[k * 3 + 2] = src[2];
@@ -941,6 +1014,31 @@ static void UploadBuffer(SDL_GPUCopyPass *pass, SDL_GPUBuffer *buffer, const voi
     SDL_GPUBufferRegion region;
     SDL_zero(region);
     region.buffer = buffer;
+    region.size = size;
+    SDL_UploadToGPUBuffer(pass, &source, &region, true);
+}
+
+/* The same, into a buffer at an offset, for data that is appended to rather
+   than rewritten (the indices). */
+static void UploadBuffer2(SDL_GPUCopyPass *pass, SDL_GPUBuffer *buffer, const void *data, U32 offset, U32 size) {
+    if (size == 0 || size > s_transferCapacity) {
+        return; /* the caller sizes the transfer buffer before the pass opens */
+    }
+    void *mapped = SDL_MapGPUTransferBuffer(s_device, s_transfer, true);
+    if (mapped == NULL) {
+        return;
+    }
+    memcpy(mapped, data, size);
+    SDL_UnmapGPUTransferBuffer(s_device, s_transfer);
+
+    SDL_GPUTransferBufferLocation source;
+    SDL_zero(source);
+    source.transfer_buffer = s_transfer;
+
+    SDL_GPUBufferRegion region;
+    SDL_zero(region);
+    region.buffer = buffer;
+    region.offset = offset;
     region.size = size;
     SDL_UploadToGPUBuffer(pass, &source, &region, true);
 }
@@ -1427,7 +1525,16 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             SDL_SetGPUScissor(pass, &scissor);
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));
             SDL_PushGPUFragmentUniformData(cmd, 0, &uniforms[i], sizeof(T_DRAW_UNIFORMS));
-            SDL_DrawGPUPrimitives(pass, draw->Count, 1, draw->First, 0);
+            if (draw->NbIndices > 0 && s_indexBuffer != NULL) {
+                SDL_GPUBufferBinding ibind;
+                SDL_zero(ibind);
+                ibind.buffer = s_indexBuffer;
+                ibind.offset = 0;
+                SDL_BindGPUIndexBuffer(pass, &ibind, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+                SDL_DrawGPUIndexedPrimitives(pass, draw->NbIndices, 1, draw->FirstIndex, (Sint32)draw->First, 0);
+            } else {
+                SDL_DrawGPUPrimitives(pass, draw->Count, 1, draw->First, 0);
+            }
             if (draw->HasGlow && nbGlass < SDL_arraysize(glassDraw)) {
                 glassDraw[nbGlass] = i;
                 glassFirst[nbGlass] = draw->First;
@@ -1561,6 +1668,7 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     const U32 shadowVerts = count > 0 && GpuObjShadows ? GpuObjNbShadowVerts : 0;
     /* The mirror takes what was written since the last present. */
     const U32 nbVerts = GpuObj_VertexCount();
+    const U32 nbIndices = GpuObj_IndexCount();
     U32 mirrorFrom = 0;
     if (s_mirroredBuffer == s_vertexBuffer && s_vertexBuffer != NULL && s_mirroredEpoch == GpuObj_VertexEpoch() &&
         s_mirroredVerts <= nbVerts) {
@@ -1629,10 +1737,15 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
                                    (U32)(GPUBVH_MAX_TRIS * GPUBVH_TRI_FLOATS * sizeof(float)));
         need = SDL_max(need, bvhMax);
     }
+    /* The indices ride in the same transfer buffer. */
+    if (count > 0 && nbIndices > 0) {
+        need = SDL_max(need, nbIndices * (U32)sizeof(U32));
+    }
 
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_device);
     if (cmd == NULL || !EnsureTransfer(need) ||
         (count > 0 && !EnsureVertexBuffer(nbVerts * (U32)sizeof(T_GPUOBJ_VERTEX))) ||
+        (count > 0 && nbIndices > 0 && !EnsureIndexBuffer(nbIndices * (U32)sizeof(U32))) ||
         (count > 0 && !EnsureVertexTransfer(shadowBytes > GPURENDER_VERTEX_SLICE ? shadowBytes
                                                                                  : GPURENDER_VERTEX_SLICE)) ||
         (shadowVerts > 0 && !EnsureShadowBuffer(shadowBytes))) {
@@ -1673,6 +1786,16 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         s_mirroredBuffer = s_vertexBuffer;
         s_mirroredEpoch = GpuObj_VertexEpoch();
         s_mirroredVerts = nbVerts;
+        /* The indices behind them, the same way: appended since the last
+           present unless the array moved under us. */
+        if (nbIndices > 0 && s_indexBuffer != NULL) {
+            const U32 fromIndex = (from == 0 || s_mirroredIndices > nbIndices) ? 0 : s_mirroredIndices;
+            if (nbIndices > fromIndex) {
+                UploadBuffer2(copy, s_indexBuffer, GpuObjIndices + fromIndex, fromIndex * (U32)sizeof(U32),
+                              (nbIndices - fromIndex) * (U32)sizeof(U32));
+            }
+            s_mirroredIndices = nbIndices;
+        }
     }
     if (bvhThread != NULL) {
         SDL_WaitThread(bvhThread, NULL);

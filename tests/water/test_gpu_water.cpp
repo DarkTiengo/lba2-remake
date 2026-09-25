@@ -41,6 +41,12 @@ extern "C" T_GPUOBJ_VERTEX *GpuObj_AllocVerts(U32 count) {
     std::memset(vertices, 0, sizeof(vertices));
     return vertices;
 }
+static U32 indices[2048];
+static U32 indexed;
+extern "C" U32 *GpuObj_AllocIndices(U32 count) {
+    indexed = count;
+    return count <= (U32)(sizeof indices / sizeof indices[0]) ? indices : NULL;
+}
 extern "C" void GpuObj_EndDraw(void) {}
 extern "C" void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth) {
     std::memset(v, 0, sizeof(*v));
@@ -284,15 +290,20 @@ int main() {
         bool above = true, raised = false, flagged = true;
         for (U32 i = 0; i < allocated; i++) {
             const S32 flags = (S32)vertices[i].vpos[3];
+            /* Every point of the block is detail, and the block's first says
+               where it starts (mat.w), for the shadow hierarchy. */
             flagged = flagged && (flags & GPUOBJ_FLAG_DETAIL) != 0 &&
-                      ((flags & GPUOBJ_FLAG_DETAIL_ORIGIN) != 0) == (i < 3);
+                      (vertices[i].mat[3] >= 0.5f) == (i == 0);
             /* The plane through corners (3,3) 1000, (3,4) 1000, (4,4) 2000. */
             const float x = vertices[i].vpos[0] / 512.0f - 3.0f;
             const float plane = 1000.0f + 1000.0f * x;
             above = above && vertices[i].vpos[1] >= plane - 0.5f;
             raised = raised || vertices[i].vpos[1] > plane + 1.0f;
         }
-        Check(allocated == 48 && flagged, "smooth terrain cuts a land triangle into sixteen, flagged");
+        /* Sixteen small triangles over the fifteen distinct points of the
+           sub-grid: the points are shared through the indices. */
+        Check(allocated == 15 && indexed == 48 && flagged,
+              "smooth terrain cuts a land triangle into sixteen, over fifteen shared points");
         Check(above && raised, "smooth terrain curves above the original plane, never below");
         TerrainGpuSmooth = FALSE;
         MatriceWorld = saved;
