@@ -251,6 +251,9 @@ static void OpenDraw(U8 *page, U8 *clut, S32 fogStart, S32 fogEnd, S32 fogColor)
     s_draw->X1 = ClipXMax;
     s_draw->Y1 = ClipYMax;
     s_draw->ZBuffer = TRUE;
+    /* The scenery's vertices are placed by AffGpu_ViewVertex from the camera
+       alone, so the draw can be placed again from another one. */
+    s_draw->Retainable = TRUE;
     s_draw->Page = page;
     s_draw->Clut = clut;
     s_draw->FogStart = fogStart;

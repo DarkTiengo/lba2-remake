@@ -1357,7 +1357,41 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
            drew it: a run of z-buffered bodies (drawn front to back, depth
            decides) shares a slice, any other body lands in front of everything
            before it; all of them in the front half, over the scene. */
-        float sliceUniform[4] = {0.0f, 0.0f, windTime, wind};
+        float sliceUniform[24] = {0.0f, 0.0f, windTime, wind};
+        /* A draw kept from an earlier frame is placed again here, in the vertex
+           shader, through the difference between the camera that captured it and
+           the one this frame draws with: rows of the rotation with the
+           translation in w, then the projection to rebuild its clip position
+           with. Left at zero for a draw captured with the camera drawing it,
+           whose clip position stands as the CPU computed it.
+
+           LBA2_GPU_REPLACE=1 sends every retainable draw down this path with its
+           own camera on both sides, which must land where it already is: the
+           self-test for the arithmetic, and the one to run after touching it. */
+        static const char *replaceAll = SDL_getenv("LBA2_GPU_REPLACE");
+        const bool replace = draw->HasCapCamera && (draw->Retained || (replaceAll != NULL && draw->Retainable));
+        if (replace) {
+            const float *a = draw->Retained ? GpuObjCapMat : draw->CapMat;
+            const float *nowCam = draw->Retained ? GpuObjCapCam : draw->CapCam;
+            const float *b = draw->CapMat;
+            for (S32 r = 0; r < 3; r++) {
+                for (S32 c = 0; c < 3; c++) {
+                    sliceUniform[4 + r * 4 + c] =
+                        a[r * 3 + 0] * b[c * 3 + 0] + a[r * 3 + 1] * b[c * 3 + 1] + a[r * 3 + 2] * b[c * 3 + 2];
+                }
+                sliceUniform[4 + r * 4 + 3] = sliceUniform[4 + r * 4 + 0] * draw->CapCam[0] +
+                                              sliceUniform[4 + r * 4 + 1] * draw->CapCam[1] +
+                                              sliceUniform[4 + r * 4 + 2] * draw->CapCam[2] - nowCam[r];
+            }
+            sliceUniform[16] = GpuObjProj[0];
+            sliceUniform[17] = GpuObjProj[1];
+            sliceUniform[18] = GpuObjProj[2];
+            sliceUniform[19] = GpuObjProj[2] * GpuObjProj[3];
+            sliceUniform[20] = 2.0f / (float)ModeDesiredX;
+            sliceUniform[21] = 2.0f / (float)ModeDesiredY;
+            sliceUniform[22] = (float)NearClip;
+            sliceUniform[23] = GPUOBJ_SCENE_DEPTH_RANGE;
+        }
         if (draw->Scene) {
             sliceUniform[0] = 0.5f;
             sliceUniform[1] = 0.5f;
@@ -1422,7 +1456,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         full.w = (int)s_targetW;
         full.h = (int)s_targetH;
         SDL_SetGPUScissor(pass, &full);
-        const float sceneSlice[4] = {0.5f, 0.5f, windTime, wind};
+        const float sceneSlice[24] = {0.5f, 0.5f, windTime, wind};
         SDL_PushGPUVertexUniformData(cmd, 0, sceneSlice, sizeof(sceneSlice));
         T_DRAW_UNIFORMS u;
         SDL_zero(u);
@@ -1441,7 +1475,9 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             T_DRAW_UNIFORMS u = uniforms[i];
             u.GlassPass = 1.0f;
             SDL_SetGPUScissor(pass, &glassScissor[k]);
-            SDL_PushGPUVertexUniformData(cmd, 0, glassSlice + k * 4, sizeof(float) * 4);
+            float glassUniform[24] = {glassSlice[k * 4], glassSlice[k * 4 + 1], glassSlice[k * 4 + 2],
+                                      glassSlice[k * 4 + 3]};
+            SDL_PushGPUVertexUniformData(cmd, 0, glassUniform, sizeof(glassUniform));
             SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(T_DRAW_UNIFORMS));
             SDL_DrawGPUPrimitives(pass, draws[i]->Count, 1, glassFirst[k], 0);
         }

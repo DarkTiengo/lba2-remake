@@ -30,7 +30,7 @@ extern "C" {
 /* Depth span of one body; beyond it depth only orders within the body. */
 /* Bodies and exterior scenery share one depth scale, since z-buffered decors
    and terrain depth-test each other; the sky plane reaches about 70000 units. */
-#define PERSPECTIVE_DEPTH_RANGE 131072.0f
+#define PERSPECTIVE_DEPTH_RANGE GPUOBJ_SCENE_DEPTH_RANGE
 #define SCENERY_DEPTH_RANGE PERSPECTIVE_DEPTH_RANGE
 #define ISO_DEPTH_RANGE 524288.0f
 
@@ -798,6 +798,22 @@ static void UpdateSceneLight(void) {
         GpuObjCameraPos[0] = (float)CameraX;
         GpuObjCameraPos[1] = (float)CameraY;
         GpuObjCameraPos[2] = (float)CameraZ;
+        /* And the placement itself, the way a vertex is placed: rows of the
+           world matrix and the rotated eye, so a draw captured now can be drawn
+           later through the difference. */
+        GpuObjCapMat[0] = MatriceWorld.F.M11;
+        GpuObjCapMat[1] = MatriceWorld.F.M12;
+        GpuObjCapMat[2] = MatriceWorld.F.M13;
+        GpuObjCapMat[3] = MatriceWorld.F.M21;
+        GpuObjCapMat[4] = MatriceWorld.F.M22;
+        GpuObjCapMat[5] = MatriceWorld.F.M23;
+        GpuObjCapMat[6] = MatriceWorld.F.M31;
+        GpuObjCapMat[7] = MatriceWorld.F.M32;
+        GpuObjCapMat[8] = MatriceWorld.F.M33;
+        GpuObjCapCam[0] = (float)CameraXr;
+        GpuObjCapCam[1] = (float)CameraYr;
+        GpuObjCapCam[2] = (float)CameraZr;
+        GpuObjCapValid = TRUE;
         LongRotatePoint(&MatriceWorld, 4096, 0, 0);
         GpuObjWorldX[0] = (float)X0 / 4096.0f;
         GpuObjWorldX[1] = (float)Y0 / 4096.0f;
@@ -821,6 +837,7 @@ static void UpdateSceneLight(void) {
         GpuObjUpDir[0] = 0.0f;
         GpuObjUpDir[1] = 1.0f;
         GpuObjUpDir[2] = 0.0f;
+        GpuObjCapValid = FALSE; /* isometric: no camera to be drawn from twice */
     }
 }
 

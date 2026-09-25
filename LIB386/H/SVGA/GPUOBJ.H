@@ -45,7 +45,12 @@ extern "C" {
 #define GPUOBJ_MODE_ORB 8       ///< lit glossy sphere inside the unit disc, colour in mat.yzw
 #define GPUOBJ_MODE_SHADOW 9    ///< soft ground shadow: ellipse coords in uv.zw, strength and softness in mat.yz
 #define GPUOBJ_MODE_SILHOUETTE 10 ///< a body's shadow projected on the ground from the sun or a light
-#define GPUOBJ_MODE_SPRITE 11     ///< an extra's sprite: coverage from the atlas, colour from the software frame, its own depth
+#define GPUOBJ_MODE_SPRITE 11
+
+/* The depth range a perspective scene's vertices are placed in (AFF_GPU.CPP's
+   SCENERY_DEPTH_RANGE / PERSPECTIVE_DEPTH_RANGE). The presenter needs it to
+   rebuild the clip position of a draw kept from an earlier frame. */
+#define GPUOBJ_SCENE_DEPTH_RANGE 131072.0f     ///< an extra's sprite: coverage from the atlas, colour from the software frame, its own depth
 
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
@@ -90,9 +95,26 @@ typedef struct {
     float GlowPos[3]; ///< where they are, in the draw's scene space
     float GlowColor[3]; ///< their colour, 0..1
     U8 Logical[256];
+    /* The camera the draw's vertices were placed with: the rotation's rows and
+       where the eye stood, both as the capture had them (a vertex is
+       M * world - eye). A draw still alive in a later frame is drawn through
+       the difference between this and that frame's camera, which is what lets
+       the scenery outlive the camera that captured it. */
+    float CapMat[9];
+    float CapCam[3];
+    S32 HasCapCamera; ///< the two above are set (a 3D capture, not an isometric one)
+    S32 Retainable;   ///< the exterior scenery: placed by AffGpu_ViewVertex, so it can be re-placed
+    S32 Retained;     ///< kept from an earlier frame: drawn through the camera difference
 } T_GPUOBJ_DRAW;
 
 // --- State consumed by the presenter -----------------------------------------
+/* The camera the scene is being captured with this frame: the rotation's rows
+   and the eye, in the form a vertex is placed with (M * world - eye). Recorded
+   where the scene light is, and copied into every draw opened after it. */
+extern float GpuObjCapMat[9];
+extern float GpuObjCapCam[3];
+extern S32 GpuObjCapValid;
+
 extern S32 GpuObjEnabled;   ///< player choice (lba2.cfg GpuRenderer, gfx_gpu); the window follows it
 extern S32 GpuObjAvailable; ///< set by the presenter once its pipeline is live
 

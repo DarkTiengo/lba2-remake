@@ -35,6 +35,9 @@ float GpuObjUpDir[3] = {0.0f, 1.0f, 0.0f};
 float GpuObjWorldX[3] = {1.0f, 0.0f, 0.0f};
 float GpuObjWorldZ[3] = {0.0f, 0.0f, 1.0f};
 float GpuObjCameraPos[3] = {0.0f, 0.0f, 0.0f};
+float GpuObjCapMat[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+float GpuObjCapCam[3] = {0.0f, 0.0f, 0.0f};
+S32 GpuObjCapValid = FALSE;
 S32 GpuObjSunExterior = FALSE;
 float GpuObjFocal = 1.0f;
 S32 GpuObjRayTrace = TRUE;
@@ -339,6 +342,19 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     T_GPUOBJ_DRAW *draw = &s_draws[s_nbDraws++];
     memset(draw, 0, sizeof(*draw) - sizeof(draw->Logical));
     draw->Id = s_groupOpen ? s_groupId : s_nextId++;
+    /* The camera this draw is being placed with, so a later frame can draw it
+       from somewhere else. */
+    draw->HasCapCamera = GpuObjCapValid;
+    draw->Retainable = FALSE;
+    draw->Retained = FALSE;
+    if (GpuObjCapValid) {
+        for (S32 k = 0; k < 9; k++) {
+            draw->CapMat[k] = GpuObjCapMat[k];
+        }
+        for (S32 k = 0; k < 3; k++) {
+            draw->CapCam[k] = GpuObjCapCam[k];
+        }
+    }
     draw->Scene = s_sceneDepth;
     draw->First = s_nbVerts;
     s_drawOpen = TRUE;
