@@ -63,6 +63,7 @@ struct Binding {
     const char *action;
 };
 
+// The 1997 table, plus the rows this fork added after it (marked below).
 const Binding kRetail[] = {
     {0, K_GRAY_UP, K_NUMPAD_8, "I_UP"},
     {1, K_GRAY_DOWN, K_NUMPAD_2, "I_DOWN"},
@@ -106,6 +107,12 @@ const Binding kRetail[] = {
     {33, K_J, 0, "I_JETPACK"},
     {34, K_C, 0, "I_PROTECTION"},
     {35, K_F, 0, "I_FOUDRE"},
+    // Past the 1997 table: orbiting the exterior camera, which used to read the
+    // bracket scancodes straight out of GereExtKeys. Q and E are where a
+    // third-person game puts them; the brackets stay as the second binding, so
+    // the keys that worked before still do.
+    {36, K_Q, K_LBRACKET, "camera orbit left"},
+    {37, K_E, K_RBRACKET, "camera orbit right"},
 };
 
 const int kRetailCount = (int)(sizeof kRetail / sizeof kRetail[0]);

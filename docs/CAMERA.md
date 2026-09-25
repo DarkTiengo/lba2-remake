@@ -185,7 +185,9 @@ The follow-through is tuned for the stick, which springs back to centre so "no i
 
 **Camera elevation:** the Camera-level inputs (`I_CAMERA_LEVEL_PLUS` / `I_CAMERA_LEVEL_MOINS`, bound by default to numpad `+` / `-` with Page Up / Page Down as the second binding) adjust `AlphaCam` freely (range 150–600) instead of switching between the two fixed `VueCamera` presets. Fires every frame while held (no debounce) for smooth real-time tilt. Being an input action rather than a raw key, it follows any rebinding done in Options → Keyboard.
 
-**Zoom input:** numpad `/` and `*`, or the mouse wheel, update `FollowCamBaseDist` every frame while held; idle zoom/tilt still apply (dirty check includes base distance and `AlphaCam`). Unlike elevation, zoom and pan read raw scancodes through `CheckKey` in `GereExtKeys`, so they are not rebindable and the numpad is the only keyboard route to zoom.
+**Orbit on the keyboard:** `Q` and `E`, with `[` and `]` as their second binding, turn the camera around the hero by `FOLLOW_CAM_PAN_STEP` a frame while held. They are input slots (`INPUT_SLOT_CAM_LEFT` / `_RIGHT` in [SOURCES/INPUT_BINDINGS.H](../SOURCES/INPUT_BINDINGS.H)), so they appear in Options → Configure keyboard, travel through `lba2.cfg` as `Input36_*` / `Input37_*`, and can be moved to whatever suits the player's layout. They carry no `Input` bit -- the word has been full at 32 since 1997, which is why the spells are polled directly too -- so `GereExtKeys` reads them with `Bindings_SlotDown`. Before, they were the bracket scancodes read straight out of `GereExtKeys`: the keys worked, but they were in no menu, in no key list, and on a keyboard that is not a US one they are not where their legends say.
+
+**Zoom input:** numpad `/` and `*`, or the mouse wheel, update `FollowCamBaseDist` every frame while held; idle zoom/tilt still apply (dirty check includes base distance and `AlphaCam`). Zoom still reads raw scancodes through `CheckKey` in `GereExtKeys`, so it is not rebindable and the numpad is the only keyboard route to it.
 
 **Zoom is per-session.** `FollowCamBaseDist` is neither persisted to `lba2.cfg` nor exposed as a console cvar. Only two things write the resting value: the first-frame init, and Center camera (Enter / gamepad B), which snaps it back to `FOLLOW_CAM_INITIAL_DIST`, the midpoint of the two `DefVueDistance` presets. Walking between scenes does not reset it. Changing the resting zoom therefore means editing `FOLLOW_CAM_INITIAL_DIST` in `FOLLOWCAM_CFG.H`; at tall render heights the HD recompose below also pulls the boom in, and that gain *is* live and persisted (`cam_hd_dist`).
 
@@ -301,6 +303,7 @@ Fixtures live in `tests/automation/`, with `camlib.sh` turning a run into a per-
 | `followcam_hd_eye` | the scenery is drawn from the camera the update decided on, above 480 lines |
 | `followcam_hidden` | a hero behind the scenery brings the boom in instead of throwing the player's camera away |
 | `camzone_release` | leaving an authored shot eases the boom back instead of cutting to it |
+| `camera_orbit_keys` | the orbit keys turn the camera, and follow a binding changed in the cfg |
 
 Two habits are worth keeping when adding to these. **Run a new fixture against a build without the thing it guards** and confirm it fails there; several of these passed at first because their setup never happened rather than because the engine was right. And **assert the cause when the symptom is unobservable**: the realign runs in the input pass, before the camera update logs anything, so on a working engine the divergence it corrects leaves no trace at all.
 
@@ -335,6 +338,7 @@ Two habits are worth keeping when adding to these. **Run a new fixture against a
 | Ceiling clearance | SOURCES/FOLLOWCAM.CPP, SOURCES/EXTFUNC.CPP | `FollowCamEyeDrop`, `FollowCamCeiling`, `FollowCamCeilingClearance`, `FollowCam_EyeOffset`, `FollowCam_AimAt`, `cam_ceiling*` cvars |
 | Hidden hero | SOURCES/FOLLOWCAM.CPP, SOURCES/OBJECT.CPP | `FollowCam_TargetHidden`, `FollowCamHidden`, `FOLLOW_CAM_HIDDEN_*`, `cam_hidden` cvar |
 | Shot handover | SOURCES/FOLLOWCAM.CPP, SOURCES/PERSO.CPP | `FollowCam_AdoptDistance`, `FollowCamAdoptAngle` (EXTFUNC), see [ZONES.md](ZONES.md) |
+| Orbit keys | SOURCES/INPUT_BINDINGS.CPP, SOURCES/EXTFUNC.CPP | `INPUT_SLOT_CAM_LEFT`, `INPUT_SLOT_CAM_RIGHT`, `Bindings_SlotDown`, `FOLLOW_CAM_PAN_STEP` |
 | Orbit gesture state     | SOURCES/EXTFUNC.CPP        | `FollowCamAdoptAngle`, `FollowCamForgetManualGesture`, `ApplyManualCameraNudge`, `cam_glide` |
 | Camera zone dispatch    | SOURCES/OBJECT.CPP         | `SetZoneCamera`, `ZONE_ON` / `ZONE_ACTIVE` / `ZONE_OBLIGATOIRE` (COMMON.H), `AllCameras` |
 | Camera trace            | SOURCES/FOLLOWCAM.CPP      | `FollowCamTrace`, `camtrace` / `camnudge` console commands |

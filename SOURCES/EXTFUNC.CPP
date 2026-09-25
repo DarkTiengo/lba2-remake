@@ -2440,12 +2440,15 @@ S32 GereExtKeys(U32 key)
     }
 
     if (FollowCamera) {
-        if (CheckKey(K_LBRACKET)) {
+        /* Orbiting on the keyboard, through the binding rather than the raw
+           bracket scancodes it used to read: the keys are in the remap screen
+           now, which is where a player looks for them. */
+        if (Bindings_SlotDown(INPUT_SLOT_CAM_LEFT)) {
             AddBetaCam = (AddBetaCam - FOLLOW_CAM_PAN_STEP) & 4095;
             FirstTime = AFF_ALL_FLIP;
             flag = 1;
         }
-        if (CheckKey(K_RBRACKET)) {
+        if (Bindings_SlotDown(INPUT_SLOT_CAM_RIGHT)) {
             AddBetaCam = (AddBetaCam + FOLLOW_CAM_PAN_STEP) & 4095;
             FirstTime = AFF_ALL_FLIP;
             flag = 1;

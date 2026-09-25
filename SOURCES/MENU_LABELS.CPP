@@ -543,4 +543,21 @@ const struct MenuLabelRow LocalizedMenuLabels[MENU_LABEL_COUNT] = {
       "Ajuste: midiendo al aire libre",
       "Regolazione: misura all'aperto",
       "Ajuste: medindo ao ar livre"}},
+    /* The two camera-orbit actions in the key remap screen. The retail text
+       bank names the actions it shipped with and stops there, so these two come
+       from here, like every other row this fork added to a menu. */
+    {MENU_LABEL_ACT_CAM_LEFT,
+     {"Turn camera left",
+      "Tourner caméra à gauche",
+      "Kamera nach links",
+      "Girar cámara a la izq.",
+      "Ruota camera a sinistra",
+      "Girar câmera à esquerda"}},
+    {MENU_LABEL_ACT_CAM_RIGHT,
+     {"Turn camera right",
+      "Tourner caméra à droite",
+      "Kamera nach rechts",
+      "Girar cámara a la der.",
+      "Ruota camera a destra",
+      "Girar câmera à direita"}},
 };

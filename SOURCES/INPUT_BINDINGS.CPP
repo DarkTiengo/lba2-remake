@@ -3,6 +3,7 @@
 #include <string.h> // memcpy
 
 #include <SYSTEM/INPUT.H>         // DefineInputKeys
+#include <SYSTEM/KEYBOARD.H>     // CheckKey
 #include <SYSTEM/KEYBOARD_KEYS.H> // K_*
 
 // The 1997 source carried two default layouts, DefKeysDefault for DOS and this
@@ -47,6 +48,11 @@ const T_DEF_KEY DefKeysDefault95[MAX_INPUT_SLOTS + 1] =
         {K_J, 0},                           // I_JETPACK
         {K_C, 0},                           // I_PROTECTION
         {K_F, 0},                           // I_FOUDRE
+        /* Orbiting the camera. Q and E are where a third-person game puts them;
+           the bracket keys are what this did before they were bindable, kept as
+           the second binding so a hand that knew them still works. */
+        {K_Q, K_LBRACKET},                  // INPUT_SLOT_CAM_LEFT
+        {K_E, K_RBRACKET},                  // INPUT_SLOT_CAM_RIGHT
 };
 
 T_DEF_KEY MemoDefKeys[MAX_INPUT_SLOTS + 1];
@@ -104,6 +110,8 @@ const T_DEF_KEY GamepadKeysDefault[MAX_INPUT_SLOTS] = {
     {K_GAMEPAD_DPAD_DOWN, 0},                        // 33 I_JETPACK
     {K_GAMEPAD_DPAD_UP, 0},                          // 34 I_PROTECTION
     {K_GAMEPAD_DPAD_LEFT, 0},                        // 35 I_FOUDRE
+    {0, 0},                                          // 36 camera orbit left (the right stick already orbits)
+    {0, 0},                                          // 37 camera orbit right
 };
 
 U32 NbInput = MAX_INPUT_SLOTS;
@@ -215,4 +223,13 @@ void RestoreInput() {
 
     memcpy(DefKeys, DEFKEYSDEFAULT, sizeof(T_DEF_KEY) * MAX_INPUT_SLOTS);
     memcpy(GamepadKeys, GamepadKeysDefault, sizeof(GamepadKeys));
+}
+
+//-------------------------------------------------------------------------
+S32 Bindings_SlotDown(S32 slot) {
+    if (slot < 0 || slot >= MAX_INPUT_SLOTS) {
+        return FALSE;
+    }
+    return CheckKey(DefKeys[slot].Key1) || CheckKey(DefKeys[slot].Key2)
+           || CheckKey(GamepadKeys[slot].Key1) || CheckKey(GamepadKeys[slot].Key2);
 }

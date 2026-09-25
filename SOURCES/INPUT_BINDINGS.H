@@ -19,7 +19,7 @@
 #include <SYSTEM/ADELINE_TYPES.H>
 
 // The number of bindable actions. The first 32 are the Input word (INPUT.H's
-// I_* bits, one per slot); the last four are the spell bits of a second word,
+// I_* bits, one per slot); four of the rest are the spell bits of a second word,
 // which is why they cannot share the folded table -- I_PINGOUIN is (1 << 0),
 // the same bit as I_UP. PERSO.CPP reads those four with a direct CheckKey.
 //
@@ -30,7 +30,13 @@
 // at one size and define them at another, which the compiler reports as a
 // redefinition with a different type. A name this module owns cannot be
 // clobbered by include order, and that, rather than the number, is the point.
-#define MAX_INPUT_SLOTS 36
+#define MAX_INPUT_SLOTS 38
+
+// The two beyond the spells: orbiting the exterior camera left and right. Like
+// the spells they carry no Input bit (the word is full at 32), so GereExtKeys
+// polls them with Bindings_SlotDown rather than reading a mask.
+#define INPUT_SLOT_CAM_LEFT 36
+#define INPUT_SLOT_CAM_RIGHT 37
 
 typedef struct {
     U32 Key1;
@@ -87,6 +93,11 @@ extern void RestoreInput(void);
 // zeroes. Returns how many were written, so 0 means the slot cannot be
 // expressed as a key press at all.
 extern S32 Bindings_KeysForSlot(S32 slot, U32 *out, S32 max);
+
+// Is `slot` held, on either of its keyboard keys or either of its pad ones? For
+// the slots past the Input word, which have no mask to test: the spells and the
+// camera orbit.
+extern S32 Bindings_SlotDown(S32 slot);
 
 // The slot `key` is bound to, or -1 for a key no slot claims. The first match in
 // slot order when a table binds one key twice, which Bindings_CheckReversible

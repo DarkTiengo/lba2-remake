@@ -21,6 +21,8 @@
 #include "INPUT.H"
 #include "GAMEMENU.H"
 #include "MENU_KEYNAV.H"
+#include "MENU_LABELS.H"
+#include "INPUT_BINDINGS.H"
 
 #include <FILEIO/SAVEPNG.H>
 
@@ -63,6 +65,10 @@
 S32 SelectConfig = 0;
 S32 SelectKey = 0;
 
+/* First action row on screen. Zero unless the table is taller than the panel. */
+static S32 s_cfgTop = 0;
+
+
 /* The config screen is a fixed 620-px-wide three-column layout (margins of
    10 each side in the 4:3 layout). At wider framebuffers, centre the 620-px
    region rather than letting it cling to the left edge — keeps the
@@ -72,7 +78,13 @@ S32 SelectKey = 0;
 #define CFG_X0 ((S32)ModeDesiredX / 2 - 310)
 #define CFG_Y0 10
 #define CFG_X1 ((S32)ModeDesiredX / 2 + 310)
-#define CFG_Y1 (CFG_Y0 + MAX_INPUT_SLOTS * 10 + 35)
+/* How many action rows the panel shows at once. The layout is the 1997 one and
+   it is as tall as a 480-line screen allows: header, 36 rows of 10, the three
+   buttons and the status bar come to 475 of 480. Actions past that scroll
+   rather than push the buttons off the bottom, which is what adding the camera
+   orbit to the table would otherwise have done. */
+#define CFG_VISIBLE_SLOTS 36
+#define CFG_Y1 (CFG_Y0 + CFG_VISIBLE_SLOTS * 10 + 35)
 
 #define ACTION_X (CFG_X0 + 20)
 #define KEY1_X (CFG_X0 + 371)
@@ -87,6 +99,43 @@ S32 SelectKey = 0;
 #define CFG_TXT_Y0 (CFG_MENU_Y1 + 5)
 #define CFG_TXT_X1 CFG_X1
 #define CFG_TXT_Y1_NORMAL (CFG_TXT_Y0 + 20)
+
+/* The action's name. The retail text bank names the actions it shipped with;
+   the rows this fork added carry their own labels. */
+static void ConfigActionText(S32 n, char *out, S32 size) {
+    if (n == INPUT_SLOT_CAM_LEFT || n == INPUT_SLOT_CAM_RIGHT) {
+        CopyUtf8ToCp850(out, size, GetLocalizedMenuLabel(n == INPUT_SLOT_CAM_LEFT ? MENU_LABEL_ACT_CAM_LEFT
+                                                                                 : MENU_LABEL_ACT_CAM_RIGHT));
+        return;
+    }
+    GetMultiText(START_ACTION_TXT + n, out);
+}
+
+/* Which row of the panel action `n` is drawn on, or -1 when it is scrolled out. */
+static S32 ConfigRowOf(S32 n) {
+    const S32 row = n - s_cfgTop;
+    return (row >= 0 && row < CFG_VISIBLE_SLOTS) ? row : -1;
+}
+
+/* Keep the selected action on screen. TRUE when the panel scrolled, which means
+   every row has to be drawn again rather than just the two that changed. */
+static S32 ConfigScrollTo(S32 sel) {
+    const S32 was = s_cfgTop;
+    if (sel >= 0 && sel < MAX_INPUT_SLOTS) {
+        if (sel < s_cfgTop) {
+            s_cfgTop = sel;
+        } else if (sel >= s_cfgTop + CFG_VISIBLE_SLOTS) {
+            s_cfgTop = sel - CFG_VISIBLE_SLOTS + 1;
+        }
+    }
+    if (s_cfgTop > MAX_INPUT_SLOTS - CFG_VISIBLE_SLOTS) {
+        s_cfgTop = MAX_INPUT_SLOTS - CFG_VISIBLE_SLOTS;
+    }
+    if (s_cfgTop < 0) {
+        s_cfgTop = 0;
+    }
+    return s_cfgTop != was;
+}
 
 // Set while drawing / using the gamepad remap screen (footer text differs;
 // layout height stays the same so the bottom menu stays within 480px).
@@ -448,8 +497,8 @@ static void ConfigModern_Publish(void) {
     rule.FillBottom = 0x50A8D0FFu;
     UiOverlay_Card((float)CFG_X0 + 10.0f, (float)CFG_Y0 + 19.5f, (float)CFG_X1 - 10.0f, (float)CFG_Y0 + 21.5f, &rule);
 
-    for (S32 n = 0; n < MAX_INPUT_SLOTS; n++) {
-        const float top = (float)(CFG_Y0 + 30 + n * 10) - 1.5f;
+    for (S32 n = s_cfgTop; n < s_cfgTop + CFG_VISIBLE_SLOTS && n < MAX_INPUT_SLOTS; n++) {
+        const float top = (float)(CFG_Y0 + 30 + (n - s_cfgTop) * 10) - 1.5f;
         const float cy = top + 5.5f;
         const S32 selected = n == SelectConfig;
         if (selected || (n & 1)) {
@@ -460,7 +509,7 @@ static void ConfigModern_Publish(void) {
             stripe.FillBottom = stripe.FillTop;
             UiOverlay_Card((float)CFG_X0 + 6.0f, top, (float)CFG_X1 - 6.0f, top + 10.0f, &stripe);
         }
-        GetMultiText(START_ACTION_TXT + n, text);
+        ConfigActionText(n, text, sizeof text);
         UiOverlay_Text((float)ACTION_X, cy, text, 11.0f, selected ? 0xFFFFFFFFu : 0xFFC8D2E0u, UIOVERLAY_ALIGN_LEFT, TRUE,
                        (float)(KEY1_X - ACTION_X - 20));
 
@@ -545,7 +594,11 @@ void DrawOneConfig(S32 n) {
         ConfigModern_Publish();
         return;
     }
-    S32 y = CFG_Y0 + 30 + n * 10;
+    const S32 row = ConfigRowOf(n);
+    if (row < 0) {
+        return; /* scrolled out of the panel */
+    }
+    S32 y = CFG_Y0 + 30 + row * 10;
     S32 x = ACTION_X;
     S32 x0, y0, x1, y1;
 
@@ -572,7 +625,7 @@ void DrawOneConfig(S32 n) {
 
     BoxStaticAdd(x0, y0, x1, y1);
 
-    GetMultiText(START_ACTION_TXT + n, string);
+    ConfigActionText(n, string, sizeof string);
     GraphPrintf(FALSE, x, y, string);
 
     // Key 1
@@ -816,8 +869,8 @@ void DrawScreenConfig(S32 gamepadTripleFooter) {
 
     DrawStatusConfig(STATUS_MENU);
 
-    for (n = 0; n < MAX_INPUT_SLOTS; n++) {
-        DrawOneConfig(n);
+    for (n = 0; n < CFG_VISIBLE_SLOTS; n++) {
+        DrawOneConfig(s_cfgTop + n);
     }
 
     for (n = MAX_INPUT_SLOTS; n < MAX_INPUT_SLOTS + 3; n++) {
@@ -903,6 +956,7 @@ void MenuConfig(void) {
 
     PaletteSync(PtrPalNormal);
 
+    ConfigScrollTo(SelectConfig);
     DrawScreenConfig(0);
 
     WaitNoInput();
@@ -1133,7 +1187,15 @@ void MenuConfig(void) {
         }
 
         if (oldselect != SelectConfig) {
-            DrawOneConfigMenu(oldselect);
+            /* Scrolling moves every row, so the whole panel is redrawn; otherwise
+               only the row the selection left needs it. */
+            if (ConfigScrollTo(SelectConfig)) {
+                for (S32 r = 0; r < CFG_VISIBLE_SLOTS; r++) {
+                    DrawOneConfig(s_cfgTop + r);
+                }
+            } else {
+                DrawOneConfigMenu(oldselect);
+            }
             oldselect = SelectConfig;
         }
 
@@ -1235,6 +1297,7 @@ void MenuGamepadConfig(void) {
     PaletteSync(PtrPalNormal);
 
     InitGamepadKeyStrings();
+    ConfigScrollTo(SelectConfig);
     DrawScreenConfig(1);
 
     WaitNoInput();
@@ -1447,7 +1510,15 @@ void MenuGamepadConfig(void) {
         }
 
         if (oldselect != SelectConfig) {
-            DrawOneConfigMenu(oldselect);
+            /* Scrolling moves every row, so the whole panel is redrawn; otherwise
+               only the row the selection left needs it. */
+            if (ConfigScrollTo(SelectConfig)) {
+                for (S32 r = 0; r < CFG_VISIBLE_SLOTS; r++) {
+                    DrawOneConfig(s_cfgTop + r);
+                }
+            } else {
+                DrawOneConfigMenu(oldselect);
+            }
             oldselect = SelectConfig;
         }
 

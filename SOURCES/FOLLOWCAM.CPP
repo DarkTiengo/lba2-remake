@@ -9,6 +9,7 @@
 #include "FOLLOWCAM_MATH.H"
 #include "SETTINGS.H"
 #include "INPUT.H"
+#include "INPUT_BINDINGS.H" /* the camera-orbit slots */
 #include <SYSTEM/KEYBOARD_KEYS.H>
 #include <3D/GETANG3D.H>
 #include <SYSTEM/LOG.H>
@@ -266,7 +267,7 @@ S32 FollowCam_EyeOffset(void) {
  * and ListObjet[NumObjFollow]. */
 void UpdateFollowCameraExt(void) {
     T_OBJ_3D *ptr3d = &ListObjet[NumObjFollow].Obj;
-    S32 manualPan = CheckKey(K_LBRACKET) OR CheckKey(K_RBRACKET);
+    S32 manualPan = Bindings_SlotDown(INPUT_SLOT_CAM_LEFT) OR Bindings_SlotDown(INPUT_SLOT_CAM_RIGHT);
     S32 heroMoving = (ptr3d->X != FollowCamPrevHeroX OR ptr3d->Z != FollowCamPrevHeroZ);
 
     /* First-frame init: sync to current camera state.

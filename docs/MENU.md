@@ -131,7 +131,7 @@ Flow: `RealGameMainMenu` (template) → `BuildGameMainMenu(firstloop)` → `Game
 - **Advanced options** (`GereAdvancedOptionsMenu`): toggles stereo handling, movie cameras, video playback size, window fullscreen mode, and subtitle display; includes the existing Detail Level slider, and opens the Camera page.
 - **Camera** (`GereCameraMenu`): which camera runs outdoors and how the mouse and the right stick drive it. Six selectors, none of which had a menu row before — a player whose mouse look was inverted had to edit `lba2.cfg`. Only exteriors: interiors are isometric and cannot rotate, which the first row's label says.
 - **Save/Load** (`SavedGameManagement`, `ChoosePlayerName`): Player name selection, save slots, `GameChoiceMenu[]`, `SavedConfirmMenu[]` for delete
-- **Keyboard config** (`MenuConfig`): standalone config tool in [SOURCES/CONFIG/](../SOURCES/CONFIG/) or in-game `ReadInputConfig`/`WriteInputConfig`
+- **Keyboard config** (`MenuConfig`): standalone config tool in [SOURCES/CONFIG/](../SOURCES/CONFIG/) or in-game `ReadInputConfig`/`WriteInputConfig`. The panel shows `CFG_VISIBLE_SLOTS` (36) action rows, which is as many as a 480-line screen holds once the header, the three buttons and the status bar have their space; the actions past them — the two camera-orbit ones this fork added — scroll into view as the selection reaches them, rather than pushing the buttons off the bottom. Their names come from [SOURCES/MENU_LABELS.CPP](../SOURCES/MENU_LABELS.CPP), the retail text bank naming only the actions it shipped with
 
 ## Menu data format
 
