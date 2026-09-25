@@ -83,6 +83,30 @@ capture that rides along with it about 5.
 That reverses the order below. Retaining the scenery saves the capture; the capture is no longer
 the biggest thing in the frame. **Step 2 is.**
 
+### Tried and refused: filling the decor flat
+
+The terrain's `gfx_fastterrain` fills a triangle flat where the GPU covers it, and the same trade
+looked obvious for the bodies standing on that terrain: the decor of an exterior cube is 0.445 ms
+of software rasterising, 6.7 ms a frame. It was built (a predicate beside the capture, a flat fill
+at the dispatch point, a setting) and then measured:
+
+| | scenery phase, 720p | 1080p |
+| --- | --- | --- |
+| the decor's polygons filled as authored | 20.90 ms | 16.14 ms |
+| filled flat where the GPU covers them | 20.72 ms | 15.83 ms |
+| not filled at all | 20.31 ms | — |
+| filled, but not captured | 20.53 ms | — |
+
+**The fill is 0.6 ms of the 6.7 and the capture 0.3.** Flattening bought 0.2, inside the noise of
+a single run, for a second fill path through the 1997 rasteriser and a predicate that has to track
+what the capture covers. Reverted.
+
+What the decor actually costs is the engine's own per-object work: the box projections that select
+it, the point transform, the lights, the sort. The classic renderer pays it too — its scenery
+phase is 14.8 ms, which reconciles as 6.7 of decor, about 7 of cells and 1 of grid. There is no
+modern-path saving to be had in it **short of not drawing the decor in software at all**, which is
+step 2.
+
 ## What to do about it, in order
 
 ### 1. Retain the scenery between frames
