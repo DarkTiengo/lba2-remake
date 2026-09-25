@@ -1,4 +1,5 @@
 #include "C_EXTERN.H"
+#include "PERFTRACE.H"
 #include "RES_SWITCH.H"
 #include <POLYGON/POLYFILT.H>
 
@@ -5585,7 +5586,9 @@ startaffscene:
         BoxReset();
         Cls();
 
+        Perftrace_PhaseBegin(PERFTRACE_PHASE_SCENERY);
         RefreshGrille();
+        Perftrace_PhaseEnd(PERFTRACE_PHASE_SCENERY);
 
         ChangeIncrustPos(oldxporg, oldyporg, XpOrgw, YpOrgw);
         //			HQ_ChangeBalanceSamples( oldxporg, oldyporg ) ;

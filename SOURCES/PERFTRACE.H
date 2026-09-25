@@ -15,7 +15,12 @@ extern "C" {
 enum {
     PERFTRACE_PHASE_SCENE = 0,
     PERFTRACE_PHASE_PRESENT = 1,
-    PERFTRACE_PHASE_COUNT = 2
+    /* The exterior scenery: the software terrain fill and, with the GPU
+       renderer, the capture that rides along with it. Inside SCENE. It is the
+       half of a moving-camera frame the retained-scenery work is about, and
+       there is no reading the other half without it. */
+    PERFTRACE_PHASE_SCENERY = 2,
+    PERFTRACE_PHASE_COUNT = 3
 };
 
 void Perftrace_Init(void);

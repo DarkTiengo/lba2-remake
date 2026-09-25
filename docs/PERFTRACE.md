@@ -64,6 +64,7 @@ The dump is plain text with three sections:
 ## All frames  (n=256)
   frame_us  min=10620  avg=12700  p50=12529  p95=14484  p99=17036  max=18223  (~78.7 fps)
   scene avg=12623 us  (99.3% of frame)
+  scenery avg=0 us  (0.0% of frame)
   present avg=12112 us  (95.3% of frame)
 
 ## Interior / iso  (n=256)
@@ -163,6 +164,14 @@ void Perftrace_SetAutoDumpPath(const char *path);
 void Perftrace_PresentBegin(void);
 void Perftrace_PresentEnd(void);
 ```
+
+The phases are `scene` (`AffScene`), `scenery` (`RefreshGrille` inside it: the
+software terrain fill and, with the GPU renderer, the capture that rides along
+with it) and `present` (`BoxBlit`, ending in the GPU submit). `scenery` is zero
+on a frame that did not redraw the scenery, which is every frame the camera and
+the hero both stand still; it is most of a frame in which the camera moves, and
+that is the number [the retained-scenery plan](plan/GPU_SCENE_RETENTION.md) is
+about.
 
 Adding a new phase: bump `PERFTRACE_PHASE_COUNT` in `PERFTRACE.H`, add the
 enum entry, and the dump format auto-includes the new column.

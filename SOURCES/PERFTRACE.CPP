@@ -271,6 +271,9 @@ static void dump_section(FILE *f, const char *label, int tag_filter, int max_sam
             (unsigned long)s.p99, (unsigned long)s.max, avg_fps);
     fprintf(f, "  scene avg=%.0f us  (%.1f%% of frame)\n",
             n ? (double)s.sum_phase[PERFTRACE_PHASE_SCENE] / (double)n : 0.0, scene_share);
+    fprintf(f, "  scenery avg=%.0f us  (%.1f%% of frame)\n",
+            n ? (double)s.sum_phase[PERFTRACE_PHASE_SCENERY] / (double)n : 0.0,
+            s.sum > 0 ? (100.0 * (double)s.sum_phase[PERFTRACE_PHASE_SCENERY]) / (double)s.sum : 0.0);
     fprintf(f, "  present avg=%.0f us  (%.1f%% of frame)\n\n",
             n ? (double)s.sum_phase[PERFTRACE_PHASE_PRESENT] / (double)n : 0.0, present_share);
     free(frame);
@@ -301,15 +304,16 @@ int Perftrace_Dump(const char *path, int max_samples) {
     dump_section(f, "Exterior", 2, max_samples);
 
     fprintf(f, "## Per-frame samples (oldest first, microseconds)\n");
-    fprintf(f, "# idx  tag    frame   scene  present\n");
+    fprintf(f, "# idx  tag    frame   scene  scenery  present\n");
     int n = s_ring_count;
     int take = (max_samples > 0 && max_samples < n) ? max_samples : n;
     int start = (s_ring_head - take + PERFTRACE_RING_SIZE) % PERFTRACE_RING_SIZE;
     for (int i = 0; i < take; ++i) {
         int idx = (start + i) % PERFTRACE_RING_SIZE;
         const Sample *r = &s_ring[idx];
-        fprintf(f, "%5d  %-4s  %6lu  %6lu  %6lu\n", i, tag_name(r->scene_tag),
+        fprintf(f, "%5d  %-4s  %6lu  %6lu  %7lu  %6lu\n", i, tag_name(r->scene_tag),
                 (unsigned long)r->frame_us, (unsigned long)r->phase_us[PERFTRACE_PHASE_SCENE],
+                (unsigned long)r->phase_us[PERFTRACE_PHASE_SCENERY],
                 (unsigned long)r->phase_us[PERFTRACE_PHASE_PRESENT]);
     }
 
