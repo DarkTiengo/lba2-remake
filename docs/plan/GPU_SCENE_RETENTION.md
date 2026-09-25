@@ -40,6 +40,32 @@ Two numbers fall out of that table:
 
 And the effects, which is where one would look first, are worth 6 ms of the 68.
 
+## What the present is, and is not
+
+The present is half the frame, so it was taken apart the same way, by removing one thing at a
+time from a 720p orbit and measuring what the present phase did:
+
+| removed | present |
+| --- | --- |
+| nothing | 33.0 ms |
+| the vertex upload (30 MB a frame) | 29.6 ms |
+| every scene draw | 34.3 ms |
+| the tag texture upload | 34.1 ms |
+| the whole GPU renderer (classic) | ~10 ms |
+
+So the geometry the capture builds is **not** what the present spends its time on: uploading it is
+3.4 ms and drawing it is free. What is left is the composite, and it is pixel-bound — 640x480 puts
+the present at 16.5 ms against 33.0 at 1280x720, near enough to the pixel count.
+
+And the GPU it runs on is asleep. During that orbit `nvidia-smi` reports the laptop's 4060 at
+**900 to 1000 MHz of its 3105, 25 % utilisation, 10 to 14 W**, on AC power with no throttling
+event active. The work arrives in bursts too small and too far apart for the driver's clock
+governor to answer, so the composite takes three times what it would at full clock, and the frame
+waits for it.
+
+That is the second reason the CPU side comes first. Every millisecond taken off the scenery
+arrives twice: once as itself, and once as a GPU that is given enough to do to wake up.
+
 ## What to do about it, in order
 
 ### 1. Retain the scenery between frames
@@ -84,23 +110,35 @@ over everything, and the near-plane hole the terrain's own fill hides today.
 **Worth:** most of the remaining 14.8 ms. **Risk:** the highest of the three — it changes what the
 composite is.
 
-### 3. A compact vertex for the scenery
+### 3. Fewer vertices for the same curve
 
-96 bytes a vertex is position, normal, light, view position, material and uv, all in float4s. The
-scenery uses a third of it. Packing it to about 40 cuts the 30 MB the capture writes and the
-upload to match.
+A land triangle near the camera becomes sixteen, emitted as 48 separate vertices where the sub-grid
+has only 15 distinct points: every interior point is built, written and uploaded three times over.
+An index buffer would cut the capture's arithmetic and its writes by the same three, and the
+upload with them.
 
-**Worth:** 3 to 5 ms at 720p, and the same fraction of the vertex budget, which is what decides
-how much world can be alive at once. **Risk:** mechanical but wide — every shader that reads a
-vertex.
+**Worth:** most of the smooth terrain's share of the capture, which is two thirds of it. **Risk:**
+contained to the GPU plumbing — `Compact` has to move a draw's indices with its vertices (store
+them relative to the draw's base and it is a move, not a remap), the presenter has to bind them,
+and the shadow hierarchy has to walk triangles through them.
+
+### 4. A compact vertex, if the budget asks for it
+
+96 bytes a vertex is position, normal, light, view position, material and uv, all in float4s; the
+scenery uses a third of it. Packing it to about 40 would cut the memory the world costs, which is
+what decides how much of it can be alive at once.
+
+**Worth for speed: little** — the measurements above put the upload at 3.4 ms, so this is a memory
+change, not a time one. It is here because the vertex budget is what the retained ring in step 1
+will run into. **Risk:** mechanical but wide — every shader that reads a vertex.
 
 ## Order and why
 
 1 first because it is self-contained, reversible behind a setting, and pays the most per unit of
 risk. 2 second because until 1 lands the software fill is not the top cost, and because it wants
-the composite's attention on its own. 3 last because it is a refactor whose value is real but
-whose risk is spread over every shader, and because after 1 and 2 the remaining geometry cost is
-in the render rather than in the upload.
+the composite's attention on its own. 3 is the one to take first if 1 turns out to want the whole
+cube ring captured and the vertex budget says no: it buys a third of the same cost with a fraction
+of the risk, and it helps 1 when 1 comes. 4 is not a speed change at all.
 
 Nothing here trades detail for speed: the effects are 6 ms of the 68 and the player already has
 switches for them. Quality-for-speed knobs (a coarser smooth terrain, a shorter grass radius) stay
