@@ -247,6 +247,12 @@ void GpuObj_SetFireRects(const U8 *page, const T_GPUOBJ_RECT *rects, U32 count);
 S32 GpuObj_FireAt(S32 x, S32 y);
 
 void GpuObj_ClearLights(void);
+
+/* What the scene is about -- the one the camera follows -- in scene space: the
+   lights are chosen by how near they are to it, a choice the camera turning
+   around it leaves alone. */
+extern float GpuObjFocus[3];
+extern S32 GpuObjFocusValid;
 void GpuObj_AddLight(float x, float y, float z, float radius, float r, float g, float b, float intensity);
 
 /* Sprite atlas for interior bricks: GPUOBJ_ATLAS_SIZE square, two bytes a texel
@@ -291,6 +297,12 @@ void GpuObj_EndDraw(void);
  *  Draws inside a group take no snapshot of their own. */
 void GpuObj_BeginGroup(void);
 void GpuObj_EndGroup(void);
+
+/** The id of the group being captured, 0 when none is open. */
+U32 GpuObj_GroupId(void);
+
+/** The id of the last group opened, open or not. */
+U32 GpuObj_LastGroupId(void);
 
 /** The open group owns every pixel of the box [x0, x1] x [y0, y1] when it
  *  ends, whether its fills changed the pixel or not: the exterior scenery, when

@@ -506,8 +506,12 @@ S32 GpuObj_FireAt(S32 x, S32 y) {
     return -1;
 }
 
+float GpuObjFocus[3] = {0.0f, 0.0f, 0.0f};
+S32 GpuObjFocusValid = FALSE;
+
 void GpuObj_ClearLights(void) {
     GpuObjNbLights = 0;
+    GpuObjFocusValid = FALSE;
 }
 
 void GpuObj_AddLight(float x, float y, float z, float radius, float r, float g, float b, float intensity) {
@@ -690,6 +694,14 @@ void GpuObj_EndGroup(void) {
         memcpy(plane->Snap + row + x0, log + row + x0, (size_t)(x1 - x0));
     }
     GrowBox(plane, x0, y0, x1, y1);
+}
+
+U32 GpuObj_GroupId(void) {
+    return s_groupOpen ? s_groupId : 0;
+}
+
+U32 GpuObj_LastGroupId(void) {
+    return s_groupId;
 }
 
 void GpuObj_ClaimGroup(S32 x0, S32 y0, S32 x1, S32 y1) {

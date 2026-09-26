@@ -176,11 +176,25 @@ static void PresentCurrentTexture() {
     /* LBA2_CAPTURE_MENU=1: only frames with the menu overlay up, so the last
        modern menu page survives the gameplay frames after it. */
     static const bool menuOnly = SDL_getenv("LBA2_CAPTURE_MENU") != NULL;
+    /* A name with a %d in it keeps a sequence instead, one file a present
+       numbered from 0, from present LBA2_CAPTURE_FROM on, LBA2_CAPTURE_COUNT of
+       them: what a change looks like in motion, from a single run. */
+    static int presentNumber = 0;
+    const int present = presentNumber++;
     if (capture != NULL && capture[0] != '\0' && (!menuOnly || UiOverlay_Active())) {
-        SDL_Surface *surface = SDL_RenderReadPixels(sdlRenderer, NULL);
-        if (surface != NULL) {
-            SDL_SaveBMP(surface, capture);
-            SDL_DestroySurface(surface);
+        const bool sequence = SDL_strstr(capture, "%d") != NULL;
+        static const int from = SDL_getenv("LBA2_CAPTURE_FROM") ? SDL_atoi(SDL_getenv("LBA2_CAPTURE_FROM")) : 0;
+        static const int count = SDL_getenv("LBA2_CAPTURE_COUNT") ? SDL_atoi(SDL_getenv("LBA2_CAPTURE_COUNT")) : 16;
+        if (!sequence || (present >= from && present < from + count)) {
+            SDL_Surface *surface = SDL_RenderReadPixels(sdlRenderer, NULL);
+            if (surface != NULL) {
+                char path[1024];
+                if (sequence) {
+                    SDL_snprintf(path, sizeof(path), capture, present - from);
+                }
+                SDL_SaveBMP(surface, sequence ? path : capture);
+                SDL_DestroySurface(surface);
+            }
         }
     }
     SDL_RenderPresent(sdlRenderer);

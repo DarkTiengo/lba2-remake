@@ -5992,6 +5992,11 @@ startaffscene:
         const T_OBJET *hero = &ListObjet[NUM_PERSO];
         AffGpu_AddWorldLight(hero->Obj.X, hero->Obj.Y + 1200, hero->Obj.Z, 2400.0f, 1.0f, 0.8f, 0.55f, 0.35f);
     }
+    /* The lights are chosen around the one the camera follows. */
+    {
+        const T_OBJET *focus = &ListObjet[NumObjFollow];
+        AffGpu_SetFocus(focus->Obj.X, focus->Obj.Y + 600, focus->Obj.Z);
+    }
     /* Every body is captured: their shadows can follow their shapes. */
     AffGpu_BuildShadows();
 

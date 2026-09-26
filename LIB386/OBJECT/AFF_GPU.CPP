@@ -100,6 +100,13 @@ typedef struct {
 #define MAX_FRAME_LAMPS 32
 static T_FRAME_LIGHT s_lamps[MAX_FRAME_LAMPS];
 static U32 s_nbLamps = 0;
+/* The scenery's lamps (the street lamps among its decor), kept from the frame
+   the scenery was last captured in: it is captured again only when the camera
+   moves, and the bodies standing under them lost their lamps' shadows on
+   every frame it did not. */
+static T_FRAME_LIGHT s_sceneryLamps[MAX_FRAME_LAMPS];
+static U32 s_nbSceneryLamps = 0;
+static U32 s_sceneryGroup = 0;
 static T_GPUOBJ_DRAW *s_draw = NULL;
 
 /* Fire-textured polygons of the body being captured: their centres summed. */
@@ -386,6 +393,28 @@ void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth) {
     v->vpos[1] = y;
     v->vpos[2] = -depth;
     v->normal[2] = 1.0f;
+}
+
+void AffGpu_SetFocus(S32 x, S32 y, S32 z) {
+    if (!GpuObj_Active()) {
+        return;
+    }
+    if (TypeProj == TYPE_3D) {
+        const S32 savedX = X0;
+        const S32 savedY = Y0;
+        const S32 savedZ = Z0;
+        LongRotatePoint(&MatriceWorld, x, y, z);
+        x = X0;
+        y = Y0;
+        z = Z0;
+        X0 = savedX;
+        Y0 = savedY;
+        Z0 = savedZ;
+    }
+    GpuObjFocus[0] = (float)(x - CameraXr);
+    GpuObjFocus[1] = (float)(y - CameraYr);
+    GpuObjFocus[2] = (float)(z - CameraZr);
+    GpuObjFocusValid = TRUE;
 }
 
 void AffGpu_AddWorldLight(S32 x, S32 y, S32 z, float radius, float r, float g, float b, float intensity) {
@@ -965,7 +994,17 @@ S32 AffGpu_Shadow(const S32 corners[4][3], S32 ground, S32 height, S32 tall) {
 
 /* A captured body, kept for the shadows; its lamp or fire as a light. */
 static void KeepCaster(const T_GPUOBJ_DRAW *draw) {
-    if (draw->HasGlow && s_nbLamps < MAX_FRAME_LAMPS) {
+    const U32 group = GpuObj_GroupId();
+    if (group != 0 && group != s_sceneryGroup) {
+        s_sceneryGroup = group;
+        s_nbSceneryLamps = 0;
+    }
+    if (draw->HasGlow && group != 0 && s_nbSceneryLamps < MAX_FRAME_LAMPS) {
+        T_FRAME_LIGHT *l = &s_sceneryLamps[s_nbSceneryLamps++];
+        memcpy(l->Pos, draw->GlowPos, sizeof(l->Pos));
+        l->Radius = draw->HasGlow == 2 ? 9000.0f : 2400.0f;
+        l->Weight = 0.9f * 0.6f;
+    } else if (draw->HasGlow && s_nbLamps < MAX_FRAME_LAMPS) {
         T_FRAME_LIGHT *l = &s_lamps[s_nbLamps++];
         memcpy(l->Pos, draw->GlowPos, sizeof(l->Pos));
         l->Radius = draw->HasGlow == 2 ? 9000.0f : 2400.0f;
@@ -1117,7 +1156,7 @@ void AffGpu_BuildShadows(void) {
        every body and the terrain, so no silhouettes are needed. */
     GpuObjRayScene = GpuObjRayTrace && TypeProj == TYPE_3D;
     /* Lights that can shadow: the scene's own and the lamps and fires on bodies. */
-    T_FRAME_LIGHT lights[GPUOBJ_MAX_LIGHTS + MAX_FRAME_LAMPS];
+    T_FRAME_LIGHT lights[GPUOBJ_MAX_LIGHTS + MAX_FRAME_LAMPS * 2];
     U32 nbLights = 0;
     if (GpuObjLightsEnabled) {
         for (U32 i = 0; i < GpuObjNbLights; i++) {
@@ -1130,6 +1169,10 @@ void AffGpu_BuildShadows(void) {
         }
         for (U32 i = 0; i < s_nbLamps; i++) {
             lights[nbLights++] = s_lamps[i];
+        }
+        /* Only the scenery on screen: the last one captured. */
+        for (U32 i = 0; i < s_nbSceneryLamps && s_sceneryGroup == GpuObj_LastGroupId(); i++) {
+            lights[nbLights++] = s_sceneryLamps[i];
         }
     }
 

@@ -59,6 +59,9 @@ void AffGpu_BuildShadows(void);
  *  of the current projection are captured in (GpuObj_AddLight). */
 void AffGpu_AddWorldLight(S32 x, S32 y, S32 z, float radius, float r, float g, float b, float intensity);
 
+/** The scene's focus (GpuObjFocus): a world point, placed as the lights are. */
+void AffGpu_SetFocus(S32 x, S32 y, S32 z);
+
 #ifdef __cplusplus
 }
 #endif

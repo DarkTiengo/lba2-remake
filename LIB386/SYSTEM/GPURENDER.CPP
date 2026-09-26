@@ -1526,19 +1526,26 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             nbLights++;
         }
     }
-    /* Lamp globes on models: a steady light in the globe's colour. */
+    /* Lamp globes on models: a steady light in the globe's colour. They were
+       taken in the order the draws came, until the lights ran out -- and the
+       ring of cubes is drawn farthest first, in an order the camera changes --
+       so with more lamps around than lights, which ones lit (and cast their
+       shadows) changed as the camera turned. The nearest to the scene's focus
+       now, the rest dropped: a choice only the one the camera follows moves. */
     if (GpuObjLightsEnabled && GpuObjGlow) {
-        const U32 lampsFrom = nbLights;
-        for (U32 i = 0; i < count && nbLights < GPUOBJ_MAX_LIGHTS; i++) {
+        static float lamp[256][4];
+        static float lampColour[256][3];
+        U32 nbLamps = 0;
+        for (U32 i = 0; i < count && nbLamps < SDL_arraysize(lamp); i++) {
             const T_GPUOBJ_DRAW *draw = draws[i];
             if (!draw->HasGlow) {
                 continue;
             }
             S32 merged = FALSE;
-            for (U32 l = lampsFrom; l < nbLights; l++) {
-                const float dx = lights[l * 4] - draw->GlowPos[0];
-                const float dy = lights[l * 4 + 1] - draw->GlowPos[1];
-                const float dz = lights[l * 4 + 2] - draw->GlowPos[2];
+            for (U32 l = 0; l < nbLamps; l++) {
+                const float dx = lamp[l][0] - draw->GlowPos[0];
+                const float dy = lamp[l][1] - draw->GlowPos[1];
+                const float dz = lamp[l][2] - draw->GlowPos[2];
                 if (dx * dx + dy * dy + dz * dz < 600.0f * 600.0f) {
                     merged = TRUE;
                     break;
@@ -1547,36 +1554,64 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             if (merged) {
                 continue;
             }
-            float *pos = lights + nbLights * 4;
-            pos[0] = draw->GlowPos[0];
-            pos[1] = draw->GlowPos[1];
-            pos[2] = draw->GlowPos[2];
+            lamp[nbLamps][0] = draw->GlowPos[0];
+            lamp[nbLamps][1] = draw->GlowPos[1];
+            lamp[nbLamps][2] = draw->GlowPos[2];
             /* Exterior worlds are drawn at a far larger scale than rooms. */
-            pos[3] = draw->HasGlow == 2 ? 9000.0f : 2400.0f;
+            lamp[nbLamps][3] = draw->HasGlow == 2 ? 9000.0f : 2400.0f;
+            memcpy(lampColour[nbLamps], draw->GlowColor, sizeof(lampColour[nbLamps]));
+            nbLamps++;
+        }
+        const float *focus = GpuObjFocusValid ? GpuObjFocus : NULL;
+        while (nbLamps > 0 && nbLights < GPUOBJ_MAX_LIGHTS) {
+            U32 best = 0;
+            float bestD = 1e30f;
+            for (U32 l = 0; l < nbLamps; l++) {
+                const float dx = lamp[l][0] - (focus ? focus[0] : 0.0f);
+                const float dy = lamp[l][1] - (focus ? focus[1] : 0.0f);
+                const float dz = lamp[l][2] - (focus ? focus[2] : 0.0f);
+                const float d = dx * dx + dy * dy + dz * dz;
+                if (d < bestD) {
+                    bestD = d;
+                    best = l;
+                }
+            }
+            float *pos = lights + nbLights * 4;
+            memcpy(pos, lamp[best], sizeof(float) * 4);
             float *colour = lights + GPUOBJ_MAX_LIGHTS * 4 + nbLights * 4;
             /* A warm lamplight tinted by the glass. */
-            colour[0] = 0.5f + 0.5f * draw->GlowColor[0];
-            colour[1] = 0.39f + 0.39f * draw->GlowColor[1];
-            colour[2] = 0.18f + 0.18f * draw->GlowColor[2];
+            colour[0] = 0.5f + 0.5f * lampColour[best][0];
+            colour[1] = 0.39f + 0.39f * lampColour[best][1];
+            colour[2] = 0.18f + 0.18f * lampColour[best][2];
             colour[3] = 0.9f;
             nbLights++;
+            nbLamps--;
+            memcpy(lamp[best], lamp[nbLamps], sizeof(lamp[best]));
+            memcpy(lampColour[best], lampColour[nbLamps], sizeof(lampColour[best]));
         }
     }
     lights[GPUOBJ_MAX_LIGHTS * 8] = (float)nbLights;
-    /* The composite's shadow rays aim at the lights nearest to the camera. */
+    /* The composite's shadow rays aim at the lights nearest to the scene's
+       focus (to the camera when there is none): nearest the camera, the eight
+       changed as it orbited, and their shadows came and went with them. */
     s_nbRtLights = 0;
+    const float *focus = GpuObjFocusValid ? GpuObjFocus : NULL;
     for (U32 l = 0; l < nbLights; l++) {
         const float *pos = lights + l * 4;
         const float *colour = lights + GPUOBJ_MAX_LIGHTS * 4 + l * 4;
-        const float d = pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2];
+        const float fx = pos[0] - (focus ? focus[0] : 0.0f), fy = pos[1] - (focus ? focus[1] : 0.0f),
+                    fz = pos[2] - (focus ? focus[2] : 0.0f);
+        const float d = fx * fx + fy * fy + fz * fz;
         U32 slot = s_nbRtLights;
         if (s_nbRtLights == RT_MAX_LIGHTS) {
             /* Replace the farthest kept, if this one is nearer. */
             U32 far = 0;
             float farD = -1.0f;
             for (U32 k = 0; k < RT_MAX_LIGHTS; k++) {
-                const float dk = s_rtLights[k][0] * s_rtLights[k][0] + s_rtLights[k][1] * s_rtLights[k][1] +
-                                 s_rtLights[k][2] * s_rtLights[k][2];
+                const float kx = s_rtLights[k][0] - (focus ? focus[0] : 0.0f),
+                            ky = s_rtLights[k][1] - (focus ? focus[1] : 0.0f),
+                            kz = s_rtLights[k][2] - (focus ? focus[2] : 0.0f);
+                const float dk = kx * kx + ky * ky + kz * kz;
                 if (dk > farD) {
                     farD = dk;
                     far = k;

@@ -1374,12 +1374,15 @@ void main() {
             if (all(greaterThanEqual(at, vec2(0.0))) && all(lessThan(at, vec2(1.0)))) {
                 vec4 then = texture(u_rtHistory, at);
                 float dThen = exp2(then.a * 17.0) - 1.0;
-                /* A difference the four rays' noise cannot make is a shadow that
-                   moved (a body walking, a door): that one is taken as it is now. */
-                vec3 gap = abs(then.rgb - now);
-                bool moved = gap.r > 0.6 * max(rtSun.w, 0.05) || gap.g > 0.6 || gap.b > 0.35;
+                /* Only the sun's share: it is the one traced with a few rays
+                   turned per pixel, the noisy one. The lights' (one ray each)
+                   and the occlusion (from the depth) have no noise to settle,
+                   and taking them in only left a lamp's shadow of someone
+                   walking trailing behind him. A difference the sun's four rays
+                   cannot make is a shadow that moved: taken as it is now. */
+                bool moved = abs(then.r - now.r) > 0.6 * max(rtSun.w, 0.05);
                 if (then.a > 0.0 && abs(dThen - dp) < dp * 0.06 + 8.0 && !moved) {
-                    now = mix(now, then.rgb, 0.8);
+                    now.r = mix(now.r, then.r, 0.8);
                 }
             }
         }
