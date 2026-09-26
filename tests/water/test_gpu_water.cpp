@@ -49,9 +49,17 @@ extern "C" U32 *GpuObj_AllocIndices(U32 count) {
 }
 extern "C" void GpuObj_EndDraw(void) {}
 static const S16 *heightMap;
-extern "C" S32 GpuObj_HeightMap(S32, S32, S32, const S16 *heights) {
+extern "C" S32 GpuObj_HeightMap(S32, S32, S32, const S16 *heights, S32 *fresh) {
     heightMap = heights;
+    if (fresh != NULL) {
+        *fresh = FALSE;
+    }
     return 7;
+}
+extern "C" {
+U32 GpuObjLandRecords[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS];
+S32 GpuObjLandCount[GPUOBJ_MAX_HEIGHTMAPS];
+void GpuObj_CubeSlotChanged(S32) {}
 }
 extern "C" void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth) {
     std::memset(v, 0, sizeof(*v));
@@ -487,6 +495,51 @@ int main() {
     GpuWater_SetScene(4);
     GpuWater_SetTime(5000);
     Check(!GpuWater_GetImpactWorld(0, impact), "impact expires after its ripple and spray");
+    /* The land the GPU grows whole: one record a fill of a half-cell, built
+       once a cube, and a draw that carries the camera the cube is drawn from. */
+    {
+        static S16 ground[65 * 65];
+        static U8 light[65 * 65];
+        static T_TERRAIN_HALF halves[64 * 64 * 2];
+        std::memset(halves, 0, sizeof(halves));
+        std::memset(light, 15, sizeof(light));
+        const S32 cell = 3 * 64 + 3;
+        T_TERRAIN_HALF *colour = &halves[cell * 2], *water = &halves[cell * 2 + 1];
+        colour->PolyFlag = 1;
+        colour->Bank = 2;
+        colour->PolyType = POLY_SOLID;
+        water->TexFlag = 1;
+        water->TexType = POLY_TEXTURE;
+        water->CodeJeu = 12;
+        water->IndexTex = 1;
+        static const U16 defs[12] = {0, 0, 0, 0, 0, 0, 256, 512, 768, 1024, 1280, 1536};
+        GpuObjLandCount[7] = -1;
+        CameraXr = 100;
+        CameraYr = 200;
+        CameraZr = 300;
+        const bool build = TerrainGpu_LandSlot(ground) != FALSE;
+        TerrainGpu_LandBuild(halves, light, defs);
+        const U32 *r = GpuObjLandRecords + (size_t)7 * GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS;
+        const U32 *w = r + GPUOBJ_LAND_WORDS;
+        const S32 expected = ((2 << 4) + 11 + ((3 * 3585 * 21845) >> 24)) & 0xFF;
+        Check(build && GpuObjLandCount[7] == 2 && (r[0] & 0xFFFu) == (U32)cell &&
+                  ((r[0] >> 17) & 15u) == (U32)GPUOBJ_MODE_SOLID && (S32)(r[1] & 0xFFu) == expected,
+              "a cell's colour fill becomes a record with its bank's shaded colour");
+        /* The water triangle (corners 2, 3, 0) keeps its corners flat, and the
+           colour triangle (0, 1, 2) shares two of them. */
+        Check((w[0] & (1u << 14)) != 0 && (w[0] & (1u << 24)) != 0 && ((w[0] >> 21) & 7u) == 7u &&
+                  ((r[0] >> 21) & 7u) == 5u,
+              "shoreline water is marked, flat, and flattens the corners it shares");
+        Check(w[2] == (256u | 512u << 16) && w[3] == (768u | 1024u << 16) && w[4] == (1280u | 1536u << 16),
+              "a texture fill carries its three texture corners");
+        TerrainGpu_LandDraw(NULL, NULL, 0, 30000, 0, 50000);
+        Check(draw.Procedural == GPUOBJ_PROC_LAND && draw.LandSlot == 7 && !draw.LandSmooth &&
+                  draw.LandOrigin[0] == -100.0f && draw.LandOrigin[1] == -200.0f && draw.LandOrigin[2] == -300.0f &&
+                  draw.LandFar == 30000.0f,
+              "the land draw carries its slot and where the cube lies in view");
+        TerrainGpu_End();
+        CameraXr = CameraYr = CameraZr = 0;
+    }
     std::printf("GPU water: %s\n", failures ? "FAILED" : "passed");
     return failures ? 1 : 0;
 }

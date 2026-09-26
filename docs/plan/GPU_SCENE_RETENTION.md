@@ -154,8 +154,10 @@ The two fills are gone: the scenery phase fell from 26.8 to 19.6 ms. What was le
 done *for* the GPU, and two thirds of it has moved: the sea's swell is the vertex shader's (19.6 to
 16.1 ms, and the waves move with the camera still), and the smooth terrain grows on the GPU from
 the cube's height map (`GPUTERRAIN.vert`, 16.1 to 13.3 ms). The grass's blades followed (13.3 to 12.0 ms):
-the CPU only decides each tuft. The scenery phase is now the engine's own work — the cell walk,
-the grid, the decor — and the flat land's records.
+the CPU only decides each tuft. Then the land itself: the GPU grows each cube from records built
+once a cube, and the CPU's grid is placed only where the game asks for depth (12.0 to 9.1 ms).
+What is left of the scenery phase is the decor (about 4 ms), the group's tags and the copy into
+Screen (about 2), the sea's capture and the grass's tufts.
 
 The original analysis, kept:
 

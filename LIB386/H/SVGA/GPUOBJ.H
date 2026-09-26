@@ -63,11 +63,12 @@ extern U32 *GpuObjIndices;
    a cube's 65 x 65 heights, one slot a cube, kept by the cube's place so a
    cube seen frame after frame is sent once. */
 #define GPUOBJ_HEIGHTMAP_SIDE 65
-#define GPUOBJ_MAX_HEIGHTMAPS 128
+#define GPUOBJ_MAX_HEIGHTMAPS 64
 
 /* What GPUTERRAIN.vert grows a Procedural draw's vertices into. */
 #define GPUOBJ_PROC_TERRAIN 1 ///< three vertices, a land triangle's corners: sixteen triangles on the curve
 #define GPUOBJ_PROC_GRASS 2   ///< one vertex, a tuft's root: three blades
+#define GPUOBJ_PROC_LAND 3    ///< one header vertex; the triangles are the cube slot's land records
 #define GPUOBJ_PROC_TERRAIN_VERTS 48 ///< drawn a record of three
 #define GPUOBJ_PROC_GRASS_VERTS 9    ///< drawn a record of one
 extern float GpuObjHeightMaps[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE];
@@ -76,8 +77,22 @@ extern S32 GpuObjHeightMapsDirtyTo;   ///< one past the last
 
 /** The slot holding the height map of the cube keyed (island, x, z), filled
  *  from heights when the key is new. The same place is always the same map:
- *  a cube's heights do not change while the island is played. */
-S32 GpuObj_HeightMap(S32 island, S32 cubeX, S32 cubeZ, const S16 *heights);
+ *  a cube's heights do not change while the island is played. *fresh (when not
+ *  NULL) says whether the slot was just taken, and the rest of the cube's data
+ *  must be written into it too. */
+S32 GpuObj_HeightMap(S32 island, S32 cubeX, S32 cubeZ, const S16 *heights, S32 *fresh);
+
+/* A cube's land as records the GPU grows every triangle of (GPUTERRAIN.vert),
+   two uvec4 each (TERRAIN_GPU.CPP's LAND_* bits, the shading, the three
+   texture corners), kept in the cube's slot. */
+#define GPUOBJ_LAND_MAX 16384 ///< 64 x 64 cells, two halves, two layers (colour and texture)
+#define GPUOBJ_LAND_WORDS 8   ///< U32 a record
+extern U32 GpuObjLandRecords[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS];
+extern S32 GpuObjLandCount[GPUOBJ_MAX_HEIGHTMAPS]; ///< records in each slot, -1 before they are built
+
+
+/** The slot's data (height map, land records) changed: send it again. */
+void GpuObj_CubeSlotChanged(S32 slot);
 
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
@@ -134,7 +149,13 @@ typedef struct {
     U32 NbIndices;    ///< 0: drawn straight from its vertices, in threes
     S32 Retainable;   ///< the exterior scenery: placed by AffGpu_ViewVertex, so it can be re-placed
     S32 Retained;     ///< kept from an earlier frame: drawn through the camera difference
-    S32 Procedural;   ///< grown by GPUTERRAIN.vert: GPUOBJ_PROC_TERRAIN or GPUOBJ_PROC_GRASS, 0 for plain vertices
+    S32 Procedural;   ///< grown by GPUTERRAIN.vert: GPUOBJ_PROC_*, 0 for plain vertices
+    /* GPUOBJ_PROC_LAND: a cube's land, from its cached records (GpuObj_CubeSlot). */
+    S32 LandSlot;       ///< the cube's slot
+    S32 LandSmooth;     ///< grown on the curve (48 vertices a triangle) or flat (3)
+    float LandOrigin[3]; ///< the cube's local origin in the draw's view space (vpos = rotation * local + origin)
+    float LandPhase[2];  ///< the cube's place in the sea's phase, in 512-unit steps (cube * 64)
+    float LandFar;       ///< view depth past which a cell is not drawn (ClipZFar)
 } T_GPUOBJ_DRAW;
 
 // --- State consumed by the presenter -----------------------------------------

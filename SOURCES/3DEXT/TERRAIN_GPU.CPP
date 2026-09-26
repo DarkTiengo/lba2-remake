@@ -21,6 +21,9 @@ extern "C" {
 
 #define GRID_SIDE 65
 #define CELL_SIZE 512
+/* The CodeJeu of shoreline water (LBA_EXT.H), whose fill keeps its authored page. */
+#define LAND_CJ_FOOT_WATER 12
+#define LAND_CJ_ANIMATED_WATER 15
 #define SEA_SUBDIVISIONS 8
 
 // --- Private state -----------------------------------------------------------
@@ -530,6 +533,229 @@ static void GrassTri(const T_GRASS_TRI *t) {
     }
 }
 
+/* --- The land, grown on the GPU ---------------------------------------------
+   A record (GPUOBJ_LAND_*) is one fill of one half-cell: its colour layer or
+   its texture layer, as DrawFeuillePolyZBuf would fill it. */
+#define LAND_CELL_MASK 0xFFFu
+#define LAND_HALF (1u << 12)
+#define LAND_SENS (1u << 13)
+#define LAND_WATER (1u << 14)
+#define LAND_CHROMAKEY (1u << 15)
+#define LAND_VERTEX_SHADE (1u << 16)
+#define LAND_MODE_SHIFT 17 ///< 4 bits
+#define LAND_FLAT_SHIFT 21 ///< 3 bits: the triangle's corners that do not curve
+#define LAND_UV (1u << 24)
+#define LAND_GRASS (1u << 25)
+
+static U8 s_slotFlat[GPUOBJ_MAX_HEIGHTMAPS][GRID_SIDE * GRID_SIDE]; ///< corners of triangles drawn flat
+static S32 s_landSlot = -1;
+
+/* A triangle of half h of a cell whose diagonal runs one way or the other,
+   as DrawFeuillePolyZBuf takes its corners. */
+static const U8 kHalfCorners[2][2][3] = {{{0, 1, 2}, {2, 3, 0}}, {{3, 0, 1}, {1, 2, 3}}};
+
+/* The mode and the shading of a fill of the given type, as TerrainGpu_Tri has
+   them. PASS for a type the GPU does not draw. */
+static float LandMode(S32 fillType, S32 color, S32 *perVertexShade, float *constantShade, S32 *chromakey) {
+    *perVertexShade = FALSE;
+    *constantShade = 0.0f;
+    *chromakey = fillType >= POLY_TEXTURE_INCRUST && fillType <= POLY_TEXTURE_INCRUST_DITHER;
+    switch (fillType) {
+    case POLY_SOLID:
+        return (float)GPUOBJ_MODE_SOLID;
+    case POLY_GOURAUD_TABLE:
+    case POLY_DITHER_TABLE:
+        *perVertexShade = TRUE;
+        return (float)GPUOBJ_MODE_CLUT;
+    case POLY_TEXTURE:
+    case POLY_TEXTURE_INCRUST:
+        return (float)GPUOBJ_MODE_TEX;
+    case POLY_TEXTURE_FLAT:
+    case POLY_TEXTURE_INCRUST_FLAT:
+        *constantShade = (float)(color & 0xFF);
+        return (float)GPUOBJ_MODE_TEXSHADED;
+    case POLY_TEXTURE_GOURAUD:
+    case POLY_TEXTURE_INCRUST_GOURAUD:
+        *perVertexShade = TRUE;
+        return (float)GPUOBJ_MODE_TEXSHADED;
+    default:
+        return (float)GPUOBJ_MODE_PASS;
+    }
+}
+
+S32 TerrainGpu_LandSlot(const S16 *heights) {
+    s_landSlot = -1;
+    if (!GpuObj_Active() || heights == NULL || TypeProj != TYPE_3D) {
+        return FALSE;
+    }
+    s_landSlot = GpuObj_HeightMap(s_island, s_cubeX, s_cubeZ, heights, NULL);
+    memcpy(s_heights, heights, sizeof(s_heights));
+    return GpuObjLandCount[s_landSlot] < 0;
+}
+
+void TerrainGpu_LandBuild(const T_TERRAIN_HALF *halves, const U8 *intensity, const U16 *texDefs) {
+    if (s_landSlot < 0) {
+        return;
+    }
+    static const S32 kCX[4] = {0, 0, 1, 1};
+    static const S32 kCZ[4] = {0, 1, 1, 0};
+    U32 *out = GpuObjLandRecords + (size_t)s_landSlot * GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS;
+    U8 *flat = s_slotFlat[s_landSlot];
+    memset(flat, 0, GRID_SIDE * GRID_SIDE);
+    S32 n = 0;
+    for (S32 cell = 0; cell < 64 * 64; cell++) {
+        const S32 xi = cell & 63, zi = cell >> 6;
+        const T_TERRAIN_HALF *pair = &halves[cell * 2];
+        /* The classic walk's own shortcut: an empty cell draws nothing. */
+        if (!(pair[0].PolyFlag + pair[0].TexFlag + pair[1].PolyFlag + pair[1].TexFlag)) {
+            continue;
+        }
+        const S32 sens = pair[0].Sens;
+        for (S32 half = 0; half < 2; half++) {
+            const T_TERRAIN_HALF *h = &pair[half];
+            const U8 *corners = kHalfCorners[sens][half];
+            S32 light[3];
+            U32 raw = 0;
+            for (S32 i = 0; i < 3; i++) {
+                const U8 r = intensity[(zi + kCZ[corners[i]]) * 65 + xi + kCX[corners[i]]] & 15;
+                light[i] = r * 256 - 255 < 0 ? 0 : r * 256 - 255;
+                raw |= (U32)r << (4 * i);
+            }
+            const S32 average = ((light[0] + light[1] + light[2]) * 21845) >> 24;
+            S32 color = (h->Bank << 4) + 11;
+            for (S32 layer = 0; layer < 2; layer++) {
+                S32 fillType;
+                S32 water = FALSE;
+                if (layer == 0) {
+                    if (!h->PolyFlag) {
+                        continue;
+                    }
+                    if (h->PolyFlag == 1) {
+                        color += average;
+                    }
+                    fillType = h->PolyType;
+                } else {
+                    if (!h->TexFlag) {
+                        continue;
+                    }
+                    if (h->TexFlag == 2) {
+                        color = average;
+                    }
+                    fillType = h->TexType;
+                    water = h->CodeJeu == LAND_CJ_FOOT_WATER || h->CodeJeu == LAND_CJ_ANIMATED_WATER;
+                }
+                S32 perVertexShade, chromakey;
+                float constantShade;
+                const float mode = LandMode(fillType, color, &perVertexShade, &constantShade, &chromakey);
+                if (water || mode == (float)GPUOBJ_MODE_PASS) {
+                    for (S32 i = 0; i < 3; i++) {
+                        flat[(zi + kCZ[corners[i]]) * GRID_SIDE + xi + kCX[corners[i]]] = 1;
+                    }
+                }
+                U32 *r = out + n * GPUOBJ_LAND_WORDS;
+                r[0] = (U32)cell | (half ? LAND_HALF : 0) | (sens ? LAND_SENS : 0) | (water ? LAND_WATER : 0) |
+                       (chromakey ? LAND_CHROMAKEY : 0) | (perVertexShade ? LAND_VERTEX_SHADE : 0) |
+                       ((U32)mode << LAND_MODE_SHIFT) | (layer == 1 ? LAND_UV : 0) |
+                       (h->Step == GRASS_STEP && !water && mode != (float)GPUOBJ_MODE_PASS ? LAND_GRASS : 0);
+                r[1] = (U32)(color & 0xFF) | ((U32)constantShade << 8) | raw << 16;
+                /* The texture's corners, in the triangle's order. */
+                for (S32 i = 0; i < 3; i++) {
+                    r[2 + i] = layer == 1 && texDefs != NULL
+                                   ? (U32)texDefs[h->IndexTex * 6 + i * 2] | (U32)texDefs[h->IndexTex * 6 + i * 2 + 1] << 16
+                                   : 0;
+                }
+                r[5] = r[6] = r[7] = 0;
+                n++;
+            }
+        }
+    }
+    /* Which corners do not curve is known once every triangle is. */
+    for (S32 k = 0; k < n; k++) {
+        U32 *r = out + k * GPUOBJ_LAND_WORDS;
+        const S32 cell = (S32)(r[0] & LAND_CELL_MASK);
+        const U8 *corners = kHalfCorners[(r[0] & LAND_SENS) != 0][(r[0] & LAND_HALF) != 0];
+        for (S32 i = 0; i < 3; i++) {
+            if (flat[((cell >> 6) + kCZ[corners[i]]) * GRID_SIDE + (cell & 63) + kCX[corners[i]]]) {
+                r[0] |= 1u << (LAND_FLAT_SHIFT + i);
+            }
+        }
+    }
+    GpuObjLandCount[s_landSlot] = n;
+    GpuObj_CubeSlotChanged(s_landSlot);
+}
+
+void TerrainGpu_LandDraw(U8 *groundTexture, U8 *clutBase, S32 fogStart, S32 fogEnd, S32 fogColor, S32 nearest) {
+    s_draw = NULL;
+    if (s_landSlot < 0 || GpuObjLandCount[s_landSlot] <= 0) {
+        return;
+    }
+    OpenDraw(groundTexture, clutBase, fogStart, fogEnd, fogColor);
+    if (s_draw == NULL) {
+        return;
+    }
+    if (GpuObj_AllocVerts(1) == NULL) { /* a draw holds a vertex, or it is dropped */
+        s_draw = NULL;
+        GpuObj_EndDraw();
+        return;
+    }
+    s_draw->Procedural = GPUOBJ_PROC_LAND;
+    s_draw->LandSlot = s_landSlot;
+    s_draw->LandSmooth = TerrainGpuSmooth && (float)nearest < SMOOTH_FADE_FAR;
+    s_draw->LandOrigin[0] = -(float)CameraXr;
+    s_draw->LandOrigin[1] = -(float)CameraYr;
+    s_draw->LandOrigin[2] = -(float)CameraZr;
+    s_draw->LandPhase[0] = (float)s_cubeX * 64.0f;
+    s_draw->LandPhase[1] = (float)s_cubeZ * 64.0f;
+    s_draw->LandFar = (float)fogEnd;
+
+    /* The grass, which the CPU still decides a tuft at a time: the texel under
+       it, its root on the ground as drawn. */
+    s_nbGrassTris = 0;
+    memcpy(s_flatCorner, s_slotFlat[s_landSlot], sizeof(s_flatCorner));
+    if (TerrainGpuGrass) {
+        CurveCacheSelect();
+        static const S32 kCX[4] = {0, 0, 1, 1};
+        static const S32 kCZ[4] = {0, 1, 1, 0};
+        const U32 *rec = GpuObjLandRecords + (size_t)s_landSlot * GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS;
+        const S32 n = GpuObjLandCount[s_landSlot];
+        for (S32 k = 0; k < n && s_nbGrassTris < MAX_GRASS_TRIS; k++, rec += GPUOBJ_LAND_WORDS) {
+            if (!(rec[0] & LAND_GRASS)) {
+                continue;
+            }
+            const S32 cell = (S32)(rec[0] & LAND_CELL_MASK);
+            const S32 xi = cell & 63, zi = cell >> 6;
+            const U8 *corners = kHalfCorners[(rec[0] & LAND_SENS) != 0][(rec[0] & LAND_HALF) != 0];
+            float depth = 1e30f;
+            for (S32 i = 0; i < 3; i++) {
+                float p[3];
+                const S32 gx = xi + kCX[corners[i]], gz = zi + kCZ[corners[i]];
+                GridPoint((float)(gx * CELL_SIZE), (float)s_heights[gz * GRID_SIDE + gx], (float)(gz * CELL_SIZE), p);
+                depth = p[2] < depth ? p[2] : depth;
+            }
+            if (depth >= GRASS_FAR || depth <= 0.0f) {
+                continue;
+            }
+            T_GRASS_TRI *t = &s_grassTris[s_nbGrassTris++];
+            t->Xi = (S16)xi;
+            t->Zi = (S16)zi;
+            t->HasUv = (rec[0] & LAND_UV) != 0;
+            t->Smoothed = s_draw->LandSmooth && depth < SMOOTH_FADE_FAR;
+            for (S32 i = 0; i < 3; i++) {
+                t->Corners[i] = corners[i];
+                const S32 r = (S32)((rec[1] >> (16 + 4 * i)) & 15);
+                t->Lights[i] = r * 256 - 255 < 0 ? 0 : r * 256 - 255;
+                const U32 uv = rec[2 + i];
+                t->Uv[i * 2] = (U16)(uv & 0xFFFF);
+                t->Uv[i * 2 + 1] = (U16)(uv >> 16);
+            }
+            t->Mode = (float)((rec[0] >> LAND_MODE_SHIFT) & 15);
+            t->PerVertexShade = (rec[0] & LAND_VERTEX_SHADE) != 0;
+            t->Color = (S32)(rec[1] & 0xFF);
+            t->ConstantShade = (float)((rec[1] >> 8) & 0xFF);
+        }
+    }
+}
+
 // --- Interface ---------------------------------------------------------------
 void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S32 fogStart, S32 fogEnd,
                           S32 fogColor) {
@@ -546,7 +772,7 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
     memset(s_flatCorner, 0, sizeof(s_flatCorner));
     CurveCacheSelect();
     if (TerrainGpuSmooth) {
-        s_mapSlot = GpuObj_HeightMap(s_island, s_cubeX, s_cubeZ, heights);
+        s_mapSlot = GpuObj_HeightMap(s_island, s_cubeX, s_cubeZ, heights, NULL);
     }
 
     /* LongWorldRotatePoint then LongProjectPoint's camera offsets, in float. */

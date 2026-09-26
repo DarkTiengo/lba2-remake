@@ -114,6 +114,8 @@ static S32 s_sceneDepth = FALSE;
 float GpuObjHeightMaps[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE];
 S32 GpuObjHeightMapsDirtyFrom = -1;
 S32 GpuObjHeightMapsDirtyTo = -1;
+U32 GpuObjLandRecords[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS];
+S32 GpuObjLandCount[GPUOBJ_MAX_HEIGHTMAPS];
 
 typedef struct {
     S32 Island, CubeX, CubeZ;
@@ -375,6 +377,8 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     draw->Retainable = FALSE;
     draw->Retained = FALSE;
     draw->Procedural = FALSE;
+    draw->LandSlot = 0;
+    draw->LandSmooth = FALSE;
     if (GpuObjCapValid) {
         for (S32 k = 0; k < 9; k++) {
             draw->CapMat[k] = GpuObjCapMat[k];
@@ -567,7 +571,19 @@ void GpuObj_OnCopyMask(const void *src, S32 x0, S32 y0, S32 x1, S32 y1) {
     }
 }
 
-S32 GpuObj_HeightMap(S32 island, S32 cubeX, S32 cubeZ, const S16 *heights) {
+void GpuObj_CubeSlotChanged(S32 slot) {
+    if (GpuObjHeightMapsDirtyFrom < 0 || slot < GpuObjHeightMapsDirtyFrom) {
+        GpuObjHeightMapsDirtyFrom = slot;
+    }
+    if (slot + 1 > GpuObjHeightMapsDirtyTo) {
+        GpuObjHeightMapsDirtyTo = slot + 1;
+    }
+}
+
+S32 GpuObj_HeightMap(S32 island, S32 cubeX, S32 cubeZ, const S16 *heights, S32 *fresh) {
+    if (fresh != NULL) {
+        *fresh = FALSE;
+    }
     s_heightClock++;
     S32 oldest = 0;
     for (S32 i = 0; i < GPUOBJ_MAX_HEIGHTMAPS; i++) {
@@ -583,6 +599,10 @@ S32 GpuObj_HeightMap(S32 island, S32 cubeX, S32 cubeZ, const S16 *heights) {
     /* The one unused the longest: a ring of cubes is at most 49, and a draw
        outlives its capture by a frame or two. */
     T_HEIGHTMAP_SLOT *slot = &s_heightSlots[oldest];
+    if (fresh != NULL) {
+        *fresh = TRUE;
+    }
+    GpuObjLandCount[oldest] = -1; /* the land records are built by whoever needs them first */
     slot->Island = island;
     slot->CubeX = cubeX;
     slot->CubeZ = cubeZ;
@@ -592,12 +612,7 @@ S32 GpuObj_HeightMap(S32 island, S32 cubeX, S32 cubeZ, const S16 *heights) {
     for (size_t k = 0; k < side; k++) {
         map[k] = (float)heights[k];
     }
-    if (GpuObjHeightMapsDirtyFrom < 0 || oldest < GpuObjHeightMapsDirtyFrom) {
-        GpuObjHeightMapsDirtyFrom = oldest;
-    }
-    if (oldest + 1 > GpuObjHeightMapsDirtyTo) {
-        GpuObjHeightMapsDirtyTo = oldest + 1;
-    }
+    GpuObj_CubeSlotChanged(oldest);
     return oldest;
 }
 

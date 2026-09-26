@@ -75,6 +75,31 @@ S32 TerrainGpu_CanSkipFill(void);
  *  scenery pass left terrain unpainted. */
 void TerrainGpu_EnsureDepth(S32 x0, S32 y0, S32 x1, S32 y1);
 
+/* The whole cube's land as one draw the GPU grows (GPUTERRAIN.vert), from
+   records built once a cube and kept with its height map. Used while the
+   software leaves the ground unpainted: nothing is then walked a cell at a
+   time on the CPU but the grass. */
+
+/** One half-cell of MapPolyGround, decoded, with its two fills' types. */
+typedef struct {
+    U8 PolyFlag, TexFlag, Bank, Step, CodeJeu, Sens; ///< Sens: the cell's, as its first half says
+    U16 IndexTex;
+    S32 PolyType, TexType; ///< ListTypePolygone[PolyFlag], ListTypePTexture[TexFlag + (PolyFlag << 2)]
+} T_TERRAIN_HALF;
+
+/** Selects the cube's slot for heights (the 65x65 map as loaded). TRUE when
+ *  its land records have to be built: TerrainGpu_LandBuild, before the draw. */
+S32 TerrainGpu_LandSlot(const S16 *heights);
+
+/** Builds the slot's records from the cube's 64 x 64 x 2 halves, its 65x65
+ *  intensity map (MapIntensity) and its texture corners (ListTexDef, six U16
+ *  an entry). */
+void TerrainGpu_LandBuild(const T_TERRAIN_HALF *halves, const U8 *intensity, const U16 *texDefs);
+
+/** The cube's land draw, and its grass, from the camera the cube is being drawn
+ *  with; nearest the view depth of the cube's nearest grid point. */
+void TerrainGpu_LandDraw(U8 *groundTexture, U8 *clutBase, S32 fogStart, S32 fogEnd, S32 fogColor, S32 nearest);
+
 /** Captures the main cube's camera before horizon cubes shift it. */
 void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ);
 

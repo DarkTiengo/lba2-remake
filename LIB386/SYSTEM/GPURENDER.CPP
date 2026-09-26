@@ -83,6 +83,8 @@ static SDL_GPUTexture *s_objId = NULL;
 static SDL_GPUTexture *s_objLight = NULL; ///< dynamic light reaching each scene surface
 static SDL_GPUBuffer *s_heightBuffer = NULL; ///< GpuObjHeightMaps, for GPUTERRAIN.vert
 static bool s_heightsSent = false;           ///< the buffer holds every slot written so far
+static SDL_GPUBuffer *s_landBuffer = NULL;   ///< GpuObjLandRecords, sent with the height maps
+
 static SDL_GPUBuffer *s_bvhNodes = NULL;  ///< ray-tracing hierarchy (GPUBVH.H)
 static SDL_GPUBuffer *s_bvhTris = NULL;
 static bool s_rayScene = false; ///< this present's hierarchy is built: the composite traces shadow rays
@@ -628,7 +630,7 @@ static bool EnsureShadowBuffer(U32 size) {
 
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    s_terrainVert = CreateShader(GPUTERRAIN_vert_spv, GPUTERRAIN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 2);
+    s_terrainVert = CreateShader(GPUTERRAIN_vert_spv, GPUTERRAIN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 3);
     s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
     s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1, 2);
@@ -668,8 +670,10 @@ static bool CreatePipeline(void) {
     s_bvhTris = SDL_CreateGPUBuffer(s_device, &bvhInfo);
     bvhInfo.size = sizeof(GpuObjHeightMaps);
     s_heightBuffer = SDL_CreateGPUBuffer(s_device, &bvhInfo);
+    bvhInfo.size = sizeof(GpuObjLandRecords);
+    s_landBuffer = SDL_CreateGPUBuffer(s_device, &bvhInfo);
     s_heightsSent = false;
-    if (!s_heightBuffer) {
+    if (!s_heightBuffer || !s_landBuffer) {
         Log_Warn("[GPU] Unable to create the height map buffer: %s", SDL_GetError());
         return false;
     }
@@ -868,6 +872,10 @@ static void ReleasePipeline(void) {
         SDL_ReleaseGPUBuffer(s_device, s_bvhNodes);
         s_bvhNodes = NULL;
     }
+    if (s_landBuffer) {
+        SDL_ReleaseGPUBuffer(s_device, s_landBuffer);
+        s_landBuffer = NULL;
+    }
     if (s_heightBuffer) {
         SDL_ReleaseGPUBuffer(s_device, s_heightBuffer);
         s_heightBuffer = NULL;
@@ -940,6 +948,57 @@ static void ReleasePipeline(void) {
     }
 }
 
+/* A land draw's triangles for the shadow rays: the records' flat triangles,
+   placed as GPUTERRAIN.vert places their corners, those in view only (the
+   records are the whole cube, and the hierarchy's room is the frame's). No
+   water, and none the GPU does not draw. */
+static U32 LandRayTris(const T_GPUOBJ_DRAW *draw, float *tris, U32 n) {
+    static const S32 kCX[4] = {0, 0, 1, 1};
+    static const S32 kCZ[4] = {0, 1, 1, 0};
+    static const U8 kCorners[2][2][3] = {{{0, 1, 2}, {2, 3, 0}}, {{3, 0, 1}, {1, 2, 3}}};
+    const S32 slot = draw->LandSlot;
+    const S32 count = GpuObjLandCount[slot];
+    const U32 *rec = GpuObjLandRecords + (size_t)slot * GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS;
+    const float *heights = GpuObjHeightMaps + (size_t)slot * GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE;
+    const float *m = draw->CapMat;
+    const float *o = draw->LandOrigin;
+    /* The frustum in view space: |x| and |y| against the depth, with a margin
+       for what casts into view from just outside it. */
+    const float fx = ((float)ModeDesiredX * 0.5f + 64.0f) / GpuObjProj[2];
+    const float fy = ((float)ModeDesiredY * 0.5f + 64.0f) / (GpuObjProj[2] * GpuObjProj[3]);
+    for (S32 k = 0; k < count && n < GPUBVH_MAX_TRIS; k++, rec += GPUOBJ_LAND_WORDS) {
+        const U32 bits = rec[0];
+        const S32 mode = (S32)((bits >> 17) & 15);
+        if ((bits & (1u << 14)) != 0 || mode == GPUOBJ_MODE_PASS) {
+            continue;
+        }
+        const S32 cell = (S32)(bits & 0xFFFu);
+        const U8 *corners = kCorners[(bits & (1u << 13)) != 0][(bits & (1u << 12)) != 0];
+        float p[9];
+        S32 outL = 0, outR = 0, outT = 0, outB = 0, outZ = 0;
+        for (S32 i = 0; i < 3; i++) {
+            const S32 gx = (cell & 63) + kCX[corners[i]], gz = (cell >> 6) + kCZ[corners[i]];
+            const float w[3] = {(float)(gx * 512), heights[gz * GPUOBJ_HEIGHTMAP_SIDE + gx], (float)(gz * 512)};
+            float *q = p + i * 3;
+            for (S32 r = 0; r < 3; r++) {
+                q[r] = m[r * 3] * w[0] + m[r * 3 + 1] * w[1] + m[r * 3 + 2] * w[2] + o[r];
+            }
+            const float depth = -q[2];
+            outZ += depth <= 1.0f || depth >= draw->LandFar;
+            outL += q[0] < -fx * depth;
+            outR += q[0] > fx * depth;
+            outT += q[1] < -fy * depth;
+            outB += q[1] > fy * depth;
+        }
+        if (outZ == 3 || outL == 3 || outR == 3 || outT == 3 || outB == 3) {
+            continue;
+        }
+        memcpy(tris + n * 9, p, sizeof(p));
+        n++;
+    }
+    return n;
+}
+
 /* Uploads size bytes at the start of the transfer buffer into a texture region. */
 /* The live bodies' and terrain's triangles into the hierarchy shadow rays are
    traced through: not the sky or sea, bricks, sphere impostors, or lamp glass
@@ -952,6 +1011,10 @@ static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
     for (U32 d = 0; d < count && n < GPUBVH_MAX_TRIS; d++) {
         /* Only the scene: a menu's bodies live in their own projection. */
         if (!draws[d]->Scene) {
+            continue;
+        }
+        if (draws[d]->Procedural == GPUOBJ_PROC_LAND) {
+            n = LandRayTris(draws[d], tris, n);
             continue;
         }
         const T_GPUOBJ_VERTEX *v = GpuObjVerts + draws[d]->First;
@@ -1494,7 +1557,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
            drew it: a run of z-buffered bodies (drawn front to back, depth
            decides) shares a slice, any other body lands in front of everything
            before it; all of them in the front half, over the scene. */
-        float sliceUniform[44] = {0.0f, 0.0f, windTime, wind};
+        float sliceUniform[52] = {0.0f, 0.0f, windTime, wind};
         /* A draw kept from an earlier frame is placed again here, in the vertex
            shader, through the difference between the camera that captured it and
            the one this frame draws with: rows of the rotation with the
@@ -1536,6 +1599,16 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         sliceUniform[26] = GpuWaterEnabled && draw->HasCapCamera ? 1.0f : 0.0f;
         sliceUniform[40] = (float)draw->First;
         sliceUniform[41] = (float)draw->Procedural;
+        if (draw->Procedural == GPUOBJ_PROC_LAND) {
+            sliceUniform[44] = draw->LandOrigin[0];
+            sliceUniform[45] = draw->LandOrigin[1];
+            sliceUniform[46] = draw->LandOrigin[2];
+            sliceUniform[47] = draw->LandFar;
+            sliceUniform[48] = (float)draw->LandSlot;
+            sliceUniform[49] = draw->LandSmooth ? 1.0f : 0.0f;
+            sliceUniform[50] = draw->LandPhase[0];
+            sliceUniform[51] = draw->LandPhase[1];
+        }
         if (draw->HasCapCamera) {
             for (S32 r = 0; r < 3; r++) {
                 for (S32 c = 0; c < 3; c++) {
@@ -1574,8 +1647,8 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
                 bound = wanted;
                 SDL_BindGPUGraphicsPipeline(pass, bound);
                 if (draw->Procedural) {
-                    SDL_GPUBuffer *storage[2] = {s_vertexBuffer, s_heightBuffer};
-                    SDL_BindGPUVertexStorageBuffers(pass, 0, storage, 2);
+                    SDL_GPUBuffer *storage[3] = {s_vertexBuffer, s_heightBuffer, s_landBuffer};
+                    SDL_BindGPUVertexStorageBuffers(pass, 0, storage, 3);
                 } else {
                     SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
                 }
@@ -1585,9 +1658,15 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));
             SDL_PushGPUFragmentUniformData(cmd, 0, &uniforms[i], sizeof(T_DRAW_UNIFORMS));
             if (draw->Procedural) {
-                const U32 grown = draw->Procedural == GPUOBJ_PROC_GRASS
-                                      ? draw->Count * GPUOBJ_PROC_GRASS_VERTS
-                                      : draw->Count / 3 * GPUOBJ_PROC_TERRAIN_VERTS;
+                U32 grown;
+                if (draw->Procedural == GPUOBJ_PROC_LAND) {
+                    const S32 records = GpuObjLandCount[draw->LandSlot];
+                    grown = records > 0 ? (U32)records * (draw->LandSmooth ? GPUOBJ_PROC_TERRAIN_VERTS : 3u) : 0u;
+                } else if (draw->Procedural == GPUOBJ_PROC_GRASS) {
+                    grown = draw->Count * GPUOBJ_PROC_GRASS_VERTS;
+                } else {
+                    grown = draw->Count / 3 * GPUOBJ_PROC_TERRAIN_VERTS;
+                }
                 SDL_DrawGPUPrimitives(pass, grown, 1, 0, 0);
             } else if (draw->NbIndices > 0 && s_indexBuffer != NULL) {
                 SDL_GPUBufferBinding ibind;
@@ -1806,9 +1885,11 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     const S32 heightTo = s_heightsSent ? GpuObjHeightMapsDirtyTo : GPUOBJ_MAX_HEIGHTMAPS;
     const U32 heightSlot = GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE * (U32)sizeof(float);
     const bool heightUpload = count > 0 && heightFrom >= 0 && heightTo > heightFrom;
+    const U32 landSlot = GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS * (U32)sizeof(U32);
     if (heightUpload) {
-        need = SDL_max(need, (U32)(heightTo - heightFrom) * heightSlot);
+        need = SDL_max(need, (U32)(heightTo - heightFrom) * SDL_max(heightSlot, landSlot));
     }
+
     /* The indices ride in the same transfer buffer. */
     if (count > 0 && nbIndices > 0) {
         need = SDL_max(need, nbIndices * (U32)sizeof(U32));
@@ -1872,6 +1953,8 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     if (heightUpload) {
         UploadBuffer2(copy, s_heightBuffer, GpuObjHeightMaps + (size_t)heightFrom * (heightSlot / sizeof(float)),
                       (U32)heightFrom * heightSlot, (U32)(heightTo - heightFrom) * heightSlot);
+        UploadBuffer2(copy, s_landBuffer, GpuObjLandRecords + (size_t)heightFrom * (landSlot / sizeof(U32)),
+                      (U32)heightFrom * landSlot, (U32)(heightTo - heightFrom) * landSlot);
         s_heightsSent = true;
         GpuObjHeightMapsDirtyFrom = -1;
         GpuObjHeightMapsDirtyTo = -1;

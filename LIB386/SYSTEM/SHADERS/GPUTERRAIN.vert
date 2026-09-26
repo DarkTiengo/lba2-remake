@@ -30,6 +30,9 @@ layout(std430, set = 0, binding = 0) readonly buffer Records {
 layout(std430, set = 0, binding = 1) readonly buffer Heights {
     float heights[]; // GPUOBJ_HEIGHTMAP_SIDE squared a map
 };
+layout(std430, set = 0, binding = 2) readonly buffer LandBuffer {
+    uvec4 landRecords[]; // two a record, GPUOBJ_LAND_MAX records a slot: (LAND_* bits, shading, uv0, uv1), (uv2, -)
+};
 
 #include "PLACE.glsl"
 
@@ -167,7 +170,113 @@ void Grass() {
     v_slice = vec2(sliceNear, sliceSize);
 }
 
+/* A cube's land: one record a fill of a half-cell, as DrawFeuillePolyZBuf
+   fills it. Flat far from the camera (three vertices a record), or cut into
+   sixteen on the curve (forty-eight) when the cube reaches into the curve's
+   range. The camera comes from the uniform: the rotation the draw was captured
+   with and where the cube's origin lies in view space. */
+const uint LAND_MAX = 16384u;
+const uint LAND_HALF = 1u << 12;
+const uint LAND_SENS = 1u << 13;
+const uint LAND_WATER = 1u << 14;
+const uint LAND_CHROMAKEY = 1u << 15;
+const uint LAND_VERTEX_SHADE = 1u << 16;
+const uint LAND_UV = 1u << 24;
+const ivec2 kCorner[4] = ivec2[4](ivec2(0, 0), ivec2(0, 1), ivec2(1, 1), ivec2(1, 0));
+
+void Land() {
+    bool curved = landInfo.y > 0.5;
+    int per = curved ? 48 : 3;
+    int slot = int(landInfo.x + 0.5);
+    uint record = (uint(slot) * LAND_MAX + uint(gl_VertexIndex / per)) * 2u;
+    uvec4 r = landRecords[record];
+    uint uvCorner[3] = uint[3](r.z, r.w, landRecords[record + 1u].x);
+    int cell = int(r.x & 0xFFFu);
+    ivec2 at = ivec2(cell & 63, cell >> 6);
+    int halfIndex = (r.x & LAND_HALF) != 0u ? 1 : 0;
+    ivec3 corners = (r.x & LAND_SENS) != 0u ? (halfIndex == 0 ? ivec3(3, 0, 1) : ivec3(1, 2, 3))
+                                            : (halfIndex == 0 ? ivec3(0, 1, 2) : ivec3(2, 3, 0));
+    g_map = slot * GRID_SIDE * GRID_SIDE;
+
+    vec3 cp[3];
+    vec2 cg[3];
+    float ch[3];
+    float far = land.w;
+    bool beyond = false;
+    for (int i = 0; i < 3; i++) {
+        ivec2 g = at + kCorner[corners[i]];
+        cg[i] = vec2(g);
+        ch[i] = GridHeight(g.x, g.y);
+        vec3 w = vec3(float(g.x) * 512.0, ch[i], float(g.y) * 512.0);
+        cp[i] = vec3(dot(capRow0.xyz, w), dot(capRow1.xyz, w), dot(capRow2.xyz, w)) + land.xyz;
+        /* A cell reaching past the far clip is not drawn, as the classic walk
+           skips it. */
+        beyond = beyond || -cp[i].z >= far;
+    }
+
+    vec3 b;
+    if (curved) {
+        ivec2 sub = kSub[gl_VertexIndex % 48];
+        b = vec3(float(sub.x), float(sub.y), 0.0) / SUBDIV;
+        b.z = 1.0 - b.x - b.y;
+    } else {
+        int k = gl_VertexIndex % 3;
+        b = vec3(k == 0 ? 1.0 : 0.0, k == 1 ? 1.0 : 0.0, k == 2 ? 1.0 : 0.0);
+    }
+    vec3 p = b.x * cp[0] + b.y * cp[1] + b.z * cp[2];
+    vec2 grid = b.x * cg[0] + b.y * cg[1] + b.z * cg[2];
+    if (curved) {
+        float plane = b.x * ch[0] + b.y * ch[1] + b.z * ch[2];
+        uint flat3 = (r.x >> 21) & 7u;
+        vec3 weight = vec3((flat3 & 1u) != 0u ? 0.0 : 1.0, (flat3 & 2u) != 0u ? 0.0 : 1.0, (flat3 & 4u) != 0u ? 0.0 : 1.0);
+        vec3 up = vec3(capRow0.y, capRow1.y, capRow2.y);
+        p += Rise(grid.x, grid.y, plane, dot(b, weight), -p.z) * up;
+    }
+
+    float color = float(r.y & 0xFFu);
+    float shade = float((r.y >> 8) & 0xFFu);
+    if ((r.x & LAND_VERTEX_SHADE) != 0u) {
+        vec3 light;
+        for (int i = 0; i < 3; i++) {
+            float raw = float((r.y >> (16 + 4 * i)) & 15u);
+            light[i] = max(raw * 256.0 - 255.0, 0.0) / 256.0;
+        }
+        shade = dot(b, light);
+    }
+    vec2 uv = vec2(0.0);
+    if ((r.x & LAND_UV) != 0u) {
+        for (int i = 0; i < 3; i++) {
+            uint packed = uvCorner[i];
+            uv += b[i] * vec2(float(packed & 0xFFFFu), float(packed >> 16)) / 256.0;
+        }
+    }
+    int flags = 4; /* GPUOBJ_FLAG_BAKED */
+    if ((r.x & LAND_CHROMAKEY) != 0u) {
+        flags |= 1;
+    }
+    vec2 phase = vec2(0.0);
+    if ((r.x & LAND_WATER) != 0u) {
+        flags |= 16 | 64; /* GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_WATER_TERRAIN */
+        phase = grid + landInfo.zw;
+    }
+
+    vec3 n = vec3(0.0, 0.0, 1.0);
+    Reframe(p, n);
+    vec4 clip = beyond ? vec4(0.0, 0.0, 0.0, 1.0) : Place(p);
+    gl_Position = vec4(clip.xy, sliceNear * clip.w + clip.z * sliceSize, clip.w);
+    v_normal = vec4(n, shade);
+    v_light = vec4(0.0, 0.0, 0.0, float((r.x >> 17) & 15u));
+    v_vpos = vec4(p, float(flags));
+    v_mat = vec4(color, 0.0, 65535.0, 0.0);
+    v_uv = vec4(uv, phase);
+    v_slice = vec2(sliceNear, sliceSize);
+}
+
 void main() {
+    if (records.y > 2.5) {
+        Land();
+        return;
+    }
     if (records.y > 1.5) {
         Grass();
         return;

@@ -84,226 +84,25 @@ void DrawSkySeaZBuf() {
 /*──────────────────────────────────────────────────────────────────────────*/
 /* The terrain the GPU draws, left unpainted by the software.
 
-   Outdoors the software fill of a terrain triangle the GPU covers is wanted for
-   one thing only: its depth, which DrawRecover reads to decide whether the hero
-   stands behind a hill (and the camera acts on that). So the triangle is kept
-   as it would have been filled, and its depth is filled in later, a tile at a
-   time, only where something asks for it: the box of a body DrawRecover checks.
-   A tile only chooses the triangles: each is filled whole, once, with the
-   filler and the clip window the terrain used, so the depth is the classic one
-   to the bit (clipped to the tile, a triangle would get new corners, rounded).
-   The depth buffer keeps the nearest of what is written into it, so filling
-   later does not change what ends up in it. */
+   Outdoors, with the software leaving the ground to the GPU, a cube's land is
+   one draw the GPU grows from records of the cube (TerrainGpu_LandDraw), and
+   nothing here walks its cells. What the classic walk still left behind that
+   the game reads is the terrain's depth: DrawRecover decides from it whether
+   the hero stands behind a hill, and the camera acts on that. So the cube is
+   kept as the walk would have seen it -- its projected grid, which points are
+   visible, its half-cells -- and its depth is filled in later, a cell at a
+   time, only where something asks for it (TerrainGpu_EnsureDepth), with the
+   filler, the corners and the clip window the walk would have used: the
+   depth is the classic one to the bit. The depth buffer keeps the nearest of
+   what is written into it, so filling later does not change what ends up in it. */
 
 S32 TerrainGpuSkipFill = FALSE;
-
-#define DEPTH_TILE 32
-#define MAX_DEFERRED_TRIS (1 << 18)
-
-typedef struct {
-    Struc_Point P[3];
-} T_DEFERRED_TRI;
-
-static T_DEFERRED_TRI *s_deferred = NULL;
-static U8 *s_deferredDone = NULL; /* the triangle's depth has been filled */
-static S32 s_nbDeferred = 0;
-static S32 s_maxDeferred = 0;
-static S32 s_deferClip[4];        /* the clip window the terrain was filled in */
-static S32 s_tilesX = 0;
-static S32 s_tilesY = 0;
-static U8 *s_tileDone = NULL;   /* the tile's depth has been filled */
-static S32 *s_binStart = NULL;  /* per tile, first entry in s_binTris (tiles + 1) */
-static S32 *s_binTris = NULL;   /* triangles overlapping each tile, tile after tile */
-static S32 s_binCap = 0;
-static S32 s_binsBuilt = FALSE;
-static U8 *s_depthScratch = NULL; /* where the depth fill's colour goes */
-static size_t s_depthScratchSize = 0;
 
 S32 TerrainGpu_CanSkipFill(void) {
     return TerrainGpuFastFill AND GpuObj_Active() AND GpuObjShadows AND PtrZBuffer != NULL;
 }
 
-static void ResetDeferredDepth(void) {
-    s_nbDeferred = 0;
-    s_binsBuilt = FALSE;
-}
-
-/* Keeps the triangle in Tab_Points for a later depth fill. FALSE when the list
-   is full: the caller fills it now. */
-static S32 DeferDepth(void) {
-    if (s_nbDeferred >= s_maxDeferred) {
-        if (s_maxDeferred >= MAX_DEFERRED_TRIS) {
-            return FALSE;
-        }
-        S32 grown = s_maxDeferred ? s_maxDeferred * 2 : 16384;
-        T_DEFERRED_TRI *list = (T_DEFERRED_TRI *)realloc(s_deferred, (size_t)grown * sizeof(T_DEFERRED_TRI));
-        if (list == NULL) {
-            return FALSE;
-        }
-        s_deferred = list;
-        U8 *done = (U8 *)realloc(s_deferredDone, (size_t)grown);
-        if (done == NULL) {
-            return FALSE;
-        }
-        s_deferredDone = done;
-        s_maxDeferred = grown;
-    }
-    if (s_nbDeferred == 0) {
-        s_deferClip[0] = ClipXMin;
-        s_deferClip[1] = ClipYMin;
-        s_deferClip[2] = ClipXMax;
-        s_deferClip[3] = ClipYMax;
-    }
-    /* A cell's textured triangle lies over its coloured one, corner for corner. */
-    if (s_nbDeferred > 0 AND !memcmp(s_deferred[s_nbDeferred - 1].P, Tab_Points, 3 * sizeof(Struc_Point))) {
-        return TRUE;
-    }
-    memcpy(s_deferred[s_nbDeferred].P, Tab_Points, 3 * sizeof(Struc_Point));
-    s_deferredDone[s_nbDeferred] = FALSE;
-    s_nbDeferred++;
-    s_binsBuilt = FALSE;
-    return TRUE;
-}
-
-static void TriTiles(const T_DEFERRED_TRI *t, S32 *tx0, S32 *ty0, S32 *tx1, S32 *ty1) {
-    S32 x0 = Min3(t->P[0].Pt_XE, t->P[1].Pt_XE, t->P[2].Pt_XE);
-    S32 y0 = Min3(t->P[0].Pt_YE, t->P[1].Pt_YE, t->P[2].Pt_YE);
-    S32 x1 = Max3(t->P[0].Pt_XE, t->P[1].Pt_XE, t->P[2].Pt_XE);
-    S32 y1 = Max3(t->P[0].Pt_YE, t->P[1].Pt_YE, t->P[2].Pt_YE);
-    *tx0 = x0 < 0 ? 0 : x0 / DEPTH_TILE;
-    *ty0 = y0 < 0 ? 0 : y0 / DEPTH_TILE;
-    *tx1 = x1 < 0 ? -1 : ade_min(x1 / DEPTH_TILE, s_tilesX - 1);
-    *ty1 = y1 < 0 ? -1 : ade_min(y1 / DEPTH_TILE, s_tilesY - 1);
-}
-
-/* Sorts the kept triangles into the tiles their boxes overlap. */
-static S32 BuildDepthBins(void) {
-    S32 tilesX = ((S32)ModeDesiredX + DEPTH_TILE - 1) / DEPTH_TILE;
-    S32 tilesY = ((S32)ModeDesiredY + DEPTH_TILE - 1) / DEPTH_TILE;
-    if (tilesX != s_tilesX OR tilesY != s_tilesY OR s_tileDone == NULL) {
-        free(s_tileDone);
-        free(s_binStart);
-        s_tilesX = tilesX;
-        s_tilesY = tilesY;
-        s_tileDone = (U8 *)malloc((size_t)(tilesX * tilesY));
-        s_binStart = (S32 *)malloc((size_t)(tilesX * tilesY + 1) * sizeof(S32));
-        if (s_tileDone == NULL OR s_binStart == NULL) {
-            free(s_tileDone);
-            free(s_binStart);
-            s_tileDone = NULL;
-            s_binStart = NULL;
-            s_tilesX = s_tilesY = 0;
-            return FALSE;
-        }
-    }
-    S32 tiles = tilesX * tilesY;
-    memset(s_tileDone, 0, (size_t)tiles);
-    memset(s_binStart, 0, (size_t)(tiles + 1) * sizeof(S32));
-
-    S32 total = 0;
-    for (S32 i = 0; i < s_nbDeferred; i++) {
-        S32 tx0, ty0, tx1, ty1;
-        TriTiles(&s_deferred[i], &tx0, &ty0, &tx1, &ty1);
-        for (S32 ty = ty0; ty <= ty1; ty++) {
-            for (S32 tx = tx0; tx <= tx1; tx++) {
-                s_binStart[ty * tilesX + tx + 1]++;
-                total++;
-            }
-        }
-    }
-    if (total > s_binCap) {
-        S32 *bins = (S32 *)realloc(s_binTris, (size_t)total * sizeof(S32));
-        if (bins == NULL) {
-            return FALSE;
-        }
-        s_binTris = bins;
-        s_binCap = total;
-    }
-    for (S32 t = 0; t < tiles; t++) {
-        s_binStart[t + 1] += s_binStart[t];
-    }
-    /* Fill each bin from its start, then shift the starts back. */
-    for (S32 i = 0; i < s_nbDeferred; i++) {
-        S32 tx0, ty0, tx1, ty1;
-        TriTiles(&s_deferred[i], &tx0, &ty0, &tx1, &ty1);
-        for (S32 ty = ty0; ty <= ty1; ty++) {
-            for (S32 tx = tx0; tx <= tx1; tx++) {
-                s_binTris[s_binStart[ty * tilesX + tx]++] = i;
-            }
-        }
-    }
-    for (S32 t = tiles; t > 0; t--) {
-        s_binStart[t] = s_binStart[t - 1];
-    }
-    s_binStart[0] = 0;
-    s_binsBuilt = TRUE;
-    return TRUE;
-}
-
-void TerrainGpu_EnsureDepth(S32 x0, S32 y0, S32 x1, S32 y1) {
-    if (s_nbDeferred == 0 OR Log == NULL) {
-        return;
-    }
-    if (!s_binsBuilt AND !BuildDepthBins()) {
-        return;
-    }
-    size_t frame = (size_t)ModeDesiredX * (size_t)ModeDesiredY;
-    if (s_depthScratchSize < frame) {
-        free(s_depthScratch);
-        s_depthScratch = (U8 *)malloc(frame);
-        s_depthScratchSize = s_depthScratch ? frame : 0;
-        if (s_depthScratch == NULL) {
-            return;
-        }
-    }
-    S32 tx0 = ade_max(x0, 0) / DEPTH_TILE;
-    S32 ty0 = ade_max(y0, 0) / DEPTH_TILE;
-    S32 tx1 = ade_min(x1 / DEPTH_TILE, s_tilesX - 1);
-    S32 ty1 = ade_min(y1 / DEPTH_TILE, s_tilesY - 1);
-    if (x1 < 0 OR y1 < 0 OR tx0 > tx1 OR ty0 > ty1) {
-        return;
-    }
-
-    /* The terrain's own filler, writing its colour where nobody looks. */
-    S32 clipX0 = ClipXMin, clipY0 = ClipYMin, clipX1 = ClipXMax, clipY1 = ClipYMax;
-    U32 bank = Fill_Bank;
-    void *log = Log;
-    Log = s_depthScratch;
-    Switch_Fillers(FILL_POLY_FOG_ZBUFFER);
-    ClipXMin = s_deferClip[0];
-    ClipYMin = s_deferClip[1];
-    ClipXMax = s_deferClip[2];
-    ClipYMax = s_deferClip[3];
-
-    for (S32 ty = ty0; ty <= ty1; ty++) {
-        for (S32 tx = tx0; tx <= tx1; tx++) {
-            S32 tile = ty * s_tilesX + tx;
-            if (s_tileDone[tile]) {
-                continue;
-            }
-            s_tileDone[tile] = TRUE;
-            for (S32 b = s_binStart[tile]; b < s_binStart[tile + 1]; b++) {
-                S32 t = s_binTris[b];
-                if (s_deferredDone[t]) {
-                    continue;
-                }
-                s_deferredDone[t] = TRUE;
-                Struc_Point points[3];
-                memcpy(points, s_deferred[t].P, sizeof(points));
-                Fill_Poly(POLY_FLAT, 0, 3, points);
-            }
-        }
-    }
-
-    Switch_Fillers(bank);
-    Log = log;
-    ClipXMin = clipX0;
-    ClipYMin = clipY0;
-    ClipXMax = clipX1;
-    ClipYMax = clipY1;
-}
-
-/*──────────────────────────────────────────────────────────────────────────*/
+static void ResetDeferredDepth(void);
 
 void ClsTerrainZBuf() {
     SetClearColor((U8)FogCoul);
@@ -324,13 +123,9 @@ static inline S32 TerrainFill(S32 type, S32 gpuCovers) {
     return (gpuCovers AND TerrainGpuFastFill) ? POLY_FLAT : type;
 }
 
-/* Fills the triangle in Tab_Points, or keeps it for its depth alone when the
-   GPU draws it and the scenery pass leaves such terrain unpainted. An animated
-   triangle is always filled: the water refresh wants to know it was drawn. */
+/* Fills the triangle in Tab_Points. */
 static inline S32 TerrainFillPoly(S32 type, S32 color, S32 gpuCovers, S32 animated) {
-    if (gpuCovers AND TerrainGpuSkipFill AND !animated AND DeferDepth()) {
-        return FALSE;
-    }
+    (void)animated;
     return Fill_Poly(TerrainFill(type, gpuCovers), color, 3, Tab_Points);
 }
 
@@ -1242,6 +1037,350 @@ static void FastGrid(U8 *ptra, const S16 *ptrm, T_SOMMET_ROT *ptrs) {
     }
 }
 
+/*──────────────────────────────────────────────────────────────────────────*/
+/* The cubes whose land the GPU drew this pass, kept for their depth. */
+
+#define DEFER_MAX_CUBES 64
+#define DEFER_BLOCK 8 ///< cells a side of a block, the unit asked about first
+
+typedef struct {
+    S16 Height[65 * 65];            ///< MapSommetY
+    T_HALF_POLY Poly[64 * 64 * 2];  ///< MapPolyGround
+    /* The camera the cube was drawn from, as FastGrid reads it. */
+    double M[9];                    ///< MatriceWorld, row after row
+    S32 CamXr, CamYr, CamZr, Near, Far, CentreX, CentreY, Guard16;
+    double RatioX, RatioY;
+    S32 Clip[4];
+    /* The grid, placed a point at a time as it is asked for. */
+    T_SOMMET_ROT Rot[65 * 65];      ///< SommetRot as the walk would have read it
+    U8 Vis[65 * 65];                ///< SommetAffichable
+    U8 Placed[65 * 65];
+    S16 Box[(64 / DEFER_BLOCK) * (64 / DEFER_BLOCK)][4]; ///< what each block's cells can fill, x0 > x1 for nothing
+    U8 Done[64 * 64];               ///< the cell's depth is in
+    S32 Boxed;                      ///< Box is worked out
+} T_DEFER_CUBE;
+
+static T_DEFER_CUBE *s_deferCubes = NULL;
+static S32 s_nbDeferCubes = 0;
+static S32 s_deferClip[4];
+static U8 *s_depthScratch = NULL; /* where the depth fill's colour goes */
+static size_t s_depthScratchSize = 0;
+
+static void ResetDeferredDepth(void) {
+    s_nbDeferCubes = 0;
+}
+
+/* FastGrid's placement of grid point (ix, iz), the same arithmetic in the same
+   order, so the point lands where the walk would have had it. A point it
+   leaves alone (behind the near plane, past the far one) keeps what the grid
+   held; no cell the depth is filled from reads one. */
+static void PlacePoint(T_DEFER_CUBE *c, S32 ix, S32 iz) {
+    const S32 k = iz * 65 + ix;
+    if (c->Placed[k]) {
+        return;
+    }
+    c->Placed[k] = TRUE;
+    const double x = (double)(ix * 512), z = (double)(iz * 512);
+    const double y = (double)c->Height[k];
+    const S32 X0f = (S32)lrint(x * c->M[0] + y * c->M[1] + z * c->M[2]);
+    const S32 Y0f = (S32)lrint(x * c->M[3] + y * c->M[4] + z * c->M[5]);
+    const S32 Z0f = (S32)lrint(x * c->M[6] + y * c->M[7] + z * c->M[8]);
+    const S32 zr = c->CamZr - Z0f;
+    if (zr <= c->Near) {
+        c->Vis[k] = 32;
+        return;
+    }
+    if (zr >= c->Far) {
+        c->Vis[k] = 0;
+        return;
+    }
+    const double factor = c->RatioX / (double)zr;
+    const S32 xp = c->CentreX + (S32)lrint(((double)X0f - (double)c->CamXr) * factor);
+    const S32 yp = c->CentreY + (S32)lrint(((double)Y0f - (double)c->CamYr) * factor * c->RatioY);
+    if (c->Guard16 AND (xp != (S32)(S16)xp OR yp != (S32)(S16)yp)) {
+        c->Vis[k] = 32;
+        return;
+    }
+    U8 flag = 16;
+    if (xp < c->Clip[0])
+        flag |= 1;
+    if (xp > c->Clip[2])
+        flag |= 2;
+    if (yp < c->Clip[1])
+        flag |= 4;
+    if (yp > c->Clip[3])
+        flag |= 8;
+    c->Vis[k] = flag;
+    c->Rot[k].Zrot = zr;
+    c->Rot[k].X2D = (S16)xp;
+    c->Rot[k].Y2D = (S16)yp;
+}
+
+/* What the walk does with cell (xi, zi): 1 its two triangles, 2 the black
+   fill under the near edge, 0 nothing. */
+static S32 CellKind(T_DEFER_CUBE *c, S32 xi, S32 zi) {
+    PlacePoint(c, xi, zi);
+    PlacePoint(c, xi + 1, zi);
+    PlacePoint(c, xi, zi + 1);
+    PlacePoint(c, xi + 1, zi + 1);
+    const U32 mask = MaskVisible((U8 *)&c->Vis[zi * 65 + xi]);
+    if ((mask & 0xFF) == 16) {
+        return 1;
+    }
+    return ((mask & 0xFF) == 0 AND mask) ? 2 : 0;
+}
+
+/* The screen box cell (xi, zi) fills, FALSE when it fills nothing. */
+static S32 CellBox(T_DEFER_CUBE *c, S32 xi, S32 zi, S32 kind, S32 box[4]) {
+    if (kind == 0) {
+        return FALSE;
+    }
+    const T_SOMMET_ROT *r = &c->Rot[zi * 65 + xi];
+    const T_SOMMET_ROT *corner[4] = {&r[0], &r[65], &r[66], &r[1]};
+    box[0] = box[2] = corner[0]->X2D;
+    box[1] = box[3] = corner[0]->Y2D;
+    for (S32 k = 1; k < 4; k++) {
+        box[0] = ade_min(box[0], (S32)corner[k]->X2D);
+        box[2] = ade_max(box[2], (S32)corner[k]->X2D);
+        box[1] = ade_min(box[1], (S32)corner[k]->Y2D);
+        box[3] = ade_max(box[3], (S32)corner[k]->Y2D);
+    }
+    if (kind == 2) {
+        box[3] = (S32)ModeDesiredY - 1; /* the black fill reaches the bottom of the frame */
+    }
+    return TRUE;
+}
+
+/* Where each block of cells can reach on screen: the projection of its box in
+   the world (the cells' extent, their lowest and highest heights), the whole
+   frame when some of it is behind the near plane -- which is also the only
+   block that can hold a black fill. */
+static void BoxCube(T_DEFER_CUBE *c) {
+    const S32 blocks = 64 / DEFER_BLOCK;
+    for (S32 b = 0; b < blocks * blocks; b++) {
+        const S32 bx = (b % blocks) * DEFER_BLOCK, bz = (b / blocks) * DEFER_BLOCK;
+        S32 lo = 32767, hi = -32768;
+        for (S32 iz = bz; iz <= bz + DEFER_BLOCK; iz++) {
+            for (S32 ix = bx; ix <= bx + DEFER_BLOCK; ix++) {
+                lo = ade_min(lo, (S32)c->Height[iz * 65 + ix]);
+                hi = ade_max(hi, (S32)c->Height[iz * 65 + ix]);
+            }
+        }
+        S16 *bb = c->Box[b];
+        double x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+        S32 near = FALSE;
+        for (S32 k = 0; k < 8 AND !near; k++) {
+            const double x = (double)((bx + (k & 1) * DEFER_BLOCK) * 512);
+            const double z = (double)((bz + (k >> 1 & 1) * DEFER_BLOCK) * 512);
+            const double y = (double)((k & 4) ? hi : lo);
+            const double zr = (double)c->CamZr - (x * c->M[6] + y * c->M[7] + z * c->M[8]);
+            if (zr <= (double)c->Near + 1.0) {
+                near = TRUE;
+                break;
+            }
+            const double f = c->RatioX / zr;
+            const double sx = (double)c->CentreX + (x * c->M[0] + y * c->M[1] + z * c->M[2] - (double)c->CamXr) * f;
+            const double sy =
+                (double)c->CentreY + (x * c->M[3] + y * c->M[4] + z * c->M[5] - (double)c->CamYr) * f * c->RatioY;
+            x0 = sx < x0 ? sx : x0;
+            x1 = sx > x1 ? sx : x1;
+            y0 = sy < y0 ? sy : y0;
+            y1 = sy > y1 ? sy : y1;
+        }
+        if (near) {
+            bb[0] = bb[1] = -32768;
+            bb[2] = bb[3] = 32767;
+            continue;
+        }
+        /* A pixel of rounding on each side. */
+        bb[0] = (S16)ade_max(-32768.0, x0 - 2.0);
+        bb[1] = (S16)ade_max(-32768.0, y0 - 2.0);
+        bb[2] = (S16)ade_min(32767.0, x1 + 2.0);
+        bb[3] = (S16)ade_min(32767.0, y1 + 2.0);
+    }
+    c->Boxed = TRUE;
+}
+
+/* A cell's depth, DrawFeuillePolyZBuf's triangles without their colour. */
+static void DepthCell(T_DEFER_CUBE *c, S32 xi, S32 zi) {
+    static const U8 kCorners[2][2][3] = {{{0, 1, 2}, {2, 3, 0}}, {{3, 0, 1}, {1, 2, 3}}};
+    const T_HALF_POLY *ptrh = &c->Poly[zi * (64 * 2) + xi * 2];
+    if (!(ptrh->PolyFlag + ptrh->TexFlag + (ptrh + 1)->PolyFlag + (ptrh + 1)->TexFlag)) {
+        return;
+    }
+    const T_SOMMET_ROT *ptrs = &c->Rot[zi * 65 + xi];
+    const T_SOMMET_ROT *corner[4] = {&ptrs[0], &ptrs[65], &ptrs[66], &ptrs[1]};
+    for (S32 half = 0; half < 2; half++) {
+        const T_HALF_POLY *h = ptrh + half;
+        if (!(h->PolyFlag + h->TexFlag)) {
+            continue;
+        }
+        const U8 *k = kCorners[ptrh->Sens][half];
+        for (S32 i = 0; i < 3; i++) {
+            Tab_Points[i].Pt_XE = corner[k[i]]->X2D;
+            Tab_Points[i].Pt_YE = corner[k[i]]->Y2D;
+        }
+        if (TestVuePoly(Tab_Points)) {
+            for (S32 i = 0; i < 3; i++) {
+                Tab_Points[i].Pt_ZO = (U16)GET_ZO(corner[k[i]]->Zrot);
+            }
+            Fill_Poly(POLY_FLAT, 0, 3, Tab_Points);
+        }
+    }
+}
+
+/* Keeps the cube just drawn by the GPU for its depth. */
+static void DeferCube(void) {
+    if (s_deferCubes == NULL) {
+        s_deferCubes = (T_DEFER_CUBE *)malloc(DEFER_MAX_CUBES * sizeof(T_DEFER_CUBE));
+        if (s_deferCubes == NULL) {
+            return;
+        }
+    }
+    if (s_nbDeferCubes >= DEFER_MAX_CUBES) {
+        return;
+    }
+    if (s_nbDeferCubes == 0) {
+        s_deferClip[0] = ClipXMin;
+        s_deferClip[1] = ClipYMin;
+        s_deferClip[2] = ClipXMax;
+        s_deferClip[3] = ClipYMax;
+    }
+    T_DEFER_CUBE *c = &s_deferCubes[s_nbDeferCubes++];
+    memcpy(c->Height, MapSommetY, sizeof(c->Height));
+    memcpy(c->Poly, MapPolyGround, sizeof(c->Poly));
+    const TYPE_MAT *m = &MatriceWorld;
+    const float rows[9] = {m->F.M11, m->F.M12, m->F.M13, m->F.M21, m->F.M22, m->F.M23, m->F.M31, m->F.M32, m->F.M33};
+    for (S32 k = 0; k < 9; k++) {
+        c->M[k] = (double)rows[k];
+    }
+    c->CamXr = CameraXr;
+    c->CamYr = CameraYr;
+    c->CamZr = CameraZr;
+    c->Near = NearClip;
+    c->Far = ClipZFar;
+    c->CentreX = XCentre;
+    c->CentreY = YCentre;
+    c->Guard16 = FollowCamera;
+    c->RatioX = (double)FRatioX;
+    c->RatioY = (double)FRatioY;
+    c->Clip[0] = ClipXMin;
+    c->Clip[1] = ClipYMin;
+    c->Clip[2] = ClipXMax;
+    c->Clip[3] = ClipYMax;
+    memset(c->Placed, 0, sizeof(c->Placed));
+    memset(c->Done, 0, sizeof(c->Done));
+    c->Boxed = FALSE;
+}
+
+void TerrainGpu_EnsureDepth(S32 x0, S32 y0, S32 x1, S32 y1) {
+    if (s_nbDeferCubes == 0 OR Log == NULL) {
+        return;
+    }
+    size_t frame = (size_t)ModeDesiredX * (size_t)ModeDesiredY;
+    if (s_depthScratchSize < frame) {
+        free(s_depthScratch);
+        s_depthScratch = (U8 *)malloc(frame);
+        s_depthScratchSize = s_depthScratch ? frame : 0;
+        if (s_depthScratch == NULL) {
+            return;
+        }
+    }
+
+    /* The terrain's own filler, writing its colour where nobody looks. */
+    S32 clipX0 = ClipXMin, clipY0 = ClipYMin, clipX1 = ClipXMax, clipY1 = ClipYMax;
+    U32 bank = Fill_Bank;
+    void *log = Log;
+    Log = s_depthScratch;
+    Switch_Fillers(FILL_POLY_FOG_ZBUFFER);
+    ClipXMin = s_deferClip[0];
+    ClipYMin = s_deferClip[1];
+    ClipXMax = s_deferClip[2];
+    ClipYMax = s_deferClip[3];
+
+    const S32 blocks = 64 / DEFER_BLOCK;
+    for (S32 n = 0; n < s_nbDeferCubes; n++) {
+        T_DEFER_CUBE *c = &s_deferCubes[n];
+        if (!c->Boxed) {
+            BoxCube(c);
+        }
+        for (S32 b = 0; b < blocks * blocks; b++) {
+            const S16 *bb = c->Box[b];
+            if (bb[0] > x1 OR bb[2] < x0 OR bb[1] > y1 OR bb[3] < y0) {
+                continue;
+            }
+            const S32 bx = (b % blocks) * DEFER_BLOCK, bz = (b / blocks) * DEFER_BLOCK;
+            for (S32 zi = bz; zi < bz + DEFER_BLOCK; zi++) {
+                for (S32 xi = bx; xi < bx + DEFER_BLOCK; xi++) {
+                    if (c->Done[zi * 64 + xi]) {
+                        continue;
+                    }
+                    const S32 kind = CellKind(c, xi, zi);
+                    S32 box[4];
+                    if (!CellBox(c, xi, zi, kind, box) OR box[0] > x1 OR box[2] < x0 OR box[1] > y1 OR box[3] < y0) {
+                        continue;
+                    }
+                    c->Done[zi * 64 + xi] = TRUE;
+                    if (kind == 1) {
+                        DepthCell(c, xi, zi);
+                    } else {
+                        FillBlackPolyZBuf(xi, zi, &c->Rot[zi * 65 + xi], &c->Vis[zi * 65 + xi]);
+                    }
+                }
+            }
+        }
+    }
+
+    Switch_Fillers(bank);
+    Log = log;
+    ClipXMin = clipX0;
+    ClipYMin = clipY0;
+    ClipXMax = clipX1;
+    ClipYMax = clipY1;
+}
+
+/* The cube's land, when the GPU draws it whole: its records built the first
+   time the cube is seen, one draw, the grass, and the cube kept for its depth. */
+static void LandCube(void) {
+    static T_TERRAIN_HALF halves[64 * 64 * 2];
+    TerrainGpuPalette = PtrPal;
+    if (TerrainGpu_LandSlot(MapSommetY)) {
+        for (S32 k = 0; k < 64 * 64 * 2; k++) {
+            const T_HALF_POLY *h = &MapPolyGround[k];
+            T_TERRAIN_HALF *o = &halves[k];
+            o->PolyFlag = (U8)h->PolyFlag;
+            o->TexFlag = (U8)h->TexFlag;
+            o->Bank = (U8)h->Bank;
+            o->Step = (U8)h->SampleStep;
+            o->CodeJeu = (U8)h->CodeJeu;
+            o->Sens = (U8)MapPolyGround[k & ~1].Sens;
+            o->IndexTex = (U16)h->IndexTex;
+            o->PolyType = ListTypePolygone[h->PolyFlag];
+            o->TexType = ListTypePTexture[h->TexFlag + (h->PolyFlag << 2)];
+        }
+        TerrainGpu_LandBuild(halves, MapIntensity, (const U16 *)ListTexDef);
+    }
+    /* How near the cube comes: its box's nearest corner, the depth being
+       linear in the point. */
+    S32 lo = 32767, hi = -32768;
+    for (S32 k = 0; k < 65 * 65; k++) {
+        lo = ade_min(lo, (S32)MapSommetY[k]);
+        hi = ade_max(hi, (S32)MapSommetY[k]);
+    }
+    const TYPE_MAT *m = &MatriceWorld;
+    float nearestF = 1e30f;
+    for (S32 k = 0; k < 8; k++) {
+        const float x = (float)((k & 1) * 64 * 512), z = (float)((k >> 1 & 1) * 64 * 512);
+        const float y = (float)((k & 4) ? hi : lo);
+        const float zr = (float)CameraZr - (x * m->F.M31 + y * m->F.M32 + z * m->F.M33);
+        nearestF = zr < nearestF ? zr : nearestF;
+    }
+    const S32 nearest = (S32)nearestF;
+    TerrainGpu_LandDraw(GroundTexture, PtrCLUTFog + ((PalLevel << 8) & 0xF000), StartZFog, ClipZFar, FogCoul, nearest);
+    TerrainGpu_End();
+    DeferCube();
+}
+
 void AffichageTerrainZBuf(void) {
     S16 *ptrm;
     U8 *ptra;
@@ -1265,7 +1404,10 @@ void AffichageTerrainZBuf(void) {
        everywhere the classic path's 80 bits do, bar the exact halfway cases
        that do not survive a frame either way. The classic renderer keeps the
        path it was verified with. */
-    if (GpuObj_Active()) {
+    if (TerrainGpuSkipFill) {
+        /* The GPU places the land itself; the grid the game's depth needs is
+           placed a point at a time when it is asked for (TerrainGpu_EnsureDepth). */
+    } else if (GpuObj_Active()) {
         FastGrid(ptra, ptrm, ptrs);
     } else
     for (S32 z = 0; z <= NB_COTE * 512; z += 512) {
@@ -1326,6 +1468,9 @@ void AffichageTerrainZBuf(void) {
         }
     }
 
+    if (TerrainGpuSkipFill) {
+        LandCube();
+    } else {
     PtrMap = GroundTexture;
     RepMask = 0xFFFF;
 
@@ -1366,6 +1511,7 @@ void AffichageTerrainZBuf(void) {
     }
 
     TerrainGpu_End();
+    }
 
     DrawOneSea(Y_SEA);
 
