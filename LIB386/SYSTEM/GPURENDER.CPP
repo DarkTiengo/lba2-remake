@@ -1535,6 +1535,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         sliceUniform[25] = GpuWater_GetWeather();
         sliceUniform[26] = GpuWaterEnabled && draw->HasCapCamera ? 1.0f : 0.0f;
         sliceUniform[40] = (float)draw->First;
+        sliceUniform[41] = (float)draw->Procedural;
         if (draw->HasCapCamera) {
             for (S32 r = 0; r < 3; r++) {
                 for (S32 c = 0; c < 3; c++) {
@@ -1584,8 +1585,10 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));
             SDL_PushGPUFragmentUniformData(cmd, 0, &uniforms[i], sizeof(T_DRAW_UNIFORMS));
             if (draw->Procedural) {
-                /* Forty-eight vertices a record of three: sixteen small triangles. */
-                SDL_DrawGPUPrimitives(pass, draw->Count / 3 * 48, 1, 0, 0);
+                const U32 grown = draw->Procedural == GPUOBJ_PROC_GRASS
+                                      ? draw->Count * GPUOBJ_PROC_GRASS_VERTS
+                                      : draw->Count / 3 * GPUOBJ_PROC_TERRAIN_VERTS;
+                SDL_DrawGPUPrimitives(pass, grown, 1, 0, 0);
             } else if (draw->NbIndices > 0 && s_indexBuffer != NULL) {
                 SDL_GPUBufferBinding ibind;
                 SDL_zero(ibind);

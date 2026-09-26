@@ -64,6 +64,12 @@ extern U32 *GpuObjIndices;
    cube seen frame after frame is sent once. */
 #define GPUOBJ_HEIGHTMAP_SIDE 65
 #define GPUOBJ_MAX_HEIGHTMAPS 128
+
+/* What GPUTERRAIN.vert grows a Procedural draw's vertices into. */
+#define GPUOBJ_PROC_TERRAIN 1 ///< three vertices, a land triangle's corners: sixteen triangles on the curve
+#define GPUOBJ_PROC_GRASS 2   ///< one vertex, a tuft's root: three blades
+#define GPUOBJ_PROC_TERRAIN_VERTS 48 ///< drawn a record of three
+#define GPUOBJ_PROC_GRASS_VERTS 9    ///< drawn a record of one
 extern float GpuObjHeightMaps[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE];
 extern S32 GpuObjHeightMapsDirtyFrom; ///< first slot changed since the presenter's last copy, -1 when none
 extern S32 GpuObjHeightMapsDirtyTo;   ///< one past the last
@@ -128,7 +134,7 @@ typedef struct {
     U32 NbIndices;    ///< 0: drawn straight from its vertices, in threes
     S32 Retainable;   ///< the exterior scenery: placed by AffGpu_ViewVertex, so it can be re-placed
     S32 Retained;     ///< kept from an earlier frame: drawn through the camera difference
-    S32 Procedural;   ///< every three vertices are a land triangle GPUTERRAIN.vert grows into sixteen
+    S32 Procedural;   ///< grown by GPUTERRAIN.vert: GPUOBJ_PROC_TERRAIN or GPUOBJ_PROC_GRASS, 0 for plain vertices
 } T_GPUOBJ_DRAW;
 
 // --- State consumed by the presenter -----------------------------------------

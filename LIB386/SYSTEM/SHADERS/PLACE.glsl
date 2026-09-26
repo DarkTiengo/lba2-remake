@@ -20,7 +20,7 @@ layout(set = 1, binding = 0) uniform Draw {
     vec4 capRow0; // the rotation the draw was captured with, a row each:
     vec4 capRow1; // a world direction d is (dot(row0, d), dot(row1, d), dot(row2, d))
     vec4 capRow2; // in the draw's own view space (vpos.z the negated depth)
-    vec4 records; // GPUTERRAIN.vert: x the first vertex of the draw's triangle records
+    vec4 records; // GPUTERRAIN.vert: x the first vertex of the draw's records, y 1 terrain, 2 grass
 };
 
 const int FLAG_GRASS = 512;

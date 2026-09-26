@@ -77,7 +77,6 @@ const U8 *TerrainGpuPalette = NULL;
    of where grass grows. */
 #define GRASS_STEP 2
 #define GRASS_TUFTS 12   ///< per triangle (half a cell) near the camera: a lawn, not a thicket
-#define GRASS_BLADES 3   ///< per tuft
 #define GRASS_NEAR 20000.0f
 #define GRASS_FAR 28000.0f
 
@@ -446,33 +445,6 @@ static S32 GrassGround(const T_GRASS_TRI *t, float u, float v) {
     return g * 10 >= r * 9 && g * 100 > b * 112;
 }
 
-/* One grass vertex: cube-local world point, its shade, the tip's sway. */
-static void GrassVertex(T_GPUOBJ_VERTEX *v, const float w[3], float shade, float mode, S32 color, float u, float tv,
-                        const float *sway, float phase) {
-    float p[3];
-    GridPoint(w[0], w[1], w[2], p);
-    AffGpu_ViewVertex(v, p[0], p[1], p[2]);
-    v->normal[3] = shade;
-    v->light[3] = mode;
-    v->vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_GRASS);
-    v->mat[0] = (float)(color & 0xFF);
-    v->mat[1] = 0.0f;
-    v->mat[2] = 65535.0f;
-    v->mat[3] = phase;
-    v->uv[0] = u;
-    v->uv[1] = tv;
-    if (sway != NULL) {
-        /* The clip-space offset of a unit of wind: the vertex shader moves
-           the tip along it (clip coordinates are linear in the position). */
-        float q[3];
-        T_GPUOBJ_VERTEX moved;
-        GridPoint(w[0] + sway[0], w[1] + sway[1], w[2] + sway[2], q);
-        AffGpu_ViewVertex(&moved, q[0], q[1], q[2]);
-        v->uv[2] = moved.clip[0] - v->clip[0];
-        v->uv[3] = moved.clip[1] - v->clip[1];
-    }
-}
-
 /* Tufts of blades over a grass triangle, on the ground as it is drawn (curved
    by smooth terrain), coloured by the texel under their root. Their number
    and height fade out with the distance, blade by blade, so none pops. */
@@ -489,14 +461,9 @@ static void GrassTri(const T_GRASS_TRI *t) {
     }
     /* The blades face the camera: its right, level. */
     const TYPE_MAT *m = &MatriceWorld;
-    float rx = m->F.M11, rz = m->F.M13;
-    const float rl = rx * rx + rz * rz;
-    if (rl < 1e-6f) {
+    if (m->F.M11 * m->F.M11 + m->F.M13 * m->F.M13 < 1e-6f) {
         return;
     }
-    const float inv = 1.0f / sqrtf(rl);
-    rx *= inv;
-    rz *= inv;
     /* One wind over the island. */
     const float windX = 0.94f, windZ = 0.34f;
     const U32 key = (U32)(t->Corners[0] | t->Corners[1] << 2 | t->Corners[2] << 4);
@@ -539,32 +506,27 @@ static void GrassTri(const T_GRASS_TRI *t) {
         const float wx = gx * (float)CELL_SIZE, wz = gz * (float)CELL_SIZE;
         /* Neighbouring tufts sway together: the gust travels along the wind. */
         const float phase = (wx * windX + wz * windZ) * 0.004f + GrassHash((U32)k, (U32)t->Xi, (U32)t->Zi) * 1.2f;
-        T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(GRASS_BLADES * 3);
+        /* The tuft goes to GPUTERRAIN.vert as its root, which grows its three
+           blades: their spread, lean and height from the same hashes, facing
+           the camera, bent by the wind. */
+        T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(1);
         if (v == NULL) {
             return;
         }
-        for (S32 j = 0; j < GRASS_BLADES; j++) {
-            const float h0 = GrassHash((U32)k * 3u + (U32)j, (U32)t->Xi * 31u + key, (U32)t->Zi * 17u);
-            const float h1 = GrassHash((U32)t->Zi * 5u + key, (U32)k * 3u + (U32)j, (U32)t->Xi * 11u);
-            const float height = (55.0f + 60.0f * h0) * grow;
-            const float half = 9.0f + 5.0f * h1;
-            /* A little apart from the tuft's centre, leaning out of it. */
-            const float angle = ((float)j + h1) * 2.0944f;
-            const float ox = cosf(angle), oz = sinf(angle);
-            const float base[3] = {wx + ox * 18.0f * h0, y, wz + oz * 18.0f * h0};
-            const float left[3] = {base[0] - rx * half, y - 6.0f, base[2] - rz * half};
-            const float right[3] = {base[0] + rx * half, y - 6.0f, base[2] + rz * half};
-            const float lean = height * (0.18f + 0.22f * h1);
-            const float tip[3] = {base[0] + ox * lean, y + height, base[2] + oz * lean};
-            const float sway[3] = {windX * height * 0.3f, -height * 0.05f, windZ * height * 0.3f};
-            /* Darker at the root, in the grass's own shadow; lit at the tip. */
-            const float root = shade * 0.62f;
-            float top = shade * 1.08f + 0.6f;
-            top = top > 15.0f ? 15.0f : top;
-            GrassVertex(&v[j * 3], left, root, t->Mode, t->Color, u / 256.0f, tv / 256.0f, NULL, phase);
-            GrassVertex(&v[j * 3 + 1], right, root, t->Mode, t->Color, u / 256.0f, tv / 256.0f, NULL, phase);
-            GrassVertex(&v[j * 3 + 2], tip, top, t->Mode, t->Color, u / 256.0f, tv / 256.0f, sway, phase);
-        }
+        GridPoint(wx, y, wz, p);
+        AffGpu_ViewVertex(v, p[0], p[1], p[2]);
+        v->normal[0] = grow;
+        v->normal[1] = (float)(k + 16 * (S32)key);
+        v->normal[2] = (float)(t->Xi + 256 * t->Zi);
+        v->normal[3] = shade;
+        v->light[3] = t->Mode;
+        v->vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_GRASS);
+        v->mat[0] = (float)(t->Color & 0xFF);
+        v->mat[1] = 0.0f;
+        v->mat[2] = 65535.0f;
+        v->mat[3] = phase;
+        v->uv[0] = u / 256.0f;
+        v->uv[1] = tv / 256.0f;
     }
 }
 
@@ -878,7 +840,7 @@ void TerrainGpu_End(void) {
        flat land before them and the grass after them are drawn as they are. */
     const T_GPUOBJ_DRAW material = *s_draw;
     if (s_nbSmoothTris > 0 && ReopenDraw(&material)) {
-        s_draw->Procedural = TRUE;
+        s_draw->Procedural = GPUOBJ_PROC_TERRAIN;
         for (S32 k = 0; k < s_nbSmoothTris; k++) {
             const T_SMOOTH_TRI *t = &s_smoothTris[k];
             SmoothTri(t->Xi, t->Zi, t->Corners, t->Lights, t->Mode, t->Flags, t->PerVertexShade, t->ConstantShade,
@@ -886,8 +848,8 @@ void TerrainGpu_End(void) {
         }
     }
     s_nbSmoothTris = 0;
-    if (s_nbGrassTris > 0 && s_draw != NULL &&
-        ((s_draw->NbIndices == 0 && !s_draw->Procedural) || ReopenDraw(&material))) {
+    if (s_nbGrassTris > 0 && s_draw != NULL && ReopenDraw(&material)) {
+        s_draw->Procedural = GPUOBJ_PROC_GRASS;
         for (S32 k = 0; k < s_nbGrassTris; k++) {
             GrassTri(&s_grassTris[k]);
         }

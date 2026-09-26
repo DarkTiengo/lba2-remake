@@ -10,7 +10,12 @@
    small triangles over a four-way subdivision, each point moved from the
    triangle's plane toward the Catmull-Rom curve through the heights around it.
    It is TERRAIN_GPU.CPP's SmoothTri, which used to do this on the CPU, to the
-   same formulas. */
+   same formulas.
+
+   A grass draw's records are tufts, one vertex each: the root on the ground
+   as drawn, where GrassTri found grass. Each becomes three blades, nine
+   vertices, spread, leant and sized by the same hashes GrassTri used, facing
+   the camera and bent by the wind. */
 
 layout(location = 0) out vec4 v_normal;
 layout(location = 1) flat out vec4 v_light;
@@ -84,7 +89,89 @@ vec4 Field(int vertex, int field) {
     return records4[vertex * 6 + field];
 }
 
+/* GrassHash: an integer hash to [0, 1). */
+float GrassHash(uint a, uint b, uint c) {
+    uint h = a * 0x8DA6B343u ^ b * 0xD8163841u ^ c * 0xCB1AB31Fu;
+    h ^= h >> 13;
+    h *= 0x5BD1E995u;
+    h ^= h >> 15;
+    return float(h & 0xFFFFFFu) / 16777216.0;
+}
+
+/* A world offset in the draw's view space. */
+vec3 World(vec3 d) {
+    return vec3(dot(capRow0.xyz, d), dot(capRow1.xyz, d), dot(capRow2.xyz, d));
+}
+
+void Grass() {
+    int tuft = int(records.x + 0.5) + gl_VertexIndex / 9;
+    int blade = (gl_VertexIndex % 9) / 3;
+    int corner = gl_VertexIndex % 3;
+    vec4 normal = Field(tuft, 1);
+    vec4 root = Field(tuft, 3);
+    float grow = normal.x;
+    uint seed = uint(normal.y + 0.5);
+    uint k = seed & 15u;
+    uint key = seed >> 4;
+    uint cell = uint(normal.z + 0.5);
+    uint xi = cell & 255u;
+    uint zi = cell >> 8;
+    uint j = uint(blade);
+    float h0 = GrassHash(k * 3u + j, xi * 31u + key, zi * 17u);
+    float h1 = GrassHash(zi * 5u + key, k * 3u + j, xi * 11u);
+    float height = (55.0 + 60.0 * h0) * grow;
+    float halfWidth = 9.0 + 5.0 * h1;
+    float angle = (float(blade) + h1) * 2.0944;
+    vec2 out2 = vec2(cos(angle), sin(angle));
+    /* The camera's right, level. */
+    vec2 right = normalize(vec2(capRow0.x, capRow0.z));
+    const vec2 windDir = vec2(0.94, 0.34); /* one wind over the island */
+
+    vec3 base = vec3(out2.x * 18.0 * h0, 0.0, out2.y * 18.0 * h0);
+    vec3 d;
+    float shade;
+    if (corner == 0) {
+        d = base + vec3(-right.x * halfWidth, -6.0, -right.y * halfWidth);
+        shade = normal.w * 0.62;
+    } else if (corner == 1) {
+        d = base + vec3(right.x * halfWidth, -6.0, right.y * halfWidth);
+        shade = normal.w * 0.62;
+    } else {
+        float lean = height * (0.18 + 0.22 * h1);
+        d = base + vec3(out2.x * lean, height, out2.y * lean);
+        shade = min(normal.w * 1.08 + 0.6, 15.0);
+    }
+    vec3 p = root.xyz + World(d);
+    vec3 n = vec3(0.0, 0.0, 1.0);
+    vec4 clip = Place(p);
+    if (corner == 2) {
+        /* The tip, bent: gusts travel over the field (the phase follows the
+           ground), each blade flutters in them. As GPUOBJ.vert did, along the
+           clip-space offset of a unit of wind. */
+        vec3 sway = vec3(windDir.x * height * 0.3, -height * 0.05, windDir.y * height * 0.3);
+        vec4 moved = Place(p + World(sway));
+        float ph = Field(tuft, 4).w;
+        float gust = 0.5 + 0.5 * sin(time * 1.1 - ph * 0.8);
+        float flutter = sin(time * 4.3 + ph * 5.3);
+        clip.xy += (moved.xy - clip.xy) * (wind * (0.2 + 0.8 * gust + 0.15 * flutter));
+    }
+    if (grow <= 0.0) {
+        clip = vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    gl_Position = vec4(clip.xy, sliceNear * clip.w + clip.z * sliceSize, clip.w);
+    v_normal = vec4(n, shade);
+    v_light = Field(tuft, 2);
+    v_vpos = vec4(p, root.w);
+    v_mat = Field(tuft, 4);
+    v_uv = vec4(Field(tuft, 5).xy, 0.0, 0.0);
+    v_slice = vec2(sliceNear, sliceSize);
+}
+
 void main() {
+    if (records.y > 1.5) {
+        Grass();
+        return;
+    }
     int tri = gl_VertexIndex / 48;
     ivec2 sub = kSub[gl_VertexIndex % 48];
     vec3 b = vec3(float(sub.x), float(sub.y), 0.0) / SUBDIV;

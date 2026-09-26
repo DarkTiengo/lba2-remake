@@ -88,6 +88,15 @@ static float GrowRise(float gx, float gz, float plane, float cornerWeight, float
     return offset * w * shore * border * cornerWeight;
 }
 
+/* GPUTERRAIN.vert's GrassHash. */
+static float BladeHash(U32 a, U32 b, U32 c) {
+    U32 h = a * 0x8DA6B343u ^ b * 0xD8163841u ^ c * 0xCB1AB31Fu;
+    h ^= h >> 13;
+    h *= 0x5BD1E995u;
+    h ^= h >> 15;
+    return (float)(h & 0xFFFFFF) / 16777216.0f;
+}
+
 static void Check(bool ok, const char *what) {
     if (!ok) {
         std::printf("FAIL: %s\n", what);
@@ -410,8 +419,19 @@ int main() {
             TerrainGpu_End();
             if (texel == 5) {
                 const S32 flags = (S32)vertices[0].vpos[3];
-                Check(allocated == 9 && (flags & GPUOBJ_FLAG_GRASS) != 0, "grass ground grows tufts of three blades");
-                Check(vertices[2].vpos[1] > vertices[0].vpos[1] + 40.0f, "a blade stands up from the ground");
+                /* A tuft leaves the CPU as its root; GPUTERRAIN.vert grows it. */
+                const T_GPUOBJ_VERTEX *tuft = &vertices[0];
+                const U32 seed = (U32)tuft->normal[1], cell = (U32)tuft->normal[2];
+                Check(allocated == 1 && draw.Procedural == GPUOBJ_PROC_GRASS && (flags & GPUOBJ_FLAG_GRASS) != 0 &&
+                          (seed & 15u) < 12u && cell == 3u + 256u * 3u && tuft->vpos[1] == 0.0f,
+                      "grass ground grows tufts, each a root on the ground for the shader");
+                /* The shader's tallest blade of the tuft, from the same hash. */
+                float tallest = 0.0f;
+                for (U32 j = 0; j < 3; j++) {
+                    const float h0 = BladeHash((seed & 15u) * 3u + j, 3u * 31u + (seed >> 4), 3u * 17u);
+                    tallest = std::fmax(tallest, (55.0f + 60.0f * h0) * tuft->normal[0]);
+                }
+                Check(tallest > 40.0f, "a blade stands up from the ground");
             } else {
                 Check(allocated == 0, "no grass grows on earth, even where the island marks grass");
             }
