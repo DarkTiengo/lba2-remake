@@ -57,7 +57,7 @@ S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32
 
 /* The software leaves the terrain the GPU covers to the GPU (gfx_fastterrain).
  * Outdoors, with the GPU's shadows on, it does not paint it at all: the scenery
- * group owns the whole scene window (GpuObj_ClaimGroup) and the composite shows
+ * group owns the whole scene window (GpuObj_BeginClaimedGroup) and the composite shows
  * the GPU's nearest surface there. The terrain's depth, which the game still
  * reads (DrawRecover's verdict on the hero being covered), is filled in only
  * where it is asked for (TerrainGpu_EnsureDepth). Otherwise, the fill is flat

@@ -686,12 +686,15 @@ void GpuObj_EndGroup(void) {
         return;
     }
     const U8 *log = (const U8 *)Log;
+    const U32 id = s_groupId;
+    const S32 n = x1 - x0;
     for (S32 y = y0; y < y1; y++) {
-        size_t row = (size_t)y * s_planeW;
-        for (S32 x = x0; x < x1; x++) {
-            plane->Tag[row + x] = s_groupId;
+        const size_t row = (size_t)y * s_planeW + (size_t)x0;
+        U32 *__restrict tag = plane->Tag + row;
+        for (S32 x = 0; x < n; x++) {
+            tag[x] = id;
         }
-        memcpy(plane->Snap + row + x0, log + row + x0, (size_t)(x1 - x0));
+        memcpy(plane->Snap + row, log + row, (size_t)n);
     }
     GrowBox(plane, x0, y0, x1, y1);
 }
@@ -704,15 +707,38 @@ U32 GpuObj_LastGroupId(void) {
     return s_groupId;
 }
 
-void GpuObj_ClaimGroup(S32 x0, S32 y0, S32 x1, S32 y1) {
-    if (!s_groupOpen) {
+void GpuObj_BeginClaimedGroup(S32 x0, S32 y0, S32 x1, S32 y1) {
+    if (s_groupOpen || s_drawOpen) {
         return;
     }
+    if (s_nextId >= GPUOBJ_MAX_IDS) {
+        ResetAll();
+    }
+    s_snapValid = FALSE;
+    s_groupId = s_nextId++;
+    s_groupOpen = TRUE;
     s_groupClaim = TRUE;
     s_claimX0 = x0;
     s_claimY0 = y0;
     s_claimX1 = x1;
     s_claimY1 = y1;
+
+    /* The clear before the group wrote Log directly: outside the box, which
+       the group's end tags anew, drop what it made stale. */
+    T_PLANE *plane = PlaneOf(Log, FALSE);
+    S32 cx0 = x0, cy0 = y0, cx1 = x1 + 1, cy1 = y1 + 1;
+    if (plane == NULL || !plane->AnyTag || !ClipBoxToPlanes(&cx0, &cy0, &cx1, &cy1)) {
+        return;
+    }
+    for (S32 y = 0; y < (S32)s_planeH; y++) {
+        U32 *row = plane->Tag + (size_t)y * s_planeW;
+        if (y < cy0 || y >= cy1) {
+            memset(row, 0, s_planeW * sizeof(U32));
+            continue;
+        }
+        memset(row, 0, (size_t)cx0 * sizeof(U32));
+        memset(row + cx1, 0, (size_t)((S32)s_planeW - cx1) * sizeof(U32));
+    }
 }
 
 void GpuObj_RefreshTags(S32 x0, S32 y0, S32 x1, S32 y1) {
@@ -879,6 +905,7 @@ U32 GpuObj_BuildPresent(float *out, const T_GPUOBJ_DRAW *const **draws, S32 *box
     const U8 *log = (const U8 *)Log;
     U32 lastId = 0;
     S32 lastIndex = -1;
+    S32 lastMarked = FALSE;
     U32 tagged = 0;
 
     memset(s_live, 0, s_nbDraws);
@@ -888,21 +915,40 @@ U32 GpuObj_BuildPresent(float *out, const T_GPUOBJ_DRAW *const **draws, S32 *box
         const U8 *snap = plane->Snap + row;
         const U8 *pixels = log + row;
         float *dst = out + row;
-        for (S32 x = plane->X0; x < plane->X1; x++) {
-            U32 id = tag[x];
-            if (id == 0 || snap[x] != pixels[x]) {
-                dst[x] = 0.0f;
-                continue;
+        /* A run of one id at a time: outdoors the scenery's claim makes most of
+           a row one run, and the run's inner loop has no branch. */
+        S32 x = plane->X0;
+        while (x < plane->X1) {
+            const U32 id = tag[x];
+            S32 end = x + 1;
+            while (end < plane->X1 && tag[end] == id) {
+                end++;
             }
-            tagged++;
-            if (id != lastId) {
-                lastId = id;
-                lastIndex = FindDraw(id);
+            float value = 0.0f;
+            if (id != 0) {
+                if (id != lastId) {
+                    lastId = id;
+                    lastIndex = FindDraw(id);
+                    lastMarked = FALSE;
+                }
                 if (lastIndex >= 0) {
-                    MarkDrawsLive(lastIndex);
+                    value = (float)(s_draws[lastIndex].Scene ? (id | GPUOBJ_SCENE_ID_BIT) : id);
                 }
             }
-            dst[x] = lastIndex >= 0 ? (float)(s_draws[lastIndex].Scene ? (id | GPUOBJ_SCENE_ID_BIT) : id) : 0.0f;
+            U32 live = 0;
+            for (S32 k = x; k < end; k++) {
+                const U32 same = snap[k] == pixels[k];
+                dst[k] = same ? value : 0.0f;
+                live += same;
+            }
+            if (id != 0 && live > 0) {
+                tagged += live;
+                if (lastIndex >= 0 && !lastMarked) {
+                    MarkDrawsLive(lastIndex);
+                    lastMarked = TRUE;
+                }
+            }
+            x = end;
         }
     }
     if (tagged == 0) {
