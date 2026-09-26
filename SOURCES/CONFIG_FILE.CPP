@@ -152,6 +152,8 @@ static const T_SETTING BootSettings[] = {
      "GPU renderer: the effects were adjusted to this machine (0 measures again outdoors)"},
     {"GpuSmoothTerrain", NULL, "gfx_smoothterrain", &TerrainGpuSmooth, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL,
      NULL, NULL, "GPU renderer: terrain cells curved into smooth hills and valleys"},
+    {"GpuPipeline", NULL, "gfx_pipeline", &WindowPipelinePresent, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL,
+     NULL, "GPU renderer: a gameplay frame is shown at the next present, the GPU rendering it while the CPU draws the next"},
     {"GpuSprites", NULL, "gfx_sprites", &GpuObjSprites, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: sprites outdoors are depth-tested, so the scenery can hide them"},
     {"GpuFastTerrain", NULL, "gfx_fastterrain", &TerrainGpuFastFill, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL,

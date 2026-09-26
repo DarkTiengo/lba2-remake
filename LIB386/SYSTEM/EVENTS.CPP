@@ -65,6 +65,9 @@ void SetEventFilter(EventFilterFn fn) {
 void ManageEvents() {
     assert(eventSystemInitialized == true);
 
+    /* A loop that waits on input without presenting must still show the last
+       gameplay frame. */
+    Window_FlushStalePresent();
     SDL_PumpEvents();
     {
         SDL_Event event;

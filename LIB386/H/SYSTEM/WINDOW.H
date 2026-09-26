@@ -48,6 +48,18 @@ bool Window_GetDisplayDimensions(U32 *outW, U32 *outH);
  *  dummy/offscreen one, so resolution auto-detection never fires under the
  *  test harness. */
 bool Window_GetPrimaryDisplayDimensions(U32 *outW, U32 *outH);
+/* Pipelined present (gfx_pipeline). Presenting waits in the driver until the
+ * GPU has finished the frame -- NVIDIA's vkQueuePresentKHR does, on Wayland and
+ * X11 alike -- and the GPU renderer's frame is mostly its object passes, sent
+ * early in the present. A gameplay frame is therefore presented at the start
+ * of the next present, not at the end of its own: the CPU simulates and draws
+ * the next frame while the GPU renders this one. One frame more between the
+ * game and the screen. Any other present, and anything that touches the frame
+ * the pending one shows, presents it first. */
+extern S32 WindowPipelinePresent;         ///< player choice (GpuPipeline, gfx_pipeline)
+void Window_DeferPresent(bool defer);     ///< the presents until the next call are gameplay frames
+void Window_FlushPresent(void);           ///< presents the pending frame, if any
+void Window_FlushStalePresent(void);      ///< presents it if it has waited too long (a loop that stopped presenting)
 void PresentRendererFrame(const void *pixels, U32 pitch);
 bool LockRendererTexture(void **pixels, int *pitch);
 void UnlockAndPresentRendererTexture();

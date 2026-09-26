@@ -109,6 +109,7 @@ static bool CreateRendererAndTexture(U32 resX, U32 resY) {
 }
 
 static void DestroyRendererAndTexture() {
+    Window_FlushPresent();
     if (sdlTexture) {
         SDL_DestroyTexture(sdlTexture);
         sdlTexture = NULL;
@@ -147,6 +148,29 @@ static void SyncRendererKind() {
     ApplyGameWindowHideSystemCursor();
 }
 
+S32 WindowPipelinePresent = TRUE;
+static bool s_deferPresent = false;
+static bool s_presentPending = false;
+static Uint64 s_pendingSince = 0;
+
+void Window_DeferPresent(bool defer) {
+    s_deferPresent = defer;
+}
+
+void Window_FlushPresent(void) {
+    if (s_presentPending && sdlRenderer != NULL) {
+        s_presentPending = false;
+        SDL_RenderPresent(sdlRenderer);
+    }
+}
+
+void Window_FlushStalePresent(void) {
+    /* A frame normally waits one simulation step, a few milliseconds. */
+    if (s_presentPending && SDL_GetTicksNS() - s_pendingSince > 50 * SDL_NS_PER_MS) {
+        Window_FlushPresent();
+    }
+}
+
 static void PresentCurrentTexture() {
     assert(sdlRenderer != NULL);
     assert(sdlTexture != NULL);
@@ -160,6 +184,7 @@ static void PresentCurrentTexture() {
         SDL_SetTextureScaleMode(sdlTexture, shrink ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
     }
 
+    Window_FlushPresent();
     SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
     SDL_RenderClear(sdlRenderer);
     bool gpuComposite = GpuRender_BeginComposite(sdlRenderer);
@@ -196,6 +221,12 @@ static void PresentCurrentTexture() {
                 SDL_DestroySurface(surface);
             }
         }
+    }
+    /* Only the GPU renderer's frames: the classic one has no GPU work to overlap. */
+    if (s_deferPresent && WindowPipelinePresent && gpuComposite) {
+        s_presentPending = true;
+        s_pendingSince = SDL_GetTicksNS();
+        return;
     }
     SDL_RenderPresent(sdlRenderer);
 }
@@ -426,6 +457,7 @@ void PresentRendererFrame(const void *pixels, U32 pitch) {
     assert(pixels != NULL);
 
     SyncRendererKind();
+    Window_FlushPresent(); /* the pending frame shows this texture */
     SDL_UpdateTexture(sdlTexture, NULL, pixels, (int)pitch);
     PresentCurrentTexture();
 }
@@ -437,6 +469,7 @@ bool LockRendererTexture(void **pixels, int *pitch) {
     assert(pitch != NULL);
 
     SyncRendererKind();
+    Window_FlushPresent(); /* the pending frame shows this texture */
     return SDL_LockTexture(sdlTexture, NULL, pixels, pitch);
 }
 

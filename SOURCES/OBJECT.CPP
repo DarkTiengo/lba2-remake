@@ -21,6 +21,7 @@
 #endif
 
 #include <OBJECT/AFF_GPU.H>
+#include <SYSTEM/WINDOW.H> /* Window_DeferPresent */
 #include "3DEXT/TERRAIN.H" /* Sky_Y */
 #include "SPRITE_GPU.H"  /* extras with a real depth */
 #include <3D/CAMERA.H>
@@ -6363,7 +6364,9 @@ startaffscene:
         if (!FlagAnimWhoSpeak)
             FixeCinemaMode(TRUE); // Scrolle les bandes noires
         AffNbFps();
+        Window_DeferPresent(true);
         BoxBlit();
+        Window_DeferPresent(false);
         break;
 
     case AFF_ALL_FLIP:
@@ -6379,7 +6382,9 @@ startaffscene:
         else
             FixeCinemaMode(FALSE); // Scrolle les bandes noires
         AffNbFps();
+        Window_DeferPresent(true);
         BoxBlit();
+        Window_DeferPresent(false);
         UnlockTimer();
         break;
 
