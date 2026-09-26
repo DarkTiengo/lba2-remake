@@ -31,6 +31,7 @@ static float s_planeTexOffset = 0.0f;
 static float s_planeTexMask = 65535.0f;
 static S32 s_waterPlane = FALSE;
 static S32 s_skyPlane = FALSE;
+static S32 s_skyBehind = FALSE; ///< the sky plane is drawn behind everything, as the painter does
 static float s_waterCameraX = 0.0f;
 static float s_waterCameraZ = 0.0f;
 
@@ -892,6 +893,7 @@ void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S
     s_nbSmoothTris = 0;
     s_waterPlane = sea;
     s_skyPlane = !sea;
+    s_skyBehind = FALSE;
     if (!GpuObj_Active() || TypeProj != TYPE_3D) {
         return;
     }
@@ -955,9 +957,17 @@ S32 TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]) {
                            s_waterCameraZ) / 512.0f;
         } else if (s_skyPlane) {
             v[i].vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_SKY);
+            if (s_skyBehind) {
+                /* At the back of the scene's depth, wherever it lies. */
+                v[i].clip[2] = 0.999f * v[i].clip[3];
+            }
         }
     }
     return TRUE;
+}
+
+void TerrainGpu_SkyBehind(void) {
+    s_skyBehind = s_skyPlane;
 }
 
 void TerrainGpu_End(void) {

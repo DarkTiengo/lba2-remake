@@ -59,6 +59,13 @@ void DrawSky(S32 y) {
     src[3].V_MapV = 0;
 
     TerrainGpu_BeginPlane(SkySeaTexture, 128, 0x7F7F, StartZFog, ClipZFar, FogCoul, FALSE);
+    /* The eye above the clouds, looking at someone under them: an authored
+       shot (the free camera keeps under the ceiling itself) placed for the
+       software painter, which draws every sky behind the world. At its own
+       depth this floor of cloud would hide the whole island from the GPU. */
+    if (y < CameraY AND ListObjet[NumObjFollow].Obj.Y < y) {
+        TerrainGpu_SkyBehind();
+    }
 
     zz = -WORLD_SIZE;
     for (i = 0; i < NB_POLYS_COTE * 3; i++, zz += WORLD_SIZE / NB_POLYS_COTE) {

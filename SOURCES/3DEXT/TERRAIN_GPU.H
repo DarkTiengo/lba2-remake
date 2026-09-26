@@ -85,6 +85,10 @@ void TerrainGpu_SetWaterCube(S32 cubeX, S32 cubeZ);
 void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S32 fogEnd, S32 fogColor,
                            S32 sea);
 
+/** The sky plane just opened is drawn behind the whole scene rather than at its
+ *  own depth: what the software painter does with every sky. */
+void TerrainGpu_SkyBehind(void);
+
 /** One plane quad in camera space, as handed to Draw_Poly. Returns TRUE when
  *  the GPU draws it. */
 S32 TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]);
