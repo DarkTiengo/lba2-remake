@@ -25,6 +25,12 @@ void main() {
     vec4 clip = a_clip;
     vec4 vpos = a_vpos;
     vec4 normal = a_normal;
+    vec4 light = a_light;
+    if (instance.w > 0.0) {
+        /* A kept model: its normals carry their length, the light is the draw's. */
+        normal.w *= instance.w;
+        light.xyz = instance.xyz;
+    }
     bool placed = false;
     if ((int(a_vpos.w + 0.5) & FLAG_WAVES) != 0 && waves.z > 0.5) {
         /* The sea: raised along the world's up, in the space it was captured in. */
@@ -57,7 +63,7 @@ void main() {
     }
     gl_Position = vec4(clip.xy, sliceNear * clip.w + clip.z * sliceSize, clip.w);
     v_normal = normal;
-    v_light = a_light;
+    v_light = light;
     v_vpos = vpos;
     v_mat = a_mat;
     v_uv = a_uv;

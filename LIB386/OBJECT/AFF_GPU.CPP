@@ -6,6 +6,7 @@
 #include <3D/DATAMAT.H>
 #include <3D/LIGHT.H>
 #include <3D/PROJ.H>
+#include <3D/ROTMAT.H>
 #include <POLYGON/POLY.H>
 #include <SVGA/CLIP.H>
 #include <SVGA/GPUOBJ.H>
@@ -439,7 +440,7 @@ void AffGpu_AddWorldLight(S32 x, S32 y, S32 z, float radius, float r, float g, f
 }
 
 void AffGpu_SaveRotated(S32 nbPoints, S32 perGroup) {
-    s_pending = GpuObj_Active();
+    s_pending = GpuObj_Active() && !AffGpuSuspended;
     if (!s_pending) {
         return;
     }
@@ -1271,6 +1272,304 @@ void AffGpu_End(void) {
     }
     s_draw = NULL;
     GpuObj_EndDraw();
+}
+
+// --- Decor meshes ------------------------------------------------------------
+S32 AffGpuSuspended = FALSE;
+
+/* A decor model as the GPU keeps it: every polygon in model space. */
+#define MAX_DECOR_MESHES 1024
+#define MAX_MESH_BUILD 8192
+typedef struct {
+    S32 Island; ///< -1: free
+    S32 State;  ///< 1 kept, -1 not fit to be kept (drawn by the body display)
+    U32 First;
+    U32 Count;
+    U32 Epoch; ///< GpuObjMeshEpoch it was written in
+    float Min[3], Max[3];
+    S32 Textured; ///< shows the object page
+    S32 Shaded;   ///< some of its textures take the Gouraud CLUT
+} T_DECOR_MESH;
+static T_DECOR_MESH s_meshes[MAX_DECOR_MESHES];
+static S32 s_meshesReady = FALSE;
+static S32 s_meshIsland = -1;
+
+static T_GPUOBJ_VERTEX s_build[MAX_MESH_BUILD];
+static U32 s_nbBuild = 0;
+static S32 s_buildFail = FALSE;
+static T_DECOR_MESH *s_buildMesh = NULL;
+
+/* A polygon of the body being kept, as AffGpu_Entity would take it, with the
+   points and normals in model space. What the capture leaves to the software
+   colour (a pass polygon), a page or CLUT switch, a glowing or burning surface,
+   a view-dependent texture: any of them and the body is not kept. */
+static void MeshPolygon(U32 type, void *poly) {
+    if (s_buildFail) {
+        return;
+    }
+    const U16 *w = (const U16 *)poly;
+    if (type >= 96 || (type & 2) != 0) {
+        s_buildFail = TRUE;
+        return;
+    }
+    const U32 polyType = type >> 2;
+    const S32 quad = (type & 1) != 0;
+    const S32 nbPoints = quad ? 4 : 3;
+    const U16 color = w[4];
+    const U16 normal = w[5];
+
+    T_GPU_MATERIAL m;
+    memset(&m, 0, sizeof(m));
+    m.Color = (float)(color & 0xFF);
+    m.Mode = (float)GPUOBJ_MODE_PASS;
+    S32 smooth = FALSE;
+    if (polyType <= POLY_DITHER_TABLE) {
+        switch (polyType) {
+        case POLY_SOLID:
+            m.Mode = (float)GPUOBJ_MODE_SOLID;
+            break;
+        case POLY_FLAT:
+        case POLY_GOURAUD:
+        case POLY_DITHER:
+            m.Mode = (float)GPUOBJ_MODE_SHADED;
+            smooth = polyType != POLY_FLAT;
+            break;
+        default:
+            break;
+        }
+    } else if (polyType < POLY_TEXTURE_Z_FOG && ObjPtrMap != NULL) {
+        const U32 sub = (polyType - POLY_TEXTURE) & 7;
+        const U32 shading = sub & 3;
+        m.Mode = (float)(shading == 0 ? GPUOBJ_MODE_TEX : GPUOBJ_MODE_TEXSHADED);
+        smooth = shading >= 2;
+        m.TexOffset = (float)(PtrMap - ObjPtrMap);
+        m.TexMask = (float)(RepMask & 0xFFFF);
+        if (sub >= 4) {
+            m.Flags = (float)GPUOBJ_FLAG_CHROMAKEY;
+        }
+        s_buildMesh->Textured = TRUE;
+        s_buildMesh->Shaded |= shading != 0;
+    }
+    if (m.Mode == (float)GPUOBJ_MODE_PASS) {
+        s_buildFail = TRUE;
+        return;
+    }
+
+    float uvs[4][2];
+    memset(uvs, 0, sizeof(uvs));
+    if (m.Mode == (float)GPUOBJ_MODE_TEX || m.Mode == (float)GPUOBJ_MODE_TEXSHADED) {
+        for (S32 i = 0; i < nbPoints; i++) {
+            uvs[i][0] = (float)w[6 + i * 2] / 256.0f;
+            uvs[i][1] = (float)w[7 + i * 2] / 256.0f;
+        }
+        /* The animated fire texture lights its surroundings: the capture's work. */
+        if (GpuObjNbFires > 0 && ObjPtrMap == GpuObjFirePage) {
+            float cu = 0.0f, cv = 0.0f;
+            for (S32 i = 0; i < nbPoints; i++) {
+                cu += uvs[i][0];
+                cv += uvs[i][1];
+            }
+            const S32 u = (S32)(cu / (float)nbPoints);
+            const S32 v = (S32)(cv / (float)nbPoints);
+            const S32 index = ((S32)m.TexOffset + ((((v & 255) << 8) | (u & 255)) & (S32)m.TexMask)) & 65535;
+            if (GpuObj_FireAt(index & 255, index >> 8) >= 0) {
+                s_buildFail = TRUE;
+                return;
+            }
+        }
+    }
+
+    const U32 nbVerts = (U32)(nbPoints - 2) * 3;
+    if (s_nbBuild + nbVerts > MAX_MESH_BUILD) {
+        s_buildFail = TRUE;
+        return;
+    }
+    const TYPE_VT16 *points = (const TYPE_VT16 *)((U8 *)lBody + lBody->OffPoints);
+    const TYPE_VT16 *normals = (const TYPE_VT16 *)((U8 *)lBody + lBody->OffNormales);
+    const TYPE_VT16 *faces = (const TYPE_VT16 *)((U8 *)lBody + lBody->OffNormFaces);
+    const TYPE_VT16 *faceNormal = NULL;
+    if (normal < lBody->NbNormales) {
+        faceNormal = &normals[normal];
+    } else if (normal < lBody->NbNormales + lBody->NbNormFaces && normal < MAX_LIGHTS) {
+        faceNormal = &faces[normal - lBody->NbNormales];
+    }
+    for (U32 t = 0; t + 2 < (U32)nbPoints; t++) {
+        const S32 corners[3] = {0, (S32)t + 1, (S32)t + 2};
+        for (S32 c = 0; c < 3; c++) {
+            const S32 k = corners[c];
+            const U16 point = w[k];
+            if (point >= lBody->NbPoints) {
+                s_buildFail = TRUE;
+                return;
+            }
+            const TYPE_VT16 *n = smooth ? (point < lBody->NbNormales ? &normals[point] : NULL) : faceNormal;
+            T_GPUOBJ_VERTEX *v = &s_build[s_nbBuild++];
+            memset(v, 0, sizeof(*v));
+            const float p[3] = {(float)points[point].X, (float)points[point].Y, (float)points[point].Z};
+            v->vpos[0] = p[0];
+            v->vpos[1] = p[1];
+            v->vpos[2] = p[2];
+            v->vpos[3] = m.Flags;
+            for (S32 a = 0; a < 3; a++) {
+                s_buildMesh->Min[a] = p[a] < s_buildMesh->Min[a] ? p[a] : s_buildMesh->Min[a];
+                s_buildMesh->Max[a] = p[a] > s_buildMesh->Max[a] ? p[a] : s_buildMesh->Max[a];
+            }
+            if (n != NULL) {
+                const float x = (float)n->X, y = (float)n->Y, z = (float)n->Z;
+                v->normal[0] = x;
+                v->normal[1] = y;
+                v->normal[2] = z;
+                /* Its length: the light's share is the draw's (MeshLight). */
+                v->normal[3] = (float)sqrt((double)(x * x + y * y + z * z));
+            } else {
+                v->normal[2] = 1.0f;
+            }
+            v->light[3] = m.Mode;
+            v->mat[0] = m.Color;
+            v->mat[1] = m.TexOffset;
+            v->mat[2] = m.TexMask;
+            v->uv[0] = uvs[k][0];
+            v->uv[1] = uvs[k][1];
+        }
+    }
+}
+
+static T_DECOR_MESH *DecorMesh(S32 island, S32 index, T_BODY_HEADER *body) {
+    if (!s_meshesReady || island != s_meshIsland) {
+        for (S32 i = 0; i < MAX_DECOR_MESHES; i++) {
+            s_meshes[i].Island = -1;
+        }
+        if (s_meshesReady) {
+            GpuObj_MeshReset();
+        }
+        s_meshesReady = TRUE;
+        s_meshIsland = island;
+    }
+    if (index < 0 || index >= MAX_DECOR_MESHES) {
+        return NULL;
+    }
+    T_DECOR_MESH *mesh = &s_meshes[index];
+    if (mesh->Island == island && (mesh->State < 0 || mesh->Epoch == GpuObjMeshEpoch)) {
+        return mesh->State > 0 ? mesh : NULL;
+    }
+    mesh->Island = island;
+    mesh->State = -1;
+    mesh->Textured = FALSE;
+    mesh->Shaded = FALSE;
+    for (S32 a = 0; a < 3; a++) {
+        mesh->Min[a] = 1e30f;
+        mesh->Max[a] = -1e30f;
+    }
+    /* Lines and spheres are drawn facing the screen. */
+    if (body->NbLines != 0 || body->NbSpheres != 0 || body->NbPoints > MAX_NB_POINTS) {
+        return NULL;
+    }
+    T_BODY_HEADER *saved = lBody;
+    lBody = body;
+    s_nbBuild = 0;
+    s_buildFail = FALSE;
+    s_buildMesh = mesh;
+    BodyWalkPolys(body, MeshPolygon);
+    lBody = saved;
+    if (s_buildFail || s_nbBuild == 0) {
+        return NULL;
+    }
+    U32 first = 0;
+    T_GPUOBJ_VERTEX *dst = GpuObj_MeshAlloc(s_nbBuild, &first);
+    if (dst == NULL) {
+        /* The store is full: tried again once the island changes. */
+        return NULL;
+    }
+    memcpy(dst, s_build, s_nbBuild * sizeof(T_GPUOBJ_VERTEX));
+    mesh->First = first;
+    mesh->Count = s_nbBuild;
+    mesh->Epoch = GpuObjMeshEpoch;
+    mesh->State = 1;
+    return mesh;
+}
+
+S32 AffGpu_DecorDraw(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta, S32 box[4]) {
+    if (!GpuObj_Active() || AffGpuSuspended || TypeProj != TYPE_3D) {
+        return -1;
+    }
+    T_BODY_HEADER *body = (T_BODY_HEADER *)obj;
+    T_DECOR_MESH *mesh = DecorMesh(island, index, body);
+    if (mesh == NULL) {
+        return -1;
+    }
+    if (mesh->Shaded && PtrCLUTGouraud == NULL) {
+        return -1;
+    }
+
+    /* BodyDisplay's placement. */
+    LongRotatePoint(&MatriceWorld, x, y, z);
+    const float pos[3] = {(float)(X0 - CameraXr), (float)(Y0 - CameraYr), (float)(Z0 - CameraZr)};
+    TYPE_MAT m;
+    RotateMatrix(&m, &MatriceWorld, 0, beta, 0);
+    const float rows[12] = {m.F.M11, m.F.M12, m.F.M13, m.F.TX + pos[0], m.F.M21, m.F.M22, m.F.M23, m.F.TY + pos[1],
+                            m.F.M31, m.F.M32, m.F.M33, m.F.TZ + pos[2]};
+
+    /* The model's box on screen: none of it may reach the near plane, where the
+       software drops polygons the GPU would clip. */
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    for (S32 k = 0; k < 8; k++) {
+        const float c[3] = {(k & 1) ? mesh->Max[0] : mesh->Min[0], (k & 2) ? mesh->Max[1] : mesh->Min[1],
+                            (k & 4) ? mesh->Max[2] : mesh->Min[2]};
+        float v[3];
+        for (S32 r = 0; r < 3; r++) {
+            v[r] = rows[r * 4] * c[0] + rows[r * 4 + 1] * c[1] + rows[r * 4 + 2] * c[2] + rows[r * 4 + 3];
+        }
+        const float depth = -v[2];
+        if (depth <= (float)NearClip + 64.0f) {
+            return -1;
+        }
+        const float sx = (float)XCentre + v[0] * FRatioX / depth;
+        const float sy = (float)YCentre + v[1] * FRatioX * FRatioY / depth;
+        x0 = sx < x0 ? sx : x0;
+        x1 = sx > x1 ? sx : x1;
+        y0 = sy < y0 ? sy : y0;
+        y1 = sy > y1 ? sy : y1;
+    }
+    /* Rounded outward, and a pixel more for the rasterizer's own rounding. */
+    box[0] = (S32)floorf(x0) - 2;
+    box[1] = (S32)floorf(y0) - 2;
+    box[2] = (S32)ceilf(x1) + 2;
+    box[3] = (S32)ceilf(y1) + 2;
+    if (box[0] > ClipXMax || box[2] < ClipXMin || box[1] > ClipYMax || box[3] < ClipYMin) {
+        return 0;
+    }
+
+    T_GPUOBJ_DRAW *draw = GpuObj_BeginDraw();
+    if (draw == NULL) {
+        return -1;
+    }
+    draw->X0 = ClipXMin;
+    draw->Y0 = ClipYMin;
+    draw->X1 = ClipXMax;
+    draw->Y1 = ClipYMax;
+    draw->ZBuffer = Fill_Flag_ZBuffer;
+    draw->HasLogical = Fill_Flag_Fog;
+    if (Fill_Flag_Fog) {
+        memcpy(draw->Logical, Fill_Logical_Palette, sizeof(draw->Logical));
+    }
+    draw->Page = mesh->Textured ? ObjPtrMap : NULL;
+    draw->Clut = mesh->Shaded ? PtrCLUTGouraud : NULL;
+    draw->Mesh = TRUE;
+    draw->First = mesh->First;
+    draw->Count = mesh->Count;
+    memcpy(draw->MeshRows, rows, sizeof(rows));
+    UpdateSceneLight();
+    s_light[0] = (float)CameraXLight;
+    s_light[1] = (float)CameraYLight;
+    s_light[2] = (float)CameraZLight;
+    const float lightLen =
+        (float)sqrt((double)(s_light[0] * s_light[0] + s_light[1] * s_light[1] + s_light[2] * s_light[2]));
+    draw->MeshLight[0] = s_light[0];
+    draw->MeshLight[1] = s_light[1];
+    draw->MeshLight[2] = s_light[2];
+    draw->MeshLight[3] = lightLen * FactorLight / 256.0f;
+    GpuObj_EndDraw();
+    return 1;
 }
 
 // =============================================================================

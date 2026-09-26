@@ -62,6 +62,17 @@ void AffGpu_AddWorldLight(S32 x, S32 y, S32 z, float radius, float r, float g, f
 /** The scene's focus (GpuObjFocus): a world point, placed as the lights are. */
 void AffGpu_SetFocus(S32 x, S32 y, S32 z);
 
+/** TRUE while the body display draws for the software's own use (the depth
+ *  a decor left to the GPU is asked for later): nothing is captured. */
+extern S32 AffGpuSuspended;
+
+/** A decor body of the scenery placed as BodyDisplay(x, y, z, 0, beta, 0, obj)
+ *  would place it, drawn by the GPU from the model it keeps (index the body's
+ *  number in the island's objects). 1: drawn, box the screen box it may cover;
+ *  0: out of the clip window, nothing to draw; -1: not for the GPU to draw
+ *  alone, BodyDisplay is still needed. */
+S32 AffGpu_DecorDraw(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta, S32 box[4]);
+
 #ifdef __cplusplus
 }
 #endif

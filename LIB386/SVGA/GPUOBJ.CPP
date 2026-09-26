@@ -116,6 +116,9 @@ S32 GpuObjHeightMapsDirtyFrom = -1;
 S32 GpuObjHeightMapsDirtyTo = -1;
 U32 GpuObjLandRecords[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS];
 S32 GpuObjLandCount[GPUOBJ_MAX_HEIGHTMAPS];
+T_GPUOBJ_VERTEX *GpuObjMeshVerts = NULL;
+U32 GpuObjMeshCount = 0;
+U32 GpuObjMeshEpoch = 0;
 
 typedef struct {
     S32 Island, CubeX, CubeZ;
@@ -294,6 +297,14 @@ static void Compact(void) {
             continue;
         }
         T_GPUOBJ_DRAW *draw = &s_draws[i];
+        if (draw->Mesh) {
+            /* Its vertices are the mesh store's, which stays put. */
+            if (keptDraws != i) {
+                s_draws[keptDraws] = *draw;
+            }
+            keptDraws++;
+            continue;
+        }
         if (draw->First != keptVerts && draw->Count > 0) {
             memmove(GpuObjVerts + keptVerts, GpuObjVerts + draw->First, draw->Count * sizeof(T_GPUOBJ_VERTEX));
         }
@@ -379,6 +390,7 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     draw->Procedural = FALSE;
     draw->LandSlot = 0;
     draw->LandSmooth = FALSE;
+    draw->Mesh = FALSE;
     if (GpuObjCapValid) {
         for (S32 k = 0; k < 9; k++) {
             draw->CapMat[k] = GpuObjCapMat[k];
@@ -412,6 +424,32 @@ T_GPUOBJ_VERTEX *GpuObj_AllocVerts(U32 n) {
     s_nbVerts += n;
     s_draws[s_nbDraws - 1].Count += n;
     return v;
+}
+
+T_GPUOBJ_VERTEX *GpuObj_MeshAlloc(U32 n, U32 *first) {
+    if (GpuObjMeshVerts == NULL) {
+        GpuObjMeshVerts = (T_GPUOBJ_VERTEX *)malloc(GPUOBJ_MESH_MAX_VERTS * sizeof(T_GPUOBJ_VERTEX));
+        if (GpuObjMeshVerts == NULL) {
+            return NULL;
+        }
+    }
+    if (GpuObjMeshCount + n > GPUOBJ_MESH_MAX_VERTS) {
+        return NULL;
+    }
+    *first = GpuObjMeshCount;
+    GpuObjMeshCount += n;
+    return GpuObjMeshVerts + *first;
+}
+
+void GpuObj_MeshReset(void) {
+    /* A draw still naming the old meshes must not outlive them. */
+    for (U32 i = 0; i < s_nbDraws; i++) {
+        if (s_draws[i].Mesh) {
+            s_draws[i].Count = 0;
+        }
+    }
+    GpuObjMeshCount = 0;
+    GpuObjMeshEpoch++;
 }
 
 U32 *GpuObj_AllocIndices(U32 n) {

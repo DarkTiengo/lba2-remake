@@ -1,6 +1,8 @@
 #include "DEFINES.H"
 #include "../C_EXTERN.H" /* Island */
 #include <SVGA/GPUOBJ.H>
+#include <OBJECT/AFF_GPU.H>
+#include "TERRAIN_GPU.H"
 
 /*══════════════════════════════════════════════════════════════════════════*
 		      █▀▀▀▄ █▀▀▀▀ █▀▀▀▀ █▀▀▀█ █▀▀▀█ ██▀▀▀
@@ -298,6 +300,132 @@ static S32 IsLampModel(S32 island, S32 body) {
     return FALSE;
 }
 
+/*──────────────────────────────────────────────────────────────────────────*/
+/* The decor the GPU draws alone. Its bodies are kept on the GPU in model space
+   and placed there; the software only needs their depth, for DrawRecover, and
+   draws it the first time it is asked for, with the camera the scenery pass
+   had: the depth buffer keeps the nearest of what is written into it, so the
+   order does not change what it ends up holding. */
+S32 DecorsGpuHorizon = FALSE;
+
+typedef struct {
+    S32 Index;
+    S32 X, Y, Z, Beta;
+    S32 CamXr, CamYr, CamZr;
+    S32 Box[4];
+    S32 Done;
+} T_DEFER_DECOR;
+#define DEFER_MAX_DECORS 4096
+static T_DEFER_DECOR s_deferDecors[DEFER_MAX_DECORS];
+static S32 s_nbDeferDecors = 0;
+static TYPE_MAT s_deferMat;
+static S32 s_deferProj[6]; ///< XCentre, YCentre, NearClip, LFactorX, LFactorY, TypeProj
+static float s_deferRatio[2];
+
+void DecorsGpu_Reset(void) {
+    s_nbDeferDecors = 0;
+}
+
+S32 DecorsGpu_Pending(void) {
+    return s_nbDeferDecors > 0;
+}
+
+void DecorsGpu_EnsureDepth(S32 x0, S32 y0, S32 x1, S32 y1) {
+    if (s_nbDeferDecors == 0) {
+        return;
+    }
+    const TYPE_MAT mat = MatriceWorld;
+    const S32 cam[3] = {CameraXr, CameraYr, CameraZr};
+    const S32 proj[6] = {XCentre, YCentre, NearClip, LFactorX, LFactorY, TypeProj};
+    const float ratio[2] = {FRatioX, FRatioY};
+    const S32 clip[4] = {ClipXMin, ClipYMin, ClipXMax, ClipYMax};
+    U8 *const map = ObjPtrMap;
+    if (proj[5] != s_deferProj[5]) {
+        /* Another projection is in use (a menu): wait for the scene's. */
+        return;
+    }
+    MatriceWorld = s_deferMat;
+    XCentre = s_deferProj[0];
+    YCentre = s_deferProj[1];
+    NearClip = s_deferProj[2];
+    LFactorX = s_deferProj[3];
+    LFactorY = s_deferProj[4];
+    FRatioX = s_deferRatio[0];
+    FRatioY = s_deferRatio[1];
+    ObjPtrMap = ObjTexture;
+    AffGpuSuspended = TRUE;
+    for (S32 n = 0; n < s_nbDeferDecors; n++) {
+        T_DEFER_DECOR *d = &s_deferDecors[n];
+        if (d->Done || d->Box[0] > x1 || d->Box[2] < x0 || d->Box[1] > y1 || d->Box[3] < y0) {
+            continue;
+        }
+        d->Done = TRUE;
+        CameraXr = d->CamXr;
+        CameraYr = d->CamYr;
+        CameraZr = d->CamZr;
+        UnsetClip();
+        BodyDisplay(d->X, d->Y, d->Z, 0, d->Beta, 0, HQR_Get(HQR_Isle_Obj, d->Index));
+    }
+    AffGpuSuspended = FALSE;
+    ObjPtrMap = map;
+    MatriceWorld = mat;
+    CameraXr = cam[0];
+    CameraYr = cam[1];
+    CameraZr = cam[2];
+    XCentre = proj[0];
+    YCentre = proj[1];
+    NearClip = proj[2];
+    LFactorX = proj[3];
+    LFactorY = proj[4];
+    FRatioX = ratio[0];
+    FRatioY = ratio[1];
+    ClipXMin = clip[0];
+    ClipYMin = clip[1];
+    ClipXMax = clip[2];
+    ClipYMax = clip[3];
+}
+
+/* Leaves the decor to the GPU when it can draw it alone: TRUE when nothing is
+   left for BodyDisplay to do. */
+static S32 DecorToGpu(T_DECORS *ptrobj) {
+    if (!(TerrainGpuSkipFill && DecorsGpuHorizon) || GpuObjLampModel || s_nbDeferDecors >= DEFER_MAX_DECORS) {
+        return FALSE;
+    }
+    const S32 index = (S32)(ptrobj->Body & 0xFFFF);
+    const S32 beta = ptrobj->Beta & 0xFFFF;
+    S32 box[4];
+    const S32 drawn = AffGpu_DecorDraw(Island, index, HQR_Get(HQR_Isle_Obj, index), ptrobj->Xworld,
+                                       ptrobj->Yworld, ptrobj->Zworld, beta, box);
+    if (drawn < 0) {
+        return FALSE;
+    }
+    if (drawn > 0) {
+        if (s_nbDeferDecors == 0) {
+            s_deferMat = MatriceWorld;
+            s_deferProj[0] = XCentre;
+            s_deferProj[1] = YCentre;
+            s_deferProj[2] = NearClip;
+            s_deferProj[3] = LFactorX;
+            s_deferProj[4] = LFactorY;
+            s_deferProj[5] = TypeProj;
+            s_deferRatio[0] = FRatioX;
+            s_deferRatio[1] = FRatioY;
+        }
+        T_DEFER_DECOR *d = &s_deferDecors[s_nbDeferDecors++];
+        d->Index = index;
+        d->X = ptrobj->Xworld;
+        d->Y = ptrobj->Yworld;
+        d->Z = ptrobj->Zworld;
+        d->Beta = beta;
+        d->CamXr = CameraXr;
+        d->CamYr = CameraYr;
+        d->CamZr = CameraZr;
+        memcpy(d->Box, box, sizeof(d->Box));
+        d->Done = FALSE;
+    }
+    return TRUE;
+}
+
 void AffichageObjetDecorsZBuf(void) {
     S32 i;
     T_LIST_TRI *ptrtri;
@@ -406,6 +534,9 @@ void AffichageObjetDecorsZBuf(void) {
         /* Tell the GPU capture when this decor is a lamp: its bright glass glows. */
         GpuObjLampModel = IsLampModel(Island, (S32)(ptrobj->Body & 0xFFFF));
         GpuObjLampPalette = PtrPal;
+        if (DecorToGpu(ptrobj)) {
+            continue;
+        }
         if (BodyDisplay(ptrobj->Xworld,
                         ptrobj->Yworld,
                         ptrobj->Zworld,

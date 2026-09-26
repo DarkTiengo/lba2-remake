@@ -1507,6 +1507,39 @@ S32 EntityCreation(T_BODY_HEADER *body) {
     return 1;
 }
 
+void BodyWalkPolys(T_BODY_HEADER *body, void (*fn)(U32 type, void *poly)) {
+    PtrTextures = (U32 *)((U8 *)body + body->OffTextures);
+    U8 *current = (U8 *)body + body->OffPolys;
+    U8 *const end = (U8 *)body + body->OffLines;
+    while (current < end) {
+        T_POLY_HEADER *header = (T_POLY_HEADER *)current;
+        U32 mask = 0;
+        memcpy(&mask, header, sizeof(U32));
+        U8 typePoly = header->TypePoly & 0xFF;
+        current += sizeof(T_POLY_HEADER);
+
+        const S32 quad = (mask & MASK_QUADRILATERE) != 0;
+        const S32 env = (mask & MASK_ENVIRONMENT) != 0;
+        const S32 kind = env ? 2 : (typePoly <= POLY_DITHER_TABLE ? 0 : 1);
+        static const U32 sizes[2][3] = {
+            {sizeof(STRUC_POLY3_LIGHT), sizeof(STRUC_POLY3_TEXTURE), sizeof(STRUC_POLY3_ENV)},
+            {sizeof(STRUC_POLY4_LIGHT), sizeof(STRUC_POLY4_TEXTURE), sizeof(STRUC_POLY4_ENV)}};
+        /* The display loop's type: the sort list's top byte. */
+        const U32 type = (((U32)header->TypePoly << 2) | (env ? 2u : 0u) | (quad ? 1u : 0u)) & 0xFF;
+        for (int i = 0; i < header->NbPoly; i++) {
+            if (kind == 1) {
+                const U16 handle = quad ? ((STRUC_POLY4_TEXTURE *)current)->HandleText
+                                        : ((STRUC_POLY3_TEXTURE *)current)->HandleText;
+                const U32 textureInfo = PtrTextures[handle];
+                RepMask = textureInfo >> 16;
+                PtrMap = ObjPtrMap + (textureInfo & 0xFFFF);
+            }
+            fn(type, current);
+            current += sizes[quad][kind];
+        }
+    }
+}
+
 S32 ObjectDisplay(T_OBJ_3D *obj) {
     LIB386_TRACE_CPP("ObjectDisplay", "1", "obj=%p", (void *)obj);
     // Must we change the texture pointer ?

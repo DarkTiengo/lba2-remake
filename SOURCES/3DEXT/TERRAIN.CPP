@@ -922,7 +922,9 @@ void DrawHorizon2ZBuf() {
                     }
                     TerrainGpu_SetWaterCube(x, y);
                     if (LoadCube(x, y)) {
+                        DecorsGpuHorizon = TRUE;
                         AffichageTerrainZBuf();
+                        DecorsGpuHorizon = FALSE;
                         flag = TRUE;
                     } else
                         DrawOneSea(Y_SEA);
@@ -1068,6 +1070,7 @@ static size_t s_depthScratchSize = 0;
 
 static void ResetDeferredDepth(void) {
     s_nbDeferCubes = 0;
+    DecorsGpu_Reset();
 }
 
 /* FastGrid's placement of grid point (ix, iz), the same arithmetic in the same
@@ -1274,7 +1277,7 @@ static void DeferCube(void) {
 }
 
 void TerrainGpu_EnsureDepth(S32 x0, S32 y0, S32 x1, S32 y1) {
-    if (s_nbDeferCubes == 0 OR Log == NULL) {
+    if ((s_nbDeferCubes == 0 AND !DecorsGpu_Pending()) OR Log == NULL) {
         return;
     }
     size_t frame = (size_t)ModeDesiredX * (size_t)ModeDesiredY;
@@ -1293,6 +1296,12 @@ void TerrainGpu_EnsureDepth(S32 x0, S32 y0, S32 x1, S32 y1) {
     void *log = Log;
     Log = s_depthScratch;
     Switch_Fillers(FILL_POLY_FOG_ZBUFFER);
+    ClipXMin = s_deferClip[0];
+    ClipYMin = s_deferClip[1];
+    ClipXMax = s_deferClip[2];
+    ClipYMax = s_deferClip[3];
+
+    DecorsGpu_EnsureDepth(x0, y0, x1, y1);
     ClipXMin = s_deferClip[0];
     ClipYMin = s_deferClip[1];
     ClipXMax = s_deferClip[2];

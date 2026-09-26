@@ -83,6 +83,7 @@ static U32 s_paramsSize = 0;
 static SDL_GPUGraphicsPipeline *s_pipeline = NULL;
 static SDL_GPUGraphicsPipeline *s_pipelineTerrain = NULL; ///< s_pipeline with GPUTERRAIN.vert and no vertex input
 static SDL_GPUGraphicsPipeline *s_pipelinePainter = NULL; ///< depth write, no depth test
+static SDL_GPUGraphicsPipeline *s_pipelineMesh = NULL;    ///< s_pipeline culling back faces: a whole model's polygons
 static SDL_GPUGraphicsPipeline *s_pipelineGlass = NULL;   ///< blended over the scene, depth test without write
 static SDL_GPUSampler *s_nearest = NULL;
 static SDL_GPUSampler *s_linear = NULL;
@@ -97,6 +98,9 @@ static SDL_GPUTexture *s_objLight = NULL; ///< dynamic light reaching each scene
 static SDL_GPUBuffer *s_heightBuffer = NULL; ///< GpuObjHeightMaps, for GPUTERRAIN.vert
 static bool s_heightsSent = false;           ///< the buffer holds every slot written so far
 static SDL_GPUBuffer *s_landBuffer = NULL;   ///< GpuObjLandRecords, sent with the height maps
+static SDL_GPUBuffer *s_meshBuffer = NULL;   ///< GpuObjMeshVerts: the decor's models
+static U32 s_meshSent = 0;                   ///< mesh vertices the buffer holds
+static U32 s_meshSentEpoch = 0;
 
 static SDL_GPUBuffer *s_bvhNodes = NULL;  ///< ray-tracing hierarchy (GPUBVH.H)
 static SDL_GPUBuffer *s_bvhTris = NULL;
@@ -161,8 +165,9 @@ static U32 s_shadowCapacity = 0;
 static SDL_GPUTransferBuffer *s_transfer = NULL;
 static U32 s_transferCapacity = 0;
 
-static float *s_tagScratch = NULL;
-static float *s_tagUpload = NULL;
+/* The tags go straight from the scan into the buffer they are uploaded from,
+   laid out as the frame is (GpuObj_BuildPresent writes each pixel of its box). */
+static SDL_GPUTransferBuffer *s_tagTransfer = NULL;
 static S32 s_tagBox[4] = {0, 0, 0, 0}; ///< region of s_tags that may hold ids
 
 #define LUT_ROWS 512
@@ -248,10 +253,10 @@ static void ReleaseFrameResources(void) {
     ReleaseTexture(&s_depth);
     ReleaseTexture(&s_tags);
     ReleaseTexture(&s_frameIndex);
-    free(s_tagScratch);
-    s_tagScratch = NULL;
-    free(s_tagUpload);
-    s_tagUpload = NULL;
+    if (s_tagTransfer) {
+        SDL_ReleaseGPUTransferBuffer(s_device, s_tagTransfer);
+        s_tagTransfer = NULL;
+    }
     memset(s_tagBox, 0, sizeof(s_tagBox));
     s_frameW = 0;
     s_frameH = 0;
@@ -520,10 +525,13 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     s_depth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, s_depthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, tw, th, 1);
     s_tags = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER, w, h, 1);
     s_frameIndex = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER, w, h, 1);
-    s_tagScratch = (float *)malloc((size_t)w * h * sizeof(float));
-    s_tagUpload = (float *)malloc((size_t)w * h * sizeof(float));
+    SDL_GPUTransferBufferCreateInfo tagInfo;
+    SDL_zero(tagInfo);
+    tagInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    tagInfo.size = w * h * (Uint32)sizeof(float);
+    s_tagTransfer = SDL_CreateGPUTransferBuffer(s_device, &tagInfo);
     if (!s_objColor || !s_objId || !s_objLight || !s_objShadow || !s_objHeight || !s_depth || !s_tags ||
-        !s_frameIndex || !s_tagScratch || !s_tagUpload) {
+        !s_frameIndex || !s_tagTransfer) {
         ReleaseFrameResources();
         return false;
     }
@@ -728,7 +736,13 @@ static bool CreatePipeline(void) {
     bvhInfo.size = sizeof(GpuObjLandRecords);
     s_landBuffer = SDL_CreateGPUBuffer(s_device, &bvhInfo);
     s_heightsSent = false;
-    if (!s_heightBuffer || !s_landBuffer) {
+    SDL_GPUBufferCreateInfo meshInfo;
+    SDL_zero(meshInfo);
+    meshInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
+    meshInfo.size = GPUOBJ_MESH_MAX_VERTS * (Uint32)sizeof(T_GPUOBJ_VERTEX);
+    s_meshBuffer = SDL_CreateGPUBuffer(s_device, &meshInfo);
+    s_meshSent = 0;
+    if (!s_heightBuffer || !s_landBuffer || !s_meshBuffer) {
         Log_Warn("[GPU] Unable to create the height map buffer: %s", SDL_GetError());
         return false;
     }
@@ -798,6 +812,15 @@ static bool CreatePipeline(void) {
 
     s_pipeline = SDL_CreateGPUGraphicsPipeline(s_device, &info);
     {
+        /* A kept model is drawn whole: the GPU culls its back faces, which the
+           engine does for a captured body (TestVisible keeps the polygons
+           turning counter-clockwise on the screen). */
+        SDL_GPUGraphicsPipelineCreateInfo mesh = info;
+        mesh.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
+        mesh.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+        s_pipelineMesh = SDL_CreateGPUGraphicsPipeline(s_device, &mesh);
+    }
+    {
         /* The smooth terrain: the same targets and depth, its vertices made in
            the shader from storage buffers. */
         SDL_GPUGraphicsPipelineCreateInfo terrain = info;
@@ -861,7 +884,7 @@ static bool CreatePipeline(void) {
     targets[3].blend_state.alpha_blend_op = SDL_GPU_BLENDOP_MAX;
     targets[4].blend_state = keep;
     s_pipelineShadow = SDL_CreateGPUGraphicsPipeline(s_device, &info);
-    if (s_pipeline == NULL || s_pipelineTerrain == NULL || s_pipelinePainter == NULL || s_pipelineGlass == NULL ||
+    if (s_pipeline == NULL || s_pipelineTerrain == NULL || s_pipelinePainter == NULL || s_pipelineMesh == NULL || s_pipelineGlass == NULL ||
         s_pipelineShadow == NULL) {
         Log_Warn("[GPU] Unable to create object pipeline: %s", SDL_GetError());
         return false;
@@ -931,6 +954,11 @@ static void ReleasePipeline(void) {
         SDL_ReleaseGPUBuffer(s_device, s_landBuffer);
         s_landBuffer = NULL;
     }
+    if (s_meshBuffer) {
+        SDL_ReleaseGPUBuffer(s_device, s_meshBuffer);
+        s_meshBuffer = NULL;
+    }
+    s_meshSent = 0;
     if (s_heightBuffer) {
         SDL_ReleaseGPUBuffer(s_device, s_heightBuffer);
         s_heightBuffer = NULL;
@@ -988,6 +1016,10 @@ static void ReleasePipeline(void) {
     if (s_pipelinePainter) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelinePainter);
         s_pipelinePainter = NULL;
+    }
+    if (s_pipelineMesh) {
+        SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelineMesh);
+        s_pipelineMesh = NULL;
     }
     if (s_objVert) {
         SDL_ReleaseGPUShader(s_device, s_objVert);
@@ -1096,6 +1128,22 @@ static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
         }
         if (draws[d]->Procedural == GPUOBJ_PROC_LAND) {
             n = LandRayTris(draws[d], tris, n);
+            continue;
+        }
+        if (draws[d]->Mesh) {
+            /* A kept model: its triangles placed by the draw's rows. */
+            const T_GPUOBJ_VERTEX *mv = GpuObjMeshVerts + draws[d]->First;
+            const float *m = draws[d]->MeshRows;
+            for (U32 i = 0; i + 2 < draws[d]->Count && n < GPUBVH_MAX_TRIS; i += 3) {
+                float *o = tris + n * 9;
+                for (int k = 0; k < 3; k++) {
+                    const float *src = mv[i + k].vpos;
+                    for (int r = 0; r < 3; r++) {
+                        o[k * 3 + r] = m[r * 4] * src[0] + m[r * 4 + 1] * src[1] + m[r * 4 + 2] * src[2] + m[r * 4 + 3];
+                    }
+                }
+                n++;
+            }
             continue;
         }
         const T_GPUOBJ_VERTEX *v = GpuObjVerts + draws[d]->First;
@@ -1324,7 +1372,7 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
         }
         kept[n] = draw;
         uniforms[n] = u;
-        *vertexBytes += draw->Count * sizeof(T_GPUOBJ_VERTEX);
+        *vertexBytes += draw->Mesh ? 0 : draw->Count * sizeof(T_GPUOBJ_VERTEX);
         n++;
     }
     return n;
@@ -1690,7 +1738,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
            drew it: a run of z-buffered bodies (drawn front to back, depth
            decides) shares a slice, any other body lands in front of everything
            before it; all of them in the front half, over the scene. */
-        float sliceUniform[52] = {0.0f, 0.0f, windTime, wind};
+        float sliceUniform[56] = {0.0f, 0.0f, windTime, wind};
         /* A draw kept from an earlier frame is placed again here, in the vertex
            shader, through the difference between the camera that captured it and
            the one this frame draws with: rows of the rotation with the
@@ -1742,6 +1790,21 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             sliceUniform[50] = draw->LandPhase[0];
             sliceUniform[51] = draw->LandPhase[1];
         }
+        if (draw->Mesh) {
+            /* A model placed by its own rows, then moved as a kept draw is. */
+            float rows[12];
+            const float *x = sliceUniform + 4;
+            for (S32 r = 0; r < 3; r++) {
+                for (S32 c = 0; c < 4; c++) {
+                    const float *m = draw->MeshRows;
+                    rows[r * 4 + c] = replace ? x[r * 4] * m[c] + x[r * 4 + 1] * m[4 + c] + x[r * 4 + 2] * m[8 + c] +
+                                                    (c == 3 ? x[r * 4 + 3] : 0.0f)
+                                              : m[r * 4 + c];
+                }
+            }
+            memcpy(sliceUniform + 4, rows, sizeof(rows));
+            memcpy(sliceUniform + 52, draw->MeshLight, sizeof(draw->MeshLight));
+        }
         if (draw->HasCapCamera) {
             for (S32 r = 0; r < 3; r++) {
                 for (S32 c = 0; c < 3; c++) {
@@ -1775,13 +1838,19 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         scissor.h = (int)((S64)(y1 + 1) * s_targetH / s_frameH) - scissor.y;
         if (scissor.w > 0 && scissor.h > 0) {
             SDL_GPUGraphicsPipeline *wanted =
-                draw->Procedural ? s_pipelineTerrain : (draw->Painter ? s_pipelinePainter : s_pipeline);
+                draw->Procedural ? s_pipelineTerrain
+                                 : (draw->Mesh ? s_pipelineMesh : (draw->Painter ? s_pipelinePainter : s_pipeline));
             if (wanted != bound) {
                 bound = wanted;
                 SDL_BindGPUGraphicsPipeline(pass, bound);
                 if (draw->Procedural) {
                     SDL_GPUBuffer *storage[3] = {s_vertexBuffer, s_heightBuffer, s_landBuffer};
                     SDL_BindGPUVertexStorageBuffers(pass, 0, storage, 3);
+                } else if (draw->Mesh) {
+                    SDL_GPUBufferBinding mbind;
+                    mbind.buffer = s_meshBuffer;
+                    mbind.offset = 0;
+                    SDL_BindGPUVertexBuffers(pass, 0, &mbind, 1);
                 } else {
                     SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
                 }
@@ -1795,6 +1864,8 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
                 if (draw->Procedural == GPUOBJ_PROC_LAND) {
                     const S32 records = GpuObjLandCount[draw->LandSlot];
                     grown = records > 0 ? (U32)records * (draw->LandSmooth ? GPUOBJ_PROC_TERRAIN_VERTS : 3u) : 0u;
+                } else if (draw->Procedural == GPUOBJ_PROC_SEA) {
+                    grown = draw->Count / 4 * GPUOBJ_PROC_SEA_VERTS;
                 } else if (draw->Procedural == GPUOBJ_PROC_GRASS) {
                     grown = draw->Count * GPUOBJ_PROC_GRASS_VERTS;
                 } else {
@@ -1932,7 +2003,12 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     Uint64 t0 = SDL_GetPerformanceCounter();
     const T_GPUOBJ_DRAW *const *live = NULL;
     S32 box[4];
-    U32 liveCount = GpuObj_BuildPresent(s_tagScratch, &live, box);
+    /* A fresh buffer each present (the GPU may still be reading the last one). */
+    float *tagOut = (float *)SDL_MapGPUTransferBuffer(s_device, s_tagTransfer, true);
+    if (tagOut == NULL) {
+        return false;
+    }
+    U32 liveCount = GpuObj_BuildPresent(tagOut, &live, box);
     Uint64 t1 = SDL_GetPerformanceCounter();
 
     static const T_GPUOBJ_DRAW *kept[8192];
@@ -1980,6 +2056,7 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     const bool lastEmpty = s_tagBox[2] <= s_tagBox[0] || s_tagBox[3] <= s_tagBox[1];
     /* A frame taken as indices has no other way to the screen. */
     if (count == 0 && !s_upscale && lastEmpty && s_tagsCleared && !GpuStorm_Active() && !s_frameIndexed) {
+        SDL_UnmapGPUTransferBuffer(s_device, s_tagTransfer);
         return false; /* no rays either: count is 0 */
     }
 
@@ -2003,8 +2080,9 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     s_tagsCleared = true;
     U32 upW = (U32)(up[2] - up[0]);
     U32 upH = (U32)(up[3] - up[1]);
+    /* The scan wrote the box; the rest of the region goes up cleared. */
     for (S32 y = up[1]; y < up[3]; y++) {
-        float *dst = s_tagUpload + (size_t)(y - up[1]) * upW;
+        float *dst = tagOut + (size_t)y * w + up[0];
         if (boxEmpty || y < box[1] || y >= box[3]) {
             memset(dst, 0, upW * sizeof(float));
             continue;
@@ -2012,11 +2090,10 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         U32 left = (U32)(box[0] - up[0]);
         U32 inside = (U32)(box[2] - box[0]);
         memset(dst, 0, left * sizeof(float));
-        memcpy(dst + left, s_tagScratch + (size_t)y * w + box[0], inside * sizeof(float));
         memset(dst + left + inside, 0, (upW - left - inside) * sizeof(float));
     }
+    SDL_UnmapGPUTransferBuffer(s_device, s_tagTransfer);
     memcpy(s_tagBox, box, sizeof(s_tagBox));
-    U32 tagBytes = upW * upH * sizeof(float);
     U32 need = (U32)SDL_arraysize(s_pagePtrs) * 65536;
     if (s_frameIndexed && w * h > need) {
         need = w * h;
@@ -2026,8 +2103,6 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     if (atlasUpload && atlasBytes > need)
         need = atlasBytes;
     const U32 shadowBytes = shadowVerts * (U32)sizeof(T_GPUOBJ_VERTEX);
-    if (tagBytes > need)
-        need = tagBytes;
     /* The hierarchy's size is known only once it is built: room for the largest. */
     if (s_rayScene) {
         const U32 bvhMax = SDL_max((U32)(GPUBVH_MAX_NODES * GPUBVH_NODE_FLOATS * sizeof(float)),
@@ -2116,6 +2191,20 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         GpuObjHeightMapsDirtyFrom = -1;
         GpuObjHeightMapsDirtyTo = -1;
     }
+    if (count > 0 && s_meshBuffer != NULL) {
+        /* The models written since the last present, all of them after a reset. */
+        if (s_meshSentEpoch != GpuObjMeshEpoch || s_meshSent > GpuObjMeshCount) {
+            s_meshSent = 0;
+            s_meshSentEpoch = GpuObjMeshEpoch;
+        }
+        const U32 vsize = (U32)sizeof(T_GPUOBJ_VERTEX);
+        const U32 chunk = s_transferCapacity / vsize;
+        while (s_meshSent < GpuObjMeshCount && chunk > 0) {
+            const U32 n = SDL_min(chunk, GpuObjMeshCount - s_meshSent);
+            UploadBuffer2(copy, s_meshBuffer, GpuObjMeshVerts + s_meshSent, s_meshSent * vsize, n * vsize);
+            s_meshSent += n;
+        }
+    }
     if (bvhThread != NULL) {
         SDL_WaitThread(bvhThread, NULL);
     }
@@ -2125,7 +2214,21 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         UploadBuffer(copy, s_bvhTris, GpuBvhTris, GpuBvhNbTris * GPUBVH_TRI_FLOATS * (U32)sizeof(float));
     }
     if (upW > 0 && upH > 0) {
-        UploadTexture(copy, s_tags, 0, (U32)up[0], (U32)up[1], upW, upH, s_tagUpload, tagBytes);
+        SDL_GPUTextureTransferInfo source;
+        SDL_zero(source);
+        source.transfer_buffer = s_tagTransfer;
+        source.offset = ((U32)up[1] * w + (U32)up[0]) * (U32)sizeof(float);
+        source.pixels_per_row = w;
+        source.rows_per_layer = upH;
+        SDL_GPUTextureRegion region;
+        SDL_zero(region);
+        region.texture = s_tags;
+        region.x = (U32)up[0];
+        region.y = (U32)up[1];
+        region.w = upW;
+        region.h = upH;
+        region.d = 1;
+        SDL_UploadToGPUTexture(copy, &source, &region, false);
     }
     SDL_EndGPUCopyPass(copy);
 

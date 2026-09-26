@@ -272,7 +272,52 @@ void Land() {
     v_slice = vec2(sliceNear, sliceSize);
 }
 
+/* The sea: a record a tile of the classic sea, its four corners as
+   TERRAIN_GPU.CPP's WaterVertex places them, cut into 8 x 8 cells in its order,
+   each point raised by the swell as GPUOBJ.vert raises a captured one. */
+const int SEA_SUB = 8;
+const ivec2 kSeaStep[6] = ivec2[6](ivec2(0, 0), ivec2(0, 1), ivec2(1, 1), ivec2(0, 0), ivec2(1, 1), ivec2(1, 0));
+
+void Sea() {
+    int per = SEA_SUB * SEA_SUB * 6;
+    int first = int(records.x + 0.5) + (gl_VertexIndex / per) * 4;
+    int inside = gl_VertexIndex % per;
+    int cell = inside / 6;
+    ivec2 step = kSeaStep[inside % 6];
+    float u = float(cell % SEA_SUB + step.x) / float(SEA_SUB);
+    float t = float(cell / SEA_SUB + step.y) / float(SEA_SUB);
+    /* PlanePoint's weights of corners 0 (0, 0), 1 (0, 1), 2 (1, 1), 3 (1, 0). */
+    vec4 w = vec4((1.0 - u) * (1.0 - t), (1.0 - u) * t, u * t, u * (1.0 - t));
+    vec3 p = w.x * Field(first, 3).xyz + w.y * Field(first + 1, 3).xyz + w.z * Field(first + 2, 3).xyz +
+             w.w * Field(first + 3, 3).xyz;
+    vec4 uv = w.x * Field(first, 5) + w.y * Field(first + 1, 5) + w.z * Field(first + 2, 5) + w.w * Field(first + 3, 5);
+    vec4 normal = Field(first, 1);
+    if (waves.z > 0.5) {
+        vec3 n;
+        float h = Swell(uv.zw * 512.0, n);
+        vec3 up = vec3(capRow0.y, capRow1.y, capRow2.y);
+        p += h * up;
+        normal = vec4(World(n), h);
+    }
+    vec3 n = normal.xyz;
+    if (Reframe(p, n)) {
+        normal.xyz = n;
+    }
+    vec4 clip = Place(p);
+    gl_Position = vec4(clip.xy, sliceNear * clip.w + clip.z * sliceSize, clip.w);
+    v_normal = normal;
+    v_light = Field(first, 2);
+    v_vpos = vec4(p, Field(first, 3).w);
+    v_mat = Field(first, 4);
+    v_uv = uv;
+    v_slice = vec2(sliceNear, sliceSize);
+}
+
 void main() {
+    if (records.y > 3.5) {
+        Sea();
+        return;
+    }
     if (records.y > 2.5) {
         Land();
         return;

@@ -69,6 +69,9 @@ extern U32 *GpuObjIndices;
 #define GPUOBJ_PROC_TERRAIN 1 ///< three vertices, a land triangle's corners: sixteen triangles on the curve
 #define GPUOBJ_PROC_GRASS 2   ///< one vertex, a tuft's root: three blades
 #define GPUOBJ_PROC_LAND 3    ///< one header vertex; the triangles are the cube slot's land records
+#define GPUOBJ_PROC_SEA 4     ///< four vertices, a sea tile's corners: an 8 x 8 mesh the swell raises
+#define GPUOBJ_PROC_SEA_SUB 8
+#define GPUOBJ_PROC_SEA_VERTS (GPUOBJ_PROC_SEA_SUB * GPUOBJ_PROC_SEA_SUB * 6) ///< drawn a record of four
 #define GPUOBJ_PROC_TERRAIN_VERTS 48 ///< drawn a record of three
 #define GPUOBJ_PROC_GRASS_VERTS 9    ///< drawn a record of one
 extern float GpuObjHeightMaps[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE];
@@ -94,6 +97,22 @@ extern S32 GpuObjLandCount[GPUOBJ_MAX_HEIGHTMAPS]; ///< records in each slot, -1
 /** The slot's data (height map, land records) changed: send it again. */
 void GpuObj_CubeSlotChanged(S32 slot);
 
+/* Bodies kept whole on the GPU, in their own model space: the scenery's decor
+   is a few dozen models placed hundreds of times, so each model is sent once
+   (GpuObj_MeshAlloc) and every placement is a draw of the same vertices
+   through its own rotation and origin (T_GPUOBJ_DRAW Mesh, MeshRows). */
+#define GPUOBJ_MESH_MAX_VERTS (1u << 17)
+extern struct T_GPUOBJ_VERTEX_S *GpuObjMeshVerts;
+extern U32 GpuObjMeshCount; ///< vertices written in GpuObjMeshVerts
+extern U32 GpuObjMeshEpoch; ///< bumped when the meshes are dropped: everything is sent again
+
+/** Room for n more mesh vertices, NULL when the store is full. *first gets
+ *  the index of the first. */
+struct T_GPUOBJ_VERTEX_S *GpuObj_MeshAlloc(U32 n, U32 *first);
+
+/** Drops every mesh (a new island's models). */
+void GpuObj_MeshReset(void);
+
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
 #define GPUOBJ_FLAG_BAKED 4     ///< shade comes from normal.w as authored, not from lighting
@@ -106,7 +125,7 @@ void GpuObj_CubeSlotChanged(S32 slot);
 #define GPUOBJ_FLAG_WAVES 1024       ///< a point of the sea's mesh, undisplaced: the vertex shader raises the swell at world uv.zw * 512
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
-typedef struct {
+typedef struct T_GPUOBJ_VERTEX_S {
     float clip[4];   ///< ndc.x * w, ndc.y * w, depth inside the draw * w, w
     float normal[4]; ///< view-space normal, w = shade scale (0..15 range at full light)
     float light[4];  ///< view-space light vector, w = mode
@@ -156,6 +175,11 @@ typedef struct {
     float LandOrigin[3]; ///< the cube's local origin in the draw's view space (vpos = rotation * local + origin)
     float LandPhase[2];  ///< the cube's place in the sea's phase, in 512-unit steps (cube * 64)
     float LandFar;       ///< view depth past which a cell is not drawn (ClipZFar)
+    /* A placement of a mesh: First and Count are in GpuObjMeshVerts, whose
+       vertices are in model space. */
+    S32 Mesh;
+    float MeshRows[12]; ///< model to the draw's view space: rotation rows, translation in the fourth
+    float MeshLight[4]; ///< the view-space light, and the scale the normals' shade takes (w)
 } T_GPUOBJ_DRAW;
 
 // --- State consumed by the presenter -----------------------------------------

@@ -138,6 +138,10 @@ extern Func_TransNumPtr *TransFctBody; // Pointer to a conversion fct that conve
 
 // -----------------------------------------------------------------------------
 extern S32 ObjectDisplay(T_OBJ_3D *obj);
+/* Every polygon of a body, back faces included, in its data's order: fn gets
+   the display loop's type and the polygon, with the texture globals (PtrMap,
+   RepMask) its filler would have set. */
+extern void BodyWalkPolys(T_BODY_HEADER *body, void (*fn)(U32 type, void *poly));
 extern S32 BodyDisplay(S32 x, S32 y, S32 z, S32 alpha, S32 beta, S32 gamma,
                        void *obj);
 extern S32 BodyDisplay_AlphaBeta(S32 x, S32 y, S32 z, S32 alpha, S32 beta,

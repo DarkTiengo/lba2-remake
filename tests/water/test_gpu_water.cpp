@@ -137,6 +137,32 @@ static float RaisedY(const T_GPUOBJ_VERTEX *v) {
     return p[1];
 }
 
+/* What GPUTERRAIN.vert's Sea() grows a sea record into: the tile's four
+   corners cut into 8 x 8 cells, bilinear in the corners (PlanePoint's
+   weights), in the order the CPU once emitted them. */
+static T_GPUOBJ_VERTEX grown[GPUOBJ_PROC_SEA_VERTS];
+
+static void GrowSea(const T_GPUOBJ_VERTEX corner[4]) {
+    static const S32 stepX[6] = {0, 0, 1, 0, 1, 1};
+    static const S32 stepZ[6] = {0, 1, 1, 0, 1, 0};
+    for (S32 i = 0; i < GPUOBJ_PROC_SEA_VERTS; i++) {
+        const S32 cell = i / 6, k = i % 6;
+        const float u = (float)(cell % GPUOBJ_PROC_SEA_SUB + stepX[k]) / (float)GPUOBJ_PROC_SEA_SUB;
+        const float t = (float)(cell / GPUOBJ_PROC_SEA_SUB + stepZ[k]) / (float)GPUOBJ_PROC_SEA_SUB;
+        const float w[4] = {(1.0f - u) * (1.0f - t), (1.0f - u) * t, u * t, u * (1.0f - t)};
+        T_GPUOBJ_VERTEX *v = &grown[i];
+        *v = corner[0];
+        for (S32 axis = 0; axis < 3; axis++) {
+            v->vpos[axis] = w[0] * corner[0].vpos[axis] + w[1] * corner[1].vpos[axis] + w[2] * corner[2].vpos[axis] +
+                            w[3] * corner[3].vpos[axis];
+        }
+        for (S32 axis = 0; axis < 4; axis++) {
+            v->uv[axis] = w[0] * corner[0].uv[axis] + w[1] * corner[1].uv[axis] + w[2] * corner[2].uv[axis] +
+                          w[3] * corner[3].uv[axis];
+        }
+    }
+}
+
 static void Plane(S32 sea, const STRUC_CLIPVERTEX quad[4]) {
     static U8 page[65536];
     allocated = 0;
@@ -164,7 +190,8 @@ int main() {
     TerrainGpu_SetWaterScene(0, 8, 9);
     GpuWater_SetTime(1000);
     Plane(TRUE, quad);
-    Check(allocated == 384, "sea emits a bounded subdivided mesh");
+    Check(allocated == 4 && draw.Procedural == GPUOBJ_PROC_SEA, "sea emits its tile's corners for the shader to cut");
+    GrowSea(vertices);
     Check(((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER) != 0, "Citadel sea is marked");
     Check(vertices[0].uv[2] == 513.0f && vertices[0].uv[3] == 574.0f, "island-space phase");
     Check(vertices[0].uv[0] == 1.0f && vertices[0].uv[1] == 2.0f, "original UVs retained");
@@ -175,8 +202,8 @@ int main() {
     const float worldX = vertices[0].uv[2], worldZ = vertices[0].uv[3];
     const float crestY = RaisedY(&vertices[0]);
     S32 varyingHeights = FALSE;
-    for (U32 i = 1; i < allocated; i++) {
-        if (RaisedY(&vertices[i]) != crestY) {
+    for (U32 i = 1; i < GPUOBJ_PROC_SEA_VERTS; i++) {
+        if (RaisedY(&grown[i]) != crestY) {
             varyingHeights = TRUE;
             break;
         }
@@ -228,7 +255,8 @@ int main() {
             }
             TerrainGpu_SetWaterScene(0, 8, 9);
             Plane(TRUE, tiltedQuad);
-            bool datum = allocated == 384;
+            bool datum = allocated == 4;
+            GrowSea(vertices);
             bool raised = false, lowered = false;
             const S32 cornerX[6] = {0, 0, 1, 0, 1, 1};
             const S32 cornerZ[6] = {0, 1, 1, 0, 1, 0};
@@ -236,7 +264,7 @@ int main() {
             for (S32 zi = 0; zi < 8; zi++) {
                 for (S32 xi = 0; xi < 8; xi++) {
                     for (S32 k = 0; k < 6; k++) {
-                        const T_GPUOBJ_VERTEX *flat = &vertices[(zi * 8 + xi) * 6 + k];
+                        const T_GPUOBJ_VERTEX *flat = &grown[(zi * 8 + xi) * 6 + k];
                         T_GPUOBJ_VERTEX shaded = *flat;
                         Raise(flat, shaded.vpos, shaded.normal);
                         const T_GPUOBJ_VERTEX *v = &shaded;
@@ -453,7 +481,8 @@ int main() {
     quad[2].V_Z0 = 100;
     quad[3].V_Z0 = -100;
     Plane(TRUE, quad);
-    Check(allocated == 384 && vertices[0].vpos[2] > 0.0f && vertices[337].vpos[2] < 0.0f,
+    GrowSea(vertices);
+    Check(allocated == 4 && grown[0].vpos[2] > 0.0f && grown[337].vpos[2] < 0.0f,
           "near-plane crossing is retained for GPU clipping after displacement");
 
     float first[GPUWATER_UNIFORM_FLOATS], next[GPUWATER_UNIFORM_FLOATS];

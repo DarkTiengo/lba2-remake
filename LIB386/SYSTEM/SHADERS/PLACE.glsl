@@ -23,6 +23,7 @@ layout(set = 1, binding = 0) uniform Draw {
     vec4 records; // GPUTERRAIN.vert: x the first vertex of the draw's records, y 1 terrain, 2 grass, 3 land
     vec4 land;     // a land draw: xyz the cube's local origin in view space, w the far clip
     vec4 landInfo; // x the cube's slot, y 1 grown on the curve, zw the cube's place in the sea's phase
+    vec4 instance; // a kept model's placement (GPUOBJ.vert): xyz the view-space light, w the shade scale; 0 otherwise
 };
 
 const int FLAG_GRASS = 512;

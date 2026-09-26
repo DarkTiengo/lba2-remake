@@ -24,7 +24,6 @@ extern "C" {
 /* The CodeJeu of shoreline water (LBA_EXT.H), whose fill keeps its authored page. */
 #define LAND_CJ_FOOT_WATER 12
 #define LAND_CJ_ANIMATED_WATER 15
-#define SEA_SUBDIVISIONS 8
 
 // --- Private state -----------------------------------------------------------
 static T_GPUOBJ_DRAW *s_draw = NULL;
@@ -993,6 +992,9 @@ void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S
         return;
     }
     OpenDraw(page, NULL, fogStart, fogEnd, fogColor);
+    if (s_draw != NULL && sea && GpuWaterEnabled) {
+        s_draw->Procedural = GPUOBJ_PROC_SEA;
+    }
     s_planeTexOffset = (float)texOffset;
     s_planeTexMask = (float)(texMask & 0xFFFF);
 }
@@ -1002,26 +1004,18 @@ S32 TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]) {
         return FALSE;
     }
     if (s_waterPlane && GpuWaterEnabled) {
-        /* 8x8 cells per original sea tile bounds a horizon frame to 55,296
-           vertices while resolving the broad waves that move the silhouette. */
-        T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(SEA_SUBDIVISIONS * SEA_SUBDIVISIONS * 6);
+        /* The tile's four corners: GPUTERRAIN.vert cuts it into 8 x 8 cells,
+           enough to resolve the broad waves that move the silhouette, as this
+           did on the CPU (the mesh is bilinear in the corners, the world
+           position too). */
+        T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(4);
         if (v == NULL) {
             return FALSE;
         }
-        for (S32 z = 0; z < SEA_SUBDIVISIONS; z++) {
-            for (S32 x = 0; x < SEA_SUBDIVISIONS; x++) {
-                const float u0 = (float)x / (float)SEA_SUBDIVISIONS;
-                const float u1 = (float)(x + 1) / (float)SEA_SUBDIVISIONS;
-                const float t0 = (float)z / (float)SEA_SUBDIVISIONS;
-                const float t1 = (float)(z + 1) / (float)SEA_SUBDIVISIONS;
-                WaterVertex(v++, src, u0, t0);
-                WaterVertex(v++, src, u0, t1);
-                WaterVertex(v++, src, u1, t1);
-                WaterVertex(v++, src, u0, t0);
-                WaterVertex(v++, src, u1, t1);
-                WaterVertex(v++, src, u1, t0);
-            }
-        }
+        WaterVertex(v++, src, 0.0f, 0.0f);
+        WaterVertex(v++, src, 0.0f, 1.0f);
+        WaterVertex(v++, src, 1.0f, 1.0f);
+        WaterVertex(v++, src, 1.0f, 0.0f);
         return TRUE;
     }
     T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(6);
