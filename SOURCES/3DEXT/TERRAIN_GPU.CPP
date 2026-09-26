@@ -699,6 +699,14 @@ void TerrainGpu_LandDraw(U8 *groundTexture, U8 *clutBase, S32 fogStart, S32 fogE
         return;
     }
     s_draw->Procedural = GPUOBJ_PROC_LAND;
+    /* The rotation the records are placed with is the one the cube is drawn
+       with, whether or not the scene's camera has been recorded yet this frame. */
+    {
+        const TYPE_MAT *m = &MatriceWorld;
+        const float rows[9] = {m->F.M11, m->F.M12, m->F.M13, m->F.M21, m->F.M22, m->F.M23, m->F.M31, m->F.M32, m->F.M33};
+        memcpy(s_draw->CapMat, rows, sizeof(rows));
+        s_draw->HasCapCamera = TRUE;
+    }
     s_draw->LandSlot = s_landSlot;
     s_draw->LandSmooth = TerrainGpuSmooth && (float)nearest < SMOOTH_FADE_FAR;
     s_draw->LandOrigin[0] = -(float)CameraXr;

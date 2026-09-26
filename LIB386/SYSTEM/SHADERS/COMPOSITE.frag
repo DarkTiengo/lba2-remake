@@ -23,10 +23,18 @@ layout(set = 2, binding = 7) uniform sampler2D u_rtHalf;
 
 /* The frame's bodies for sun rays (GPUBVH.H): nodes are two vec4 (min, first;
    max, leaf count), triangles three (a vertex, two edges). */
-layout(std430, set = 2, binding = 8) readonly buffer BvhNodes {
+#ifdef HALF_PASS
+/* The previous present's traced shadows and occlusion (s_rtHalf before this
+   pass replaces it), a view distance in alpha: what the pass accumulates into. */
+layout(set = 2, binding = 8) uniform sampler2D u_rtHistory;
+#define BVH_BINDING 9
+#else
+#define BVH_BINDING 8
+#endif
+layout(std430, set = 2, binding = BVH_BINDING) readonly buffer BvhNodes {
     vec4 bvhNodes[];
 };
-layout(std430, set = 2, binding = 9) readonly buffer BvhTris {
+layout(std430, set = 2, binding = BVH_BINDING + 1) readonly buffer BvhTris {
     vec4 bvhTris[];
 };
 
@@ -69,6 +77,10 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 skyFogRange; // x view depth where the fog starts, y where it is total, z 1 when the software left the ground unpainted
     vec4 skyCamera;  // x height above the cloud ceiling, yz world X and Z, w 1 space, 2 heavy gas
     vec4 skyPlanet;  // toward the planet seen from space (world frame), w its angular radius
+    vec4 prevRow0;   // this present's scene space into the previous present's: rows, translation in w
+    vec4 prevRow1;
+    vec4 prevRow2;
+    vec4 history;    // x 1 when the previous present's traced result can be reused, y the present's number
 };
 
 // --- Flames ----------------------------------------------------------------------
@@ -329,7 +341,9 @@ float SunShadowRT(ivec2 p, vec3 pos, vec3 n) {
     vec3 o = pos + n * 6.0;
     vec3 side = normalize(cross(l, abs(l.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
     vec3 other = cross(l, side);
-    float turn = fract(sin(dot(vec2(p), vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+    /* Turned per pixel, and a little further every present: the half pass
+       accumulates presents, which then add up to many more rays than four. */
+    float turn = fract(sin(dot(vec2(p), vec2(12.9898, 78.233))) * 43758.5453 + history.y * 0.618034) * 6.2831853;
     float blocked = 0.0;
     for (int k = 0; k < 4; k++) {
         float a = turn + float(k) * 1.5707963;
@@ -1342,7 +1356,35 @@ void main() {
             ao = AmbientOcclusion(p);
         }
     }
-    o_color = vec4(sunRT, lightRT, ao, 1.0);
+    vec3 now = vec3(sunRT, lightRT, ao);
+    float d = scenePixel ? UnpackDistance(p) : -1.0;
+    /* Accumulated over the presents: the surface put back where the previous
+       present's camera saw it, and its result there taken in, unless it was
+       another surface (its distance differs) or off the frame. Noise in the
+       penumbrae and thin shadows at half resolution then settle instead of
+       crawling as the camera moves. */
+    if (d > 0.0 && history.x > 0.5) {
+        vec3 pos = ScenePoint(p, d);
+        vec3 prev = vec3(dot(prevRow0.xyz, pos) + prevRow0.w, dot(prevRow1.xyz, pos) + prevRow1.w,
+                         dot(prevRow2.xyz, pos) + prevRow2.w);
+        float dp = -prev.z;
+        if (dp > 1.0) {
+            vec2 frameSize = vec2(objSize) / rtInfo.xy;
+            vec2 at = vec2(rtProj.x + prev.x * rtProj.z / dp, rtProj.y + prev.y * rtProj.z * rtProj.w / dp) / frameSize;
+            if (all(greaterThanEqual(at, vec2(0.0))) && all(lessThan(at, vec2(1.0)))) {
+                vec4 then = texture(u_rtHistory, at);
+                float dThen = exp2(then.a * 17.0) - 1.0;
+                /* A difference the four rays' noise cannot make is a shadow that
+                   moved (a body walking, a door): that one is taken as it is now. */
+                vec3 gap = abs(then.rgb - now);
+                bool moved = gap.r > 0.6 * max(rtSun.w, 0.05) || gap.g > 0.6 || gap.b > 0.35;
+                if (then.a > 0.0 && abs(dThen - dp) < dp * 0.06 + 8.0 && !moved) {
+                    now = mix(now, then.rgb, 0.8);
+                }
+            }
+        }
+    }
+    o_color = vec4(now, d > 0.0 ? log2(d + 1.0) / 17.0 : 0.0);
 }
 #else
 void main() {

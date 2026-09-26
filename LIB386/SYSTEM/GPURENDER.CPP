@@ -64,6 +64,12 @@ static SDL_GPUShader *s_fullscreenVert = NULL;
 static SDL_GPUShader *s_halfFrag = NULL;
 static SDL_GPUGraphicsPipeline *s_pipelineHalf = NULL; ///< shadows and occlusion at half resolution
 static SDL_GPUTexture *s_rtHalf = NULL;
+static SDL_GPUTexture *s_rtHalfNext = NULL; ///< the half pass's output, copied into s_rtHalf after it
+static bool s_rtHistory = false;           ///< s_rtHalf holds the last present's accumulation
+static float s_prevCapMat[9];              ///< the scene camera of the last present's half pass
+static float s_prevCapCam[3];
+static U32 s_presentNumber = 0;
+static U32 s_halfW = 0, s_halfH = 0;
 static bool s_halfReady = false; ///< this present's half pass ran: the composite reads it
 static float s_params[1024];     ///< the composite's last uniforms, for the half pass
 static U32 s_paramsSize = 0;
@@ -227,6 +233,7 @@ static void ReleaseFrameResources(void) {
     ReleaseTexture(&s_objShadow);
     ReleaseTexture(&s_objHeight);
     ReleaseTexture(&s_rtHalf);
+    ReleaseTexture(&s_rtHalfNext);
     ReleaseTexture(&s_depth);
     ReleaseTexture(&s_tags);
     free(s_tagScratch);
@@ -337,7 +344,7 @@ static float Daylight(void) {
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
     float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 4 + 8 +
-                 GPUSTORM_UNIFORM_FLOATS + 32];
+                 GPUSTORM_UNIFORM_FLOATS + 32 + 16];
     SDL_zeroa(params);
     params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
     params[9] = (float)s_nbFlames;
@@ -442,6 +449,30 @@ static void PushCompositeParams(void) {
             GpuSky_GetPlanet(sky + 28);
         }
     }
+    /* The half pass's accumulation: this present's scene space into the last
+       one's (a scene point is M * world - camera, M the capture's rotation),
+       and whether the last one's result is there to be reused. */
+    {
+        float *acc = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 4 +
+                     8 + GPUSTORM_UNIFORM_FLOATS + 32;
+        const float *a = s_prevCapMat, *b = GpuObjCapMat;
+        float r[9];
+        for (S32 i = 0; i < 3; i++) {
+            for (S32 j = 0; j < 3; j++) {
+                /* The last rotation times this one's transpose (its inverse). */
+                r[i * 3 + j] = a[i * 3] * b[j * 3] + a[i * 3 + 1] * b[j * 3 + 1] + a[i * 3 + 2] * b[j * 3 + 2];
+            }
+        }
+        for (S32 i = 0; i < 3; i++) {
+            acc[i * 4 + 0] = r[i * 3];
+            acc[i * 4 + 1] = r[i * 3 + 1];
+            acc[i * 4 + 2] = r[i * 3 + 2];
+            acc[i * 4 + 3] = r[i * 3] * GpuObjCapCam[0] + r[i * 3 + 1] * GpuObjCapCam[1] + r[i * 3 + 2] * GpuObjCapCam[2] -
+                             s_prevCapCam[i];
+        }
+        acc[12] = s_rtHistory && GpuObjCapValid ? 1.0f : 0.0f;
+        acc[13] = (float)(s_presentNumber % 1024u);
+    }
     SDL_COMPILE_TIME_ASSERT(half_params, sizeof(params) <= sizeof(s_params));
     memcpy(s_params, params, sizeof(params));
     s_paramsSize = (U32)sizeof(params);
@@ -467,6 +498,11 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     s_objHeight = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, targetUsage, tw, th, 1);
     s_rtHalf = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage, (tw + 1) / 2,
                              (th + 1) / 2, 1);
+    s_rtHalfNext = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, targetUsage,
+                                 (tw + 1) / 2, (th + 1) / 2, 1);
+    s_rtHistory = false;
+    s_halfW = (tw + 1) / 2;
+    s_halfH = (th + 1) / 2;
     s_depth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, s_depthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, tw, th, 1);
     s_tags = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER, w, h, 1);
     s_tagScratch = (float *)malloc((size_t)w * h * sizeof(float));
@@ -637,7 +673,7 @@ static bool CreatePipeline(void) {
     /* The half-resolution pass: the composite's source built with HALF_PASS,
        bound as the composite is (a stand-in texture at the frame's slot). */
     s_fullscreenVert = CreateShader(FULLSCREEN_vert_spv, FULLSCREEN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
-    s_halfFrag = CreateShader(COMPOSITE_HALF_frag_spv, COMPOSITE_HALF_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1, 2);
+    s_halfFrag = CreateShader(COMPOSITE_HALF_frag_spv, COMPOSITE_HALF_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 9, 1, 2);
     if (!s_objVert || !s_terrainVert || !s_objFrag || !s_compositeFrag || !s_fullscreenVert || !s_halfFrag) {
         return false;
     }
@@ -949,9 +985,13 @@ static void ReleasePipeline(void) {
 }
 
 /* A land draw's triangles for the shadow rays: the records' flat triangles,
-   placed as GPUTERRAIN.vert places their corners, those in view only (the
-   records are the whole cube, and the hierarchy's room is the frame's). No
-   water, and none the GPU does not draw. */
+   placed as GPUTERRAIN.vert places their corners. The records are the whole
+   cube and the hierarchy's room is the frame's, so only those that can shade
+   something in view: in view themselves, or with the shadow they cast (the
+   triangle carried away from the sun, as far as a ray reaches) crossing it.
+   A caster just off screen -- the hill behind the camera, the tree beside it
+   -- shades what is on screen, and choosing by view alone made those shadows
+   come and go as the camera turned. No water, and none the GPU does not draw. */
 static U32 LandRayTris(const T_GPUOBJ_DRAW *draw, float *tris, U32 n) {
     static const S32 kCX[4] = {0, 0, 1, 1};
     static const S32 kCZ[4] = {0, 1, 1, 0};
@@ -962,10 +1002,17 @@ static U32 LandRayTris(const T_GPUOBJ_DRAW *draw, float *tris, U32 n) {
     const float *heights = GpuObjHeightMaps + (size_t)slot * GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE;
     const float *m = draw->CapMat;
     const float *o = draw->LandOrigin;
-    /* The frustum in view space: |x| and |y| against the depth, with a margin
-       for what casts into view from just outside it. */
-    const float fx = ((float)ModeDesiredX * 0.5f + 64.0f) / GpuObjProj[2];
-    const float fy = ((float)ModeDesiredY * 0.5f + 64.0f) / (GpuObjProj[2] * GpuObjProj[3]);
+    /* The view's bounds as x / depth and y / depth, where the frame's edges are
+       from the projection's centre, a margin wider. */
+    const float margin = 48.0f;
+    const float fx = GpuObjProj[2], fy = GpuObjProj[2] * GpuObjProj[3];
+    const float xLo = (-margin - GpuObjProj[0]) / fx, xHi = ((float)ModeDesiredX + margin - GpuObjProj[0]) / fx;
+    /* FRatioY is negative: y grows down the frame as it shrinks in view space. */
+    const float yA = (-margin - GpuObjProj[1]) / fy, yB = ((float)ModeDesiredY + margin - GpuObjProj[1]) / fy;
+    const float yLo = yA < yB ? yA : yB, yHi = yA < yB ? yB : yA;
+    /* Away from the sun, in view space (GpuObjSunDir points toward it). */
+    const float away[3] = {-GpuObjSunDir[0], -GpuObjSunDir[1], -GpuObjSunDir[2]};
+    const float reach = 40000.0f; /* the composite's ray length (rtInfo.w) */
     for (S32 k = 0; k < count && n < GPUBVH_MAX_TRIS; k++, rec += GPUOBJ_LAND_WORDS) {
         const U32 bits = rec[0];
         const S32 mode = (S32)((bits >> 17) & 15);
@@ -975,22 +1022,37 @@ static U32 LandRayTris(const T_GPUOBJ_DRAW *draw, float *tris, U32 n) {
         const S32 cell = (S32)(bits & 0xFFFu);
         const U8 *corners = kCorners[(bits & (1u << 13)) != 0][(bits & (1u << 12)) != 0];
         float p[9];
-        S32 outL = 0, outR = 0, outT = 0, outB = 0, outZ = 0;
+        float c[3] = {0.0f, 0.0f, 0.0f};
         for (S32 i = 0; i < 3; i++) {
             const S32 gx = (cell & 63) + kCX[corners[i]], gz = (cell >> 6) + kCZ[corners[i]];
             const float w[3] = {(float)(gx * 512), heights[gz * GPUOBJ_HEIGHTMAP_SIDE + gx], (float)(gz * 512)};
             float *q = p + i * 3;
             for (S32 r = 0; r < 3; r++) {
                 q[r] = m[r * 3] * w[0] + m[r * 3 + 1] * w[1] + m[r * 3 + 2] * w[2] + o[r];
+                c[r] += q[r] * (1.0f / 3.0f);
             }
-            const float depth = -q[2];
-            outZ += depth <= 1.0f || depth >= draw->LandFar;
-            outL += q[0] < -fx * depth;
-            outR += q[0] > fx * depth;
-            outT += q[1] < -fy * depth;
-            outB += q[1] > fy * depth;
         }
-        if (outZ == 3 || outL == 3 || outR == 3 || outT == 3 || outB == 3) {
+        /* The triangle, then its shadow's path, a sixth of the reach a step. A
+           cell is 512 across: its centre is near enough to any of its points
+           at the steps' spacing that the view's margin covers the difference. */
+        S32 keep = FALSE;
+        for (S32 step = 0; step <= 6 && !keep; step++) {
+            const float t = reach * (float)step / 6.0f;
+            const float x = c[0] + away[0] * t, y = c[1] + away[1] * t, depth = -(c[2] + away[2] * t);
+            if (depth <= 1.0f || depth >= draw->LandFar) {
+                continue;
+            }
+            keep = x >= xLo * depth && x <= xHi * depth && y >= yLo * depth && y <= yHi * depth;
+            /* A triangle across the edge of the view: its centre may be just out. */
+            if (!keep && step == 0) {
+                for (S32 i = 0; i < 3 && !keep; i++) {
+                    const float *q = p + i * 3;
+                    const float d = -q[2];
+                    keep = d > 1.0f && q[0] >= xLo * d && q[0] <= xHi * d && q[1] >= yLo * d && q[1] <= yHi * d;
+                }
+            }
+        }
+        if (!keep) {
             continue;
         }
         memcpy(tris + n * 9, p, sizeof(p));
@@ -1321,12 +1383,12 @@ static void SetSunlight(float *sun) {
    for four of the targets' pixels, with the composite's own bindings and
    uniforms (the HALF_PASS build of its shader). */
 static void RenderHalf(SDL_GPUCommandBuffer *cmd) {
-    if (s_pipelineHalf == NULL || s_rtHalf == NULL || s_paramsSize == 0) {
+    if (s_pipelineHalf == NULL || s_rtHalf == NULL || s_rtHalfNext == NULL || s_paramsSize == 0) {
         return;
     }
     SDL_GPUColorTargetInfo target;
     SDL_zero(target);
-    target.texture = s_rtHalf;
+    target.texture = s_rtHalfNext;
     target.load_op = SDL_GPU_LOADOP_DONT_CARE;
     target.store_op = SDL_GPU_STOREOP_STORE;
     target.cycle = true;
@@ -1335,20 +1397,37 @@ static void RenderHalf(SDL_GPUCommandBuffer *cmd) {
         return;
     }
     SDL_BindGPUGraphicsPipeline(pass, s_pipelineHalf);
-    SDL_GPUTextureSamplerBinding bindings[8];
-    SDL_GPUTexture *const textures[8] = {s_objColor, s_objColor, s_objId, s_tags,
-                                         s_objLight, s_objShadow, s_objHeight, s_objColor};
-    for (int i = 0; i < 8; i++) {
+    SDL_GPUTextureSamplerBinding bindings[9];
+    SDL_GPUTexture *const textures[9] = {s_objColor, s_objColor, s_objId, s_tags,     s_objLight,
+                                         s_objShadow, s_objHeight, s_objColor, s_rtHalf};
+    for (int i = 0; i < 9; i++) {
         bindings[i].texture = textures[i];
-        bindings[i].sampler = (i == 0 || i == 1) ? s_linear : s_nearest;
+        bindings[i].sampler = (i == 0 || i == 1 || i == 8) ? s_linear : s_nearest;
     }
-    SDL_BindGPUFragmentSamplers(pass, 0, bindings, 8);
+    SDL_BindGPUFragmentSamplers(pass, 0, bindings, 9);
     SDL_GPUBuffer *storage[2] = {s_bvhNodes, s_bvhTris};
     SDL_BindGPUFragmentStorageBuffers(pass, 0, storage, 2);
     SDL_PushGPUFragmentUniformData(cmd, 0, s_params, s_paramsSize);
     SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
     SDL_EndGPURenderPass(pass);
+
+    /* The result becomes what the composite reads, and the next pass's history. */
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
+    if (copy != NULL) {
+        SDL_GPUTextureLocation from;
+        SDL_GPUTextureLocation to;
+        SDL_zero(from);
+        SDL_zero(to);
+        from.texture = s_rtHalfNext;
+        to.texture = s_rtHalf;
+        /* Cycled: the last composite may still be reading it. */
+        SDL_CopyGPUTextureToTexture(copy, &from, &to, s_halfW, s_halfH, 1, true);
+        SDL_EndGPUCopyPass(copy);
+    }
     s_halfReady = true;
+    s_rtHistory = true;
+    memcpy(s_prevCapMat, GpuObjCapMat, sizeof(s_prevCapMat));
+    memcpy(s_prevCapCam, GpuObjCapCam, sizeof(s_prevCapCam));
 }
 
 static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *draws, const T_DRAW_UNIFORMS *uniforms,
@@ -1794,7 +1873,12 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     static T_DRAW_UNIFORMS uniforms[8192];
     U32 vertexBytes = 0;
     U32 count = liveCount > 0 ? ResolveDraws(live, liveCount, kept, uniforms, &vertexBytes) : 0;
+    /* A present without the half pass leaves nothing to accumulate onto. */
+    if (!s_halfReady) {
+        s_rtHistory = false;
+    }
     s_halfReady = false; /* until this present's half pass has run */
+    s_presentNumber++;
     /* Start the hierarchy now; it is waited for just before its upload. */
     static T_BVH_JOB bvhJob;
     SDL_Thread *bvhThread = NULL;
