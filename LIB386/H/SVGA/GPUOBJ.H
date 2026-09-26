@@ -59,6 +59,20 @@ extern "C" {
 #define GPUOBJ_MAX_INDICES (1u << 22)
 extern U32 *GpuObjIndices;
 
+/* Height maps the vertex shader grows the smooth terrain from (GPUTERRAIN.vert):
+   a cube's 65 x 65 heights, one slot a cube, kept by the cube's place so a
+   cube seen frame after frame is sent once. */
+#define GPUOBJ_HEIGHTMAP_SIDE 65
+#define GPUOBJ_MAX_HEIGHTMAPS 128
+extern float GpuObjHeightMaps[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE];
+extern S32 GpuObjHeightMapsDirtyFrom; ///< first slot changed since the presenter's last copy, -1 when none
+extern S32 GpuObjHeightMapsDirtyTo;   ///< one past the last
+
+/** The slot holding the height map of the cube keyed (island, x, z), filled
+ *  from heights when the key is new. The same place is always the same map:
+ *  a cube's heights do not change while the island is played. */
+S32 GpuObj_HeightMap(S32 island, S32 cubeX, S32 cubeZ, const S16 *heights);
+
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
 #define GPUOBJ_FLAG_BAKED 4     ///< shade comes from normal.w as authored, not from lighting
@@ -114,6 +128,7 @@ typedef struct {
     U32 NbIndices;    ///< 0: drawn straight from its vertices, in threes
     S32 Retainable;   ///< the exterior scenery: placed by AffGpu_ViewVertex, so it can be re-placed
     S32 Retained;     ///< kept from an earlier frame: drawn through the camera difference
+    S32 Procedural;   ///< every three vertices are a land triangle GPUTERRAIN.vert grows into sixteen
 } T_GPUOBJ_DRAW;
 
 // --- State consumed by the presenter -----------------------------------------

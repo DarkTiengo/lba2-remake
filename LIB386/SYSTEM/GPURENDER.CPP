@@ -50,12 +50,14 @@ void GpuRender_EndComposite(void * /*sdlRenderer*/) {
 #include "SHADERS/FULLSCREEN.vert.spv.h"
 #include "SHADERS/GPUOBJ.frag.spv.h"
 #include "SHADERS/GPUOBJ.vert.spv.h"
+#include "SHADERS/GPUTERRAIN.vert.spv.h"
 
 // --- Private state -----------------------------------------------------------
 static SDL_Renderer *s_renderer = NULL;
 static SDL_GPUDevice *s_device = NULL;
 
 static SDL_GPUShader *s_objVert = NULL;
+static SDL_GPUShader *s_terrainVert = NULL; ///< the smooth terrain, grown from its records and height maps
 static SDL_GPUShader *s_objFrag = NULL;
 static SDL_GPUShader *s_compositeFrag = NULL;
 static SDL_GPUShader *s_fullscreenVert = NULL;
@@ -66,6 +68,7 @@ static bool s_halfReady = false; ///< this present's half pass ran: the composit
 static float s_params[1024];     ///< the composite's last uniforms, for the half pass
 static U32 s_paramsSize = 0;
 static SDL_GPUGraphicsPipeline *s_pipeline = NULL;
+static SDL_GPUGraphicsPipeline *s_pipelineTerrain = NULL; ///< s_pipeline with GPUTERRAIN.vert and no vertex input
 static SDL_GPUGraphicsPipeline *s_pipelinePainter = NULL; ///< depth write, no depth test
 static SDL_GPUGraphicsPipeline *s_pipelineGlass = NULL;   ///< blended over the scene, depth test without write
 static SDL_GPUSampler *s_nearest = NULL;
@@ -78,6 +81,8 @@ static bool s_tagsCleared = false; ///< the tag texture holds known contents
 static SDL_GPUTexture *s_objColor = NULL;
 static SDL_GPUTexture *s_objId = NULL;
 static SDL_GPUTexture *s_objLight = NULL; ///< dynamic light reaching each scene surface
+static SDL_GPUBuffer *s_heightBuffer = NULL; ///< GpuObjHeightMaps, for GPUTERRAIN.vert
+static bool s_heightsSent = false;           ///< the buffer holds every slot written so far
 static SDL_GPUBuffer *s_bvhNodes = NULL;  ///< ray-tracing hierarchy (GPUBVH.H)
 static SDL_GPUBuffer *s_bvhTris = NULL;
 static bool s_rayScene = false; ///< this present's hierarchy is built: the composite traces shadow rays
@@ -550,7 +555,7 @@ static bool EnsureVertexBuffer(U32 size) {
     }
     SDL_GPUBufferCreateInfo info;
     SDL_zero(info);
-    info.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
+    info.usage = SDL_GPU_BUFFERUSAGE_VERTEX | SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ; /* GPUTERRAIN.vert reads records */
     info.size = capacity;
     s_vertexBuffer = SDL_CreateGPUBuffer(s_device, &info);
     s_vertexCapacity = s_vertexBuffer ? capacity : 0;
@@ -623,6 +628,7 @@ static bool EnsureShadowBuffer(U32 size) {
 
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    s_terrainVert = CreateShader(GPUTERRAIN_vert_spv, GPUTERRAIN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 2);
     s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
     s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1, 2);
@@ -630,7 +636,7 @@ static bool CreatePipeline(void) {
        bound as the composite is (a stand-in texture at the frame's slot). */
     s_fullscreenVert = CreateShader(FULLSCREEN_vert_spv, FULLSCREEN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
     s_halfFrag = CreateShader(COMPOSITE_HALF_frag_spv, COMPOSITE_HALF_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1, 2);
-    if (!s_objVert || !s_objFrag || !s_compositeFrag || !s_fullscreenVert || !s_halfFrag) {
+    if (!s_objVert || !s_terrainVert || !s_objFrag || !s_compositeFrag || !s_fullscreenVert || !s_halfFrag) {
         return false;
     }
     {
@@ -660,6 +666,13 @@ static bool CreatePipeline(void) {
     s_bvhNodes = SDL_CreateGPUBuffer(s_device, &bvhInfo);
     bvhInfo.size = GPUBVH_MAX_TRIS * GPUBVH_TRI_FLOATS * sizeof(float);
     s_bvhTris = SDL_CreateGPUBuffer(s_device, &bvhInfo);
+    bvhInfo.size = sizeof(GpuObjHeightMaps);
+    s_heightBuffer = SDL_CreateGPUBuffer(s_device, &bvhInfo);
+    s_heightsSent = false;
+    if (!s_heightBuffer) {
+        Log_Warn("[GPU] Unable to create the height map buffer: %s", SDL_GetError());
+        return false;
+    }
     if (!s_bvhNodes || !s_bvhTris) {
         Log_Warn("[GPU] Unable to create the ray-tracing buffers: %s", SDL_GetError());
         return false;
@@ -725,6 +738,14 @@ static bool CreatePipeline(void) {
     info.target_info.has_depth_stencil_target = true;
 
     s_pipeline = SDL_CreateGPUGraphicsPipeline(s_device, &info);
+    {
+        /* The smooth terrain: the same targets and depth, its vertices made in
+           the shader from storage buffers. */
+        SDL_GPUGraphicsPipelineCreateInfo terrain = info;
+        terrain.vertex_shader = s_terrainVert;
+        SDL_zero(terrain.vertex_input_state);
+        s_pipelineTerrain = SDL_CreateGPUGraphicsPipeline(s_device, &terrain);
+    }
     info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
     s_pipelinePainter = SDL_CreateGPUGraphicsPipeline(s_device, &info);
 
@@ -781,7 +802,8 @@ static bool CreatePipeline(void) {
     targets[3].blend_state.alpha_blend_op = SDL_GPU_BLENDOP_MAX;
     targets[4].blend_state = keep;
     s_pipelineShadow = SDL_CreateGPUGraphicsPipeline(s_device, &info);
-    if (s_pipeline == NULL || s_pipelinePainter == NULL || s_pipelineGlass == NULL || s_pipelineShadow == NULL) {
+    if (s_pipeline == NULL || s_pipelineTerrain == NULL || s_pipelinePainter == NULL || s_pipelineGlass == NULL ||
+        s_pipelineShadow == NULL) {
         Log_Warn("[GPU] Unable to create object pipeline: %s", SDL_GetError());
         return false;
     }
@@ -846,6 +868,10 @@ static void ReleasePipeline(void) {
         SDL_ReleaseGPUBuffer(s_device, s_bvhNodes);
         s_bvhNodes = NULL;
     }
+    if (s_heightBuffer) {
+        SDL_ReleaseGPUBuffer(s_device, s_heightBuffer);
+        s_heightBuffer = NULL;
+    }
     if (s_bvhTris) {
         SDL_ReleaseGPUBuffer(s_device, s_bvhTris);
         s_bvhTris = NULL;
@@ -883,6 +909,14 @@ static void ReleasePipeline(void) {
     if (s_pipelineShadow) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelineShadow);
         s_pipelineShadow = NULL;
+    }
+    if (s_pipelineTerrain) {
+        SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelineTerrain);
+        s_pipelineTerrain = NULL;
+    }
+    if (s_terrainVert) {
+        SDL_ReleaseGPUShader(s_device, s_terrainVert);
+        s_terrainVert = NULL;
     }
     if (s_pipelineGlass) {
         SDL_ReleaseGPUGraphicsPipeline(s_device, s_pipelineGlass);
@@ -1460,7 +1494,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
            drew it: a run of z-buffered bodies (drawn front to back, depth
            decides) shares a slice, any other body lands in front of everything
            before it; all of them in the front half, over the scene. */
-        float sliceUniform[40] = {0.0f, 0.0f, windTime, wind};
+        float sliceUniform[44] = {0.0f, 0.0f, windTime, wind};
         /* A draw kept from an earlier frame is placed again here, in the vertex
            shader, through the difference between the camera that captured it and
            the one this frame draws with: rows of the rotation with the
@@ -1500,6 +1534,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         sliceUniform[24] = GpuWater_GetTime();
         sliceUniform[25] = GpuWater_GetWeather();
         sliceUniform[26] = GpuWaterEnabled && draw->HasCapCamera ? 1.0f : 0.0f;
+        sliceUniform[40] = (float)draw->First;
         if (draw->HasCapCamera) {
             for (S32 r = 0; r < 3; r++) {
                 for (S32 c = 0; c < 3; c++) {
@@ -1532,17 +1567,26 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         scissor.w = (int)((S64)(x1 + 1) * s_targetW / s_frameW) - scissor.x;
         scissor.h = (int)((S64)(y1 + 1) * s_targetH / s_frameH) - scissor.y;
         if (scissor.w > 0 && scissor.h > 0) {
-            SDL_GPUGraphicsPipeline *wanted = draw->Painter ? s_pipelinePainter : s_pipeline;
+            SDL_GPUGraphicsPipeline *wanted =
+                draw->Procedural ? s_pipelineTerrain : (draw->Painter ? s_pipelinePainter : s_pipeline);
             if (wanted != bound) {
                 bound = wanted;
                 SDL_BindGPUGraphicsPipeline(pass, bound);
-                SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
+                if (draw->Procedural) {
+                    SDL_GPUBuffer *storage[2] = {s_vertexBuffer, s_heightBuffer};
+                    SDL_BindGPUVertexStorageBuffers(pass, 0, storage, 2);
+                } else {
+                    SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
+                }
                 SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
             }
             SDL_SetGPUScissor(pass, &scissor);
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));
             SDL_PushGPUFragmentUniformData(cmd, 0, &uniforms[i], sizeof(T_DRAW_UNIFORMS));
-            if (draw->NbIndices > 0 && s_indexBuffer != NULL) {
+            if (draw->Procedural) {
+                /* Forty-eight vertices a record of three: sixteen small triangles. */
+                SDL_DrawGPUPrimitives(pass, draw->Count / 3 * 48, 1, 0, 0);
+            } else if (draw->NbIndices > 0 && s_indexBuffer != NULL) {
                 SDL_GPUBufferBinding ibind;
                 SDL_zero(ibind);
                 ibind.buffer = s_indexBuffer;
@@ -1754,6 +1798,14 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
                                    (U32)(GPUBVH_MAX_TRIS * GPUBVH_TRI_FLOATS * sizeof(float)));
         need = SDL_max(need, bvhMax);
     }
+    /* So do the height maps, all of them when the buffer is new. */
+    const S32 heightFrom = s_heightsSent ? GpuObjHeightMapsDirtyFrom : 0;
+    const S32 heightTo = s_heightsSent ? GpuObjHeightMapsDirtyTo : GPUOBJ_MAX_HEIGHTMAPS;
+    const U32 heightSlot = GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE * (U32)sizeof(float);
+    const bool heightUpload = count > 0 && heightFrom >= 0 && heightTo > heightFrom;
+    if (heightUpload) {
+        need = SDL_max(need, (U32)(heightTo - heightFrom) * heightSlot);
+    }
     /* The indices ride in the same transfer buffer. */
     if (count > 0 && nbIndices > 0) {
         need = SDL_max(need, nbIndices * (U32)sizeof(U32));
@@ -1813,6 +1865,13 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
             }
             s_mirroredIndices = nbIndices;
         }
+    }
+    if (heightUpload) {
+        UploadBuffer2(copy, s_heightBuffer, GpuObjHeightMaps + (size_t)heightFrom * (heightSlot / sizeof(float)),
+                      (U32)heightFrom * heightSlot, (U32)(heightTo - heightFrom) * heightSlot);
+        s_heightsSent = true;
+        GpuObjHeightMapsDirtyFrom = -1;
+        GpuObjHeightMapsDirtyTo = -1;
     }
     if (bvhThread != NULL) {
         SDL_WaitThread(bvhThread, NULL);

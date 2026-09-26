@@ -150,10 +150,12 @@ Measured per cube on Desert Island at 720p (thread CPU, `LBA2_PERFTRACE_CPU=1`),
 | `TerrainGpu_End` (smooth terrain, grass) | 0.57 ms | 6.2 ms |
 | the sea: capture 0.31, software fill 0.17 | 0.49 ms | 5.4 ms |
 
-The two fills are gone: the scenery phase fell from 26.8 to 19.6 ms. What is left is CPU work done
-*for* the GPU — `TerrainGpu_End` building the smooth terrain and the grass, the sea's 8 x 8 mesh —
-and the decor, which is the engine's own. The first two are the next step: generate the curve, the
-blades and the waves in the vertex shader from the cube's height map instead of on the CPU.
+The two fills are gone: the scenery phase fell from 26.8 to 19.6 ms. What was left was CPU work
+done *for* the GPU, and two thirds of it has moved: the sea's swell is the vertex shader's (19.6 to
+16.1 ms, and the waves move with the camera still), and the smooth terrain grows on the GPU from
+the cube's height map (`GPUTERRAIN.vert`, 16.1 to 13.3 ms). The grass is the last of it, about 1 ms,
+and still on the CPU; after that the scenery phase is the engine's own work — the cell walk, the
+grid, the decor.
 
 The original analysis, kept:
 

@@ -48,11 +48,44 @@ extern "C" U32 *GpuObj_AllocIndices(U32 count) {
     return count <= (U32)(sizeof indices / sizeof indices[0]) ? indices : NULL;
 }
 extern "C" void GpuObj_EndDraw(void) {}
+static const S16 *heightMap;
+extern "C" S32 GpuObj_HeightMap(S32, S32, S32, const S16 *heights) {
+    heightMap = heights;
+    return 7;
+}
 extern "C" void AffGpu_ViewVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth) {
     std::memset(v, 0, sizeof(*v));
     v->vpos[0] = x;
     v->vpos[1] = y;
     v->vpos[2] = -depth;
+}
+
+/* GPUTERRAIN.vert's rise of a point toward the curve, over heightMap. */
+static float GridH(int x, int z) {
+    x = x < 0 ? 0 : (x > 64 ? 64 : x);
+    z = z < 0 ? 0 : (z > 64 ? 64 : z);
+    return (float)heightMap[z * 65 + x];
+}
+static float Catmull(float p0, float p1, float p2, float p3, float t) {
+    return p1 + 0.5f * t * (p2 - p0 + t * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 + t * (3.0f * (p1 - p2) + p3 - p0)));
+}
+static float GrowRise(float gx, float gz, float plane, float cornerWeight, float depth) {
+    const int ix = (int)gx, iz = (int)gz;
+    const float u = gx - (float)ix, t = gz - (float)iz;
+    float row[4];
+    for (int k = 0; k < 4; k++) {
+        const int z = iz - 1 + k;
+        row[k] = Catmull(GridH(ix - 1, z), GridH(ix, z), GridH(ix + 1, z), GridH(ix + 2, z), u);
+    }
+    float w = (26000.0f - depth) / 8000.0f;
+    w = w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
+    float shore = (plane - 64.0f) / 320.0f;
+    shore = shore < 0.0f ? 0.0f : (shore > 1.0f ? 1.0f : shore);
+    float border = std::fmin(std::fmin(gx, gz), std::fmin(64.0f - gx, 64.0f - gz));
+    border = border > 1.0f ? 1.0f : border;
+    float offset = Catmull(row[0], row[1], row[2], row[3], t) - plane;
+    offset = offset < 0.0f ? 0.0f : (offset > 220.0f ? 220.0f : offset);
+    return offset * w * shore * border * cornerWeight;
 }
 
 static void Check(bool ok, const char *what) {
@@ -321,23 +354,35 @@ int main() {
         TerrainGpu_Tri(3, 3, corners, lights, POLY_TEXTURE, 0, terrainUv, FALSE, 0);
         Check(allocated == 0, "land triangles wait for the cube's end");
         TerrainGpu_End();
-        bool above = true, raised = false, flagged = true;
-        for (U32 i = 0; i < allocated; i++) {
-            const S32 flags = (S32)vertices[i].vpos[3];
-            /* Every point of the block is detail, and the block's first says
-               where it starts (mat.w), for the shadow hierarchy. */
-            flagged = flagged && (flags & GPUOBJ_FLAG_DETAIL) != 0 &&
-                      (vertices[i].mat[3] >= 0.5f) == (i == 0);
-            /* The plane through corners (3,3) 1000, (3,4) 1000, (4,4) 2000. */
-            const float x = vertices[i].vpos[0] / 512.0f - 3.0f;
-            const float plane = 1000.0f + 1000.0f * x;
-            above = above && vertices[i].vpos[1] >= plane - 0.5f;
-            raised = raised || vertices[i].vpos[1] > plane + 1.0f;
+        /* A record of the three flat corners, for GPUTERRAIN.vert to grow. */
+        const float gridX[3] = {3.0f, 3.0f, 4.0f}, gridZ[3] = {3.0f, 4.0f, 4.0f};
+        bool record = allocated == 3 && draw.Procedural && heightMap == hills;
+        for (int k = 0; k < 3; k++) {
+            record = record && vertices[k].uv[2] == gridX[k] && vertices[k].uv[3] == gridZ[k] &&
+                     vertices[k].normal[0] == 1.0f && vertices[k].normal[1] == 7.0f &&
+                     ((S32)vertices[k].vpos[3] & GPUOBJ_FLAG_DETAIL) == 0;
         }
-        /* Sixteen small triangles over the fifteen distinct points of the
-           sub-grid: the points are shared through the indices. */
-        Check(allocated == 15 && indexed == 48 && flagged,
-              "smooth terrain cuts a land triangle into sixteen, over fifteen shared points");
+        Check(record, "smooth terrain leaves the CPU as a record of its three flat corners");
+        /* What GPUTERRAIN.vert makes of it, every point of the four-way
+           subdivision: above the plane, and above it somewhere. */
+        bool above = true, raised = false;
+        for (int i = 0; i <= 4; i++) {
+            for (int j = 0; i + j <= 4; j++) {
+                const float b[3] = {i / 4.0f, j / 4.0f, 1.0f - i / 4.0f - j / 4.0f};
+                float p[3] = {0.0f, 0.0f, 0.0f}, gx = 0.0f, gz = 0.0f, plane = 0.0f;
+                for (int k = 0; k < 3; k++) {
+                    for (int a = 0; a < 3; a++) {
+                        p[a] += b[k] * vertices[k].vpos[a];
+                    }
+                    gx += b[k] * vertices[k].uv[2];
+                    gz += b[k] * vertices[k].uv[3];
+                    plane += b[k] * (float)heightMap[(int)vertices[k].uv[3] * 65 + (int)vertices[k].uv[2]];
+                }
+                const float y = p[1] + GrowRise(gx, gz, plane, 1.0f, -p[2]);
+                above = above && y >= plane - 0.5f;
+                raised = raised || y > plane + 1.0f;
+            }
+        }
         Check(above && raised, "smooth terrain curves above the original plane, never below");
         TerrainGpuSmooth = FALSE;
         MatriceWorld = saved;

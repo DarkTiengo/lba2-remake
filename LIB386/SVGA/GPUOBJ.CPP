@@ -111,6 +111,17 @@ S32 GpuObjSceneryClaimed = FALSE;
 static S32 s_claimX0, s_claimY0, s_claimX1, s_claimY1;
 static S32 s_sceneDepth = FALSE;
 
+float GpuObjHeightMaps[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE];
+S32 GpuObjHeightMapsDirtyFrom = -1;
+S32 GpuObjHeightMapsDirtyTo = -1;
+
+typedef struct {
+    S32 Island, CubeX, CubeZ;
+    U32 LastUse; ///< 0: free
+} T_HEIGHTMAP_SLOT;
+static T_HEIGHTMAP_SLOT s_heightSlots[GPUOBJ_MAX_HEIGHTMAPS];
+static U32 s_heightClock = 0;
+
 // --- Private functions -------------------------------------------------------
 static void FreePlane(T_PLANE *plane) {
     free(plane->Tag);
@@ -363,6 +374,7 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     draw->HasCapCamera = GpuObjCapValid;
     draw->Retainable = FALSE;
     draw->Retained = FALSE;
+    draw->Procedural = FALSE;
     if (GpuObjCapValid) {
         for (S32 k = 0; k < 9; k++) {
             draw->CapMat[k] = GpuObjCapMat[k];
@@ -553,6 +565,40 @@ void GpuObj_OnCopyMask(const void *src, S32 x0, S32 y0, S32 x1, S32 y1) {
     if (any) {
         GrowBox(dp, x0, y0, x1, y1);
     }
+}
+
+S32 GpuObj_HeightMap(S32 island, S32 cubeX, S32 cubeZ, const S16 *heights) {
+    s_heightClock++;
+    S32 oldest = 0;
+    for (S32 i = 0; i < GPUOBJ_MAX_HEIGHTMAPS; i++) {
+        T_HEIGHTMAP_SLOT *slot = &s_heightSlots[i];
+        if (slot->LastUse != 0 && slot->Island == island && slot->CubeX == cubeX && slot->CubeZ == cubeZ) {
+            slot->LastUse = s_heightClock;
+            return i;
+        }
+        if (slot->LastUse < s_heightSlots[oldest].LastUse) {
+            oldest = i;
+        }
+    }
+    /* The one unused the longest: a ring of cubes is at most 49, and a draw
+       outlives its capture by a frame or two. */
+    T_HEIGHTMAP_SLOT *slot = &s_heightSlots[oldest];
+    slot->Island = island;
+    slot->CubeX = cubeX;
+    slot->CubeZ = cubeZ;
+    slot->LastUse = s_heightClock;
+    const size_t side = GPUOBJ_HEIGHTMAP_SIDE * GPUOBJ_HEIGHTMAP_SIDE;
+    float *map = GpuObjHeightMaps + (size_t)oldest * side;
+    for (size_t k = 0; k < side; k++) {
+        map[k] = (float)heights[k];
+    }
+    if (GpuObjHeightMapsDirtyFrom < 0 || oldest < GpuObjHeightMapsDirtyFrom) {
+        GpuObjHeightMapsDirtyFrom = oldest;
+    }
+    if (oldest + 1 > GpuObjHeightMapsDirtyTo) {
+        GpuObjHeightMapsDirtyTo = oldest + 1;
+    }
+    return oldest;
 }
 
 void GpuObj_SetSceneDepth(S32 scene) {

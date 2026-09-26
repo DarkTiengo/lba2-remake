@@ -66,6 +66,7 @@ float TerrainGpu_FogScale(void) {
     return kScale[ViewDistanceLevel()];
 }
 static S16 s_heights[GRID_SIDE * GRID_SIDE];
+static S32 s_mapSlot = 0; ///< the cube's height map for GPUTERRAIN.vert
 
 /* Grass (gfx_grass): blades standing on the ground the island marks as grass. */
 S32 TerrainGpuGrass = TRUE;
@@ -371,147 +372,43 @@ static float SmoothOffset(float gx, float gz, float flat, float cornerWeight) {
     return SmoothOffsetAt(gx, gz, flat, cornerWeight, p[2]);
 }
 
-/* The sub-grid a land triangle is cut into: which of its points each small
-   triangle's corners are. The points are shared -- fifteen of them carry
-   forty-eight corners at four subdivisions -- so they are built once and
-   indexed, which is a third of the arithmetic and a third of the memory of
-   writing every corner out.
-
-   The first three are the original triangle's own corners, in the order the
-   shadow hierarchy reads them (SMOOTH_ORIGIN_SLOTS). */
-#define SMOOTH_N 4
-#define SMOOTH_POINTS ((SMOOTH_N + 1) * (SMOOTH_N + 2) / 2)
-#define SMOOTH_TRIS (SMOOTH_N * SMOOTH_N)
-
-static S32 s_subSlot[(SMOOTH_N + 1) * (SMOOTH_N + 1)]; ///< point (pi, pj) -> its slot
-static S32 s_subPi[SMOOTH_POINTS];
-static S32 s_subPj[SMOOTH_POINTS];
-static U32 s_subIndex[SMOOTH_TRIS * 3];
-static S32 s_subReady = FALSE;
-
-static void BuildSubGrid(void) {
-    const S32 n = SMOOTH_N;
-    for (S32 k = 0; k < (n + 1) * (n + 1); k++) {
-        s_subSlot[k] = -1;
-    }
-    S32 at = 0;
-    /* The corners first: (n,0), (0,n) and (0,0) are barycentric 0, 1 and 2. */
-    const S32 cornerPi[3] = {n, 0, 0};
-    const S32 cornerPj[3] = {0, n, 0};
-    for (S32 c = 0; c < 3; c++) {
-        s_subSlot[cornerPj[c] * (n + 1) + cornerPi[c]] = at;
-        s_subPi[at] = cornerPi[c];
-        s_subPj[at] = cornerPj[c];
-        at++;
-    }
-    for (S32 pi = 0; pi <= n; pi++) {
-        for (S32 pj = 0; pj + pi <= n; pj++) {
-            if (s_subSlot[pj * (n + 1) + pi] >= 0) {
-                continue;
-            }
-            s_subSlot[pj * (n + 1) + pi] = at;
-            s_subPi[at] = pi;
-            s_subPj[at] = pj;
-            at++;
-        }
-    }
-    /* The same walk over small triangles the corners used to be written out in,
-       recorded as slots. */
-    S32 out = 0;
-    for (S32 i = 0; i < n; i++) {
-        for (S32 j = 0; j < n - i; j++) {
-            for (S32 half = 0; half < 2; half++) {
-                if (half == 1 && i + j >= n - 1) {
-                    break;
-                }
-                const S32 pi[3] = {half ? i + 1 : i, i + 1, i};
-                const S32 pj[3] = {j, half ? j + 1 : j, j + 1};
-                for (S32 k = 0; k < 3; k++) {
-                    s_subIndex[out++] = (U32)s_subSlot[pj[k] * (n + 1) + pi[k]];
-                }
-            }
-        }
-    }
-    s_subReady = TRUE;
-}
-
-/* A land triangle of cell (xi, zi) cut into smaller ones lying on the curved
-   surface. The curve fades out with the distance and down at the sea's level,
-   so where cells are drawn flat (far away, water) their edges stay straight
-   and still meet the curved cells beside them. FALSE: far enough to stay flat. */
+/* A land triangle of cell (xi, zi) on the curved surface. The curve itself is
+   GPUTERRAIN.vert's: the triangle goes to it as a record of its three flat
+   corners, each with its grid position (uv.zw), its share of the curve (none
+   at the corners of a flat-drawn triangle: along an edge the curve then depends
+   on its two ends only, the same from either side; normal.x) and the cube's
+   height map (normal.y), and the shader grows it into sixteen small triangles
+   moved toward the Catmull-Rom curve through the heights around them, fading
+   with the distance and down at the sea's level. */
 static S32 SmoothTri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], float mode, S32 flags,
                      S32 perVertexShade, float constantShade, S32 color, const U16 *uv) {
     static const S32 kCornerX[4] = {0, 0, 1, 1};
     static const S32 kCornerZ[4] = {0, 1, 1, 0};
-    float cx[3], cz[3], ch[3], cw[3];
-    for (S32 i = 0; i < 3; i++) {
-        cx[i] = (float)(xi + kCornerX[corners[i] & 3]);
-        cz[i] = (float)(zi + kCornerZ[corners[i] & 3]);
-        const S32 g = (S32)cz[i] * GRID_SIDE + (S32)cx[i];
-        ch[i] = (float)s_heights[g];
-        /* No curve at the corners of flat-drawn triangles: along an edge it
-           then depends on its two ends only, the same from either side. */
-        cw[i] = s_flatCorner[g] ? 0.0f : 1.0f;
-    }
-    const S32 n = SMOOTH_N;
-    const float invN = 1.0f / (float)n;
-    if (!s_subReady) {
-        BuildSubGrid();
-    }
-    /* A unit of height in camera space: the curve raises the point along it, so
-       the point is placed once, flat, and then lifted. */
-    const TYPE_MAT *mat = &MatriceWorld;
-    const float upX = mat->F.M12, upY = mat->F.M22, upZ = -mat->F.M32;
-    /* Where this block starts inside the draw, which is what its indices are
-       relative to: the draw's vertices are contiguous from its first. */
-    const U32 base = (U32)s_draw->Count;
-    T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(SMOOTH_POINTS);
+    T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(3);
     if (v == NULL) {
         return FALSE;
     }
-    U32 *ix = GpuObj_AllocIndices(SMOOTH_TRIS * 3);
-    if (ix == NULL) {
-        return FALSE; /* the draw is indexed: no half-indexed block in it */
-    }
-    for (S32 k = 0; k < SMOOTH_TRIS * 3; k++) {
-        ix[k] = base + s_subIndex[k];
-    }
-    for (S32 out = 0; out < SMOOTH_POINTS; out++) {
-        const float b0 = (float)s_subPi[out] * invN;
-        const float b1 = (float)s_subPj[out] * invN;
-        const float b2 = 1.0f - b0 - b1;
-        const float gx = b0 * cx[0] + b1 * cx[1] + b2 * cx[2];
-        const float gz = b0 * cz[0] + b1 * cz[1] + b2 * cz[2];
-        /* The original triangle's plane: straight along its edges and the
-           cell's diagonal, as the classic terrain lies. */
-        const float flat = b0 * ch[0] + b1 * ch[1] + b2 * ch[2];
-        float p[3];
-        GridPoint(gx * (float)CELL_SIZE, flat, gz * (float)CELL_SIZE, p);
-        const float rise = SmoothOffsetAt(gx, gz, flat, b0 * cw[0] + b1 * cw[1] + b2 * cw[2], p[2]);
-        p[0] += rise * upX;
-        p[1] += rise * upY;
-        p[2] += rise * upZ;
-        T_GPUOBJ_VERTEX *vert = &v[out];
+    for (S32 i = 0; i < 3; i++) {
+        const S32 gx = xi + kCornerX[corners[i] & 3];
+        const S32 gz = zi + kCornerZ[corners[i] & 3];
+        const S32 g = gz * GRID_SIDE + gx;
+        const float *p = s_grid[g];
+        T_GPUOBJ_VERTEX *vert = &v[i];
         AffGpu_ViewVertex(vert, p[0], p[1], p[2]);
-        vert->normal[3] = perVertexShade
-                              ? (b0 * (float)lights[0] + b1 * (float)lights[1] + b2 * (float)lights[2]) / 256.0f
-                              : constantShade;
+        vert->normal[0] = s_flatCorner[g] ? 0.0f : 1.0f;
+        vert->normal[1] = (float)s_mapSlot;
+        vert->normal[3] = perVertexShade ? (float)lights[i] / 256.0f : constantShade;
         vert->light[3] = mode;
-        /* Skipped by the shadow rays, which take one triangle a block instead
-           of sixteen: the block's first vertex says where it starts, and the
-           three it starts with are the original triangle's own corners. The
-           marker lives in mat.w -- a field the terrain does not use, and one
-           the fragment shader interpolates nothing from -- rather than in the
-           flags, which every triangle sharing the corner would inherit. */
-        vert->vpos[3] = (float)(flags | GPUOBJ_FLAG_DETAIL);
+        vert->vpos[3] = (float)flags;
         vert->mat[0] = (float)(color & 0xFF);
         vert->mat[1] = 0.0f;
         vert->mat[2] = 65535.0f;
-        vert->mat[3] = out == 0 ? 1.0f : 0.0f;
         if (uv != NULL) {
-            vert->uv[0] = (b0 * (float)uv[0] + b1 * (float)uv[2] + b2 * (float)uv[4]) / 256.0f;
-            vert->uv[1] = (b0 * (float)uv[1] + b1 * (float)uv[3] + b2 * (float)uv[5]) / 256.0f;
+            vert->uv[0] = (float)uv[i * 2] / 256.0f;
+            vert->uv[1] = (float)uv[i * 2 + 1] / 256.0f;
         }
+        vert->uv[2] = (float)gx;
+        vert->uv[3] = (float)gz;
     }
     return TRUE;
 }
@@ -686,6 +583,9 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
     s_nbGrassTris = 0;
     memset(s_flatCorner, 0, sizeof(s_flatCorner));
     CurveCacheSelect();
+    if (TerrainGpuSmooth) {
+        s_mapSlot = GpuObj_HeightMap(s_island, s_cubeX, s_cubeZ, heights);
+    }
 
     /* LongWorldRotatePoint then LongProjectPoint's camera offsets, in float. */
     const TYPE_MAT *m = &MatriceWorld;
@@ -973,12 +873,12 @@ void TerrainGpu_End(void) {
     if (s_draw == NULL) {
         return;
     }
-    /* The land triangles, now that every flat corner is known. Their points are
-       shared between their triangles, so they go in a draw of their own: a draw
-       is either indexed or not, and the flat land before them and the grass
-       after them are not. */
+    /* The land triangles, now that every flat corner is known. They go in a
+       draw of their own, which GPUTERRAIN.vert grows from their records: the
+       flat land before them and the grass after them are drawn as they are. */
     const T_GPUOBJ_DRAW material = *s_draw;
     if (s_nbSmoothTris > 0 && ReopenDraw(&material)) {
+        s_draw->Procedural = TRUE;
         for (S32 k = 0; k < s_nbSmoothTris; k++) {
             const T_SMOOTH_TRI *t = &s_smoothTris[k];
             SmoothTri(t->Xi, t->Zi, t->Corners, t->Lights, t->Mode, t->Flags, t->PerVertexShade, t->ConstantShade,
@@ -986,7 +886,8 @@ void TerrainGpu_End(void) {
         }
     }
     s_nbSmoothTris = 0;
-    if (s_nbGrassTris > 0 && s_draw != NULL && (s_draw->NbIndices == 0 || ReopenDraw(&material))) {
+    if (s_nbGrassTris > 0 && s_draw != NULL &&
+        ((s_draw->NbIndices == 0 && !s_draw->Procedural) || ReopenDraw(&material))) {
         for (S32 k = 0; k < s_nbGrassTris; k++) {
             GrassTri(&s_grassTris[k]);
         }
