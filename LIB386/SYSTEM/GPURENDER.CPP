@@ -1460,7 +1460,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
            drew it: a run of z-buffered bodies (drawn front to back, depth
            decides) shares a slice, any other body lands in front of everything
            before it; all of them in the front half, over the scene. */
-        float sliceUniform[24] = {0.0f, 0.0f, windTime, wind};
+        float sliceUniform[40] = {0.0f, 0.0f, windTime, wind};
         /* A draw kept from an earlier frame is placed again here, in the vertex
            shader, through the difference between the camera that captured it and
            the one this frame draws with: rows of the rotation with the
@@ -1486,14 +1486,26 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
                                               sliceUniform[4 + r * 4 + 1] * draw->CapCam[1] +
                                               sliceUniform[4 + r * 4 + 2] * draw->CapCam[2] - nowCam[r];
             }
-            sliceUniform[16] = GpuObjProj[0];
-            sliceUniform[17] = GpuObjProj[1];
-            sliceUniform[18] = GpuObjProj[2];
-            sliceUniform[19] = GpuObjProj[2] * GpuObjProj[3];
-            sliceUniform[20] = 2.0f / (float)ModeDesiredX;
-            sliceUniform[21] = 2.0f / (float)ModeDesiredY;
-            sliceUniform[22] = (float)NearClip;
-            sliceUniform[23] = GPUOBJ_SCENE_DEPTH_RANGE;
+        }
+        /* The projection, for any draw the vertex shader places itself (a
+           retained one, the sea's swell), and the sea's clock. */
+        sliceUniform[16] = GpuObjProj[0];
+        sliceUniform[17] = GpuObjProj[1];
+        sliceUniform[18] = GpuObjProj[2];
+        sliceUniform[19] = GpuObjProj[2] * GpuObjProj[3];
+        sliceUniform[20] = 2.0f / (float)ModeDesiredX;
+        sliceUniform[21] = 2.0f / (float)ModeDesiredY;
+        sliceUniform[22] = (float)NearClip;
+        sliceUniform[23] = GPUOBJ_SCENE_DEPTH_RANGE;
+        sliceUniform[24] = GpuWater_GetTime();
+        sliceUniform[25] = GpuWater_GetWeather();
+        sliceUniform[26] = GpuWaterEnabled && draw->HasCapCamera ? 1.0f : 0.0f;
+        if (draw->HasCapCamera) {
+            for (S32 r = 0; r < 3; r++) {
+                for (S32 c = 0; c < 3; c++) {
+                    sliceUniform[28 + r * 4 + c] = draw->CapMat[r * 3 + c];
+                }
+            }
         }
         if (draw->Scene) {
             sliceUniform[0] = 0.5f;

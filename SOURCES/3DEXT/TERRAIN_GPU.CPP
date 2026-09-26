@@ -303,24 +303,23 @@ static void PlanePoint(const STRUC_CLIPVERTEX src[4], float u, float t, float ou
     out[4] = a * src[0].V_MapV + b * src[1].V_MapV + c * src[2].V_MapV + d * src[3].V_MapV;
 }
 
-static void DisplacedWaterVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth, float texU, float texV) {
-    float normal[3];
+/* A point of the sea's mesh, where the flat sea lies. The swell is the vertex
+   shader's (GPUOBJ.vert): it raises the point before projecting it, so the
+   depth buffer sees the crest and homogeneous clipping still handles cells
+   straddling the near plane -- and the waves move every frame, not only on the
+   frames the scenery is captured again. The shader writes the height into
+   normal.w for the contact pass, which compares the fixed sea datum to the
+   fixed shoreline. */
+static void WaterMeshVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth, float texU, float texV) {
     const TYPE_MAT *m = &MatriceWorld;
     const float worldX = x * m->F.M11 + y * m->F.M21 - depth * m->F.M31 + s_waterCameraX;
     const float worldZ = x * m->F.M13 + y * m->F.M23 - depth * m->F.M33 + s_waterCameraZ;
-    float height;
-    GpuWater_SampleSurface(worldX, worldZ, &height, normal);
-
-    /* Displace before projection. Homogeneous clipping then handles cells
-       straddling the near plane, and the scene depth buffer sees the crest. */
-    AffGpu_ViewVertex(v, x + height * m->F.M12, y + height * m->F.M22, depth - height * m->F.M32);
-    v->normal[0] = normal[0] * m->F.M11 + normal[1] * m->F.M12 + normal[2] * m->F.M13;
-    v->normal[1] = normal[0] * m->F.M21 + normal[1] * m->F.M22 + normal[2] * m->F.M23;
-    v->normal[2] = normal[0] * m->F.M31 + normal[1] * m->F.M32 + normal[2] * m->F.M33;
-    /* The contact pass compares the fixed sea datum to the fixed shoreline;
-       the renderer subtracts this interpolated vertical displacement there. */
-    v->normal[3] = height;
-    v->vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_WATER);
+    AffGpu_ViewVertex(v, x, y, depth);
+    v->normal[0] = m->F.M12;
+    v->normal[1] = m->F.M22;
+    v->normal[2] = m->F.M32;
+    v->normal[3] = 0.0f;
+    v->vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_WAVES);
     v->light[0] = (float)CameraXLight;
     v->light[1] = (float)CameraYLight;
     v->light[2] = (float)CameraZLight;
@@ -336,7 +335,7 @@ static void DisplacedWaterVertex(T_GPUOBJ_VERTEX *v, float x, float y, float dep
 static void WaterVertex(T_GPUOBJ_VERTEX *v, const STRUC_CLIPVERTEX src[4], float u, float t) {
     float point[5];
     PlanePoint(src, u, t, point);
-    DisplacedWaterVertex(v, point[0], point[1], point[2], point[3] / 256.0f, point[4] / 256.0f);
+    WaterMeshVertex(v, point[0], point[1], point[2], point[3] / 256.0f, point[4] / 256.0f);
 }
 
 /* How far smooth terrain lifts the point of grid position (gx, gz) whose

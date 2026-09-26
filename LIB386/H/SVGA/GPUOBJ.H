@@ -68,6 +68,7 @@ extern U32 *GpuObjIndices;
 #define GPUOBJ_FLAG_WATER_TERRAIN 64  ///< CodeJeu water retains its authored animated terrain page
 #define GPUOBJ_FLAG_DETAIL 128 ///< smooth terrain's small triangles: shadow rays take the original instead, a block at a time
 #define GPUOBJ_FLAG_GRASS 512        ///< a grass blade: the tip sways by uv.zw (clip offset of the wind), phase in mat.w
+#define GPUOBJ_FLAG_WAVES 1024       ///< a point of the sea's mesh, undisplaced: the vertex shader raises the swell at world uv.zw * 512
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
 typedef struct {

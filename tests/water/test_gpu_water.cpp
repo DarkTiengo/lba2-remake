@@ -62,6 +62,31 @@ static void Check(bool ok, const char *what) {
     }
 }
 
+/* What GPUOBJ.vert does to a sea vertex marked GPUOBJ_FLAG_WAVES: the swell at
+   its world phase, raised along the world's up in the space it was captured in
+   (the capture rotation's rows are MatriceWorld's), the normal turned the same
+   way, the height kept in normal.w for the contact pass. */
+static void Raise(const T_GPUOBJ_VERTEX *v, float vpos[3], float normal[4]) {
+    float n[3];
+    float h;
+    GpuWater_SampleSurface(v->uv[2] * 512.0f, v->uv[3] * 512.0f, &h, n);
+    const TYPE_MAT *m = &MatriceWorld;
+    const float up[3] = {m->F.M12, m->F.M22, m->F.M32};
+    for (S32 axis = 0; axis < 3; axis++) {
+        vpos[axis] = v->vpos[axis] + h * up[axis];
+    }
+    normal[0] = n[0] * m->F.M11 + n[1] * m->F.M12 + n[2] * m->F.M13;
+    normal[1] = n[0] * m->F.M21 + n[1] * m->F.M22 + n[2] * m->F.M23;
+    normal[2] = n[0] * m->F.M31 + n[1] * m->F.M32 + n[2] * m->F.M33;
+    normal[3] = h;
+}
+
+static float RaisedY(const T_GPUOBJ_VERTEX *v) {
+    float p[3], n[4];
+    Raise(v, p, n);
+    return p[1];
+}
+
 static void Plane(S32 sea, const STRUC_CLIPVERTEX quad[4]) {
     static U8 page[65536];
     allocated = 0;
@@ -94,11 +119,14 @@ int main() {
     Check(vertices[0].uv[2] == 513.0f && vertices[0].uv[3] == 574.0f, "island-space phase");
     Check(vertices[0].uv[0] == 1.0f && vertices[0].uv[1] == 2.0f, "original UVs retained");
     Check(vertices[0].light[3] == GPUOBJ_MODE_TEX, "toggle off can use original texture mode");
+    Check(((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WAVES) != 0 && vertices[0].vpos[1] == (float)quad[0].V_Y0 &&
+              vertices[0].normal[3] == 0.0f,
+          "the mesh leaves the CPU flat, for the vertex shader to raise");
     const float worldX = vertices[0].uv[2], worldZ = vertices[0].uv[3];
-    const float crestY = vertices[0].vpos[1];
+    const float crestY = RaisedY(&vertices[0]);
     S32 varyingHeights = FALSE;
     for (U32 i = 1; i < allocated; i++) {
-        if (vertices[i].vpos[1] != crestY) {
+        if (RaisedY(&vertices[i]) != crestY) {
             varyingHeights = TRUE;
             break;
         }
@@ -116,11 +144,14 @@ int main() {
     TerrainGpu_SetWaterScene(0, 8, 9);
     GpuWater_SetTime(2000);
     Plane(TRUE, quad);
-    Check(vertices[0].vpos[1] != crestY && vertices[0].normal[1] != 1.0f,
-          "analytic waves displace mesh vertices and normals");
-    Check(vertices[0].vpos[1] - vertices[0].normal[3] == (float)quad[0].V_Y0,
-          "contact height keeps the undisplaced sea datum while depth stays raised");
-    const float translatedHeight = vertices[0].vpos[1];
+    {
+        float raised[3], normal[4];
+        Raise(&vertices[0], raised, normal);
+        Check(raised[1] != crestY && normal[1] != 1.0f, "analytic waves displace mesh vertices and normals");
+        Check(std::fabs(raised[1] - normal[3] - (float)quad[0].V_Y0) < 0.01f,
+              "contact height keeps the undisplaced sea datum while depth stays raised");
+    }
+    const float translatedHeight = RaisedY(&vertices[0]);
 
     /* Test the production mesh against its original plane under two camera
        rotations. The contact attachment projects onto the rotated world up. */
@@ -155,7 +186,10 @@ int main() {
             for (S32 zi = 0; zi < 8; zi++) {
                 for (S32 xi = 0; xi < 8; xi++) {
                     for (S32 k = 0; k < 6; k++) {
-                        const T_GPUOBJ_VERTEX *v = &vertices[(zi * 8 + xi) * 6 + k];
+                        const T_GPUOBJ_VERTEX *flat = &vertices[(zi * 8 + xi) * 6 + k];
+                        T_GPUOBJ_VERTEX shaded = *flat;
+                        Raise(flat, shaded.vpos, shaded.normal);
+                        const T_GPUOBJ_VERTEX *v = &shaded;
                         const float original[3] = {
                             512.0f + 1024.0f * (float)(xi + cornerX[k]),
                             125.0f,
@@ -198,7 +232,7 @@ int main() {
     TerrainGpu_SetWaterScene(0, 8, 9);
     Plane(TRUE, quad);
     Check(vertices[0].uv[2] == worldX && vertices[0].uv[3] == worldZ, "camera translation does not slide waves");
-    Check(vertices[0].vpos[1] == translatedHeight, "camera translation keeps geometric wave height continuous");
+    Check(RaisedY(&vertices[0]) == translatedHeight, "camera translation keeps geometric wave height continuous");
 
     /* Horizon cameras shift after the reference is captured. */
     CameraX -= 32767;
