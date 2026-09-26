@@ -900,16 +900,16 @@ void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S
     s_planeTexMask = (float)(texMask & 0xFFFF);
 }
 
-void TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]) {
+S32 TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]) {
     if (s_draw == NULL) {
-        return;
+        return FALSE;
     }
     if (s_waterPlane && GpuWaterEnabled) {
         /* 8x8 cells per original sea tile bounds a horizon frame to 55,296
            vertices while resolving the broad waves that move the silhouette. */
         T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(SEA_SUBDIVISIONS * SEA_SUBDIVISIONS * 6);
         if (v == NULL) {
-            return;
+            return FALSE;
         }
         for (S32 z = 0; z < SEA_SUBDIVISIONS; z++) {
             for (S32 x = 0; x < SEA_SUBDIVISIONS; x++) {
@@ -925,11 +925,11 @@ void TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]) {
                 WaterVertex(v++, src, u1, t0);
             }
         }
-        return;
+        return TRUE;
     }
     T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(6);
     if (v == NULL) {
-        return;
+        return FALSE;
     }
     static const S32 order[6] = {0, 1, 2, 0, 2, 3};
     for (S32 i = 0; i < 6; i++) {
@@ -957,6 +957,7 @@ void TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]) {
             v[i].vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_SKY);
         }
     }
+    return TRUE;
 }
 
 void TerrainGpu_End(void) {

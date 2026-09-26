@@ -390,8 +390,14 @@ void AffGrilleExt() {
 
     ClsTerrainZBuf();
 
-    /* Everything down to the copy into Screen is scenery: one GPU group. */
+    /* Everything down to the copy into Screen is scenery: one GPU group. When
+       the software leaves the ground to the GPU, the group owns the whole
+       scene window, painted or not. */
     GpuObj_BeginGroup();
+    TerrainGpuSkipFill = TerrainGpu_CanSkipFill();
+    if (TerrainGpuSkipFill) {
+        GpuObj_ClaimGroup(ClipXMin, ClipYMin, ClipXMax, ClipYMax);
+    }
 
     ManageSystem(); // for streaming
 
@@ -418,6 +424,7 @@ void AffGrilleExt() {
 
     Switch_Fillers(FILL_POLY_TEXTURES);
 
+    TerrainGpuSkipFill = FALSE;
     GpuObj_EndGroup();
 
     CopyScreen(Log, Screen);

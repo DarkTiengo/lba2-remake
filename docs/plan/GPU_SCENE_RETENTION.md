@@ -135,7 +135,27 @@ scene's own space, the water's world phase); the clip recomputed in float in the
 bit-for-bit the clip the CPU computed in long double, so silhouettes against the software frame
 move by a fraction of a pixel; and the retained draw has to survive `Compact()`.
 
-### 2. Stop drawing the terrain in software (exteriors, GPU renderer)
+### 2. Stop drawing the terrain in software (exteriors, GPU renderer) — **done, for the ground and the sea**
+
+Landed as the unpainted ground ([GPU_RENDERER.md](../GPU_RENDERER.md)): the scenery group claims the
+scene window, covered terrain triangles and captured sea tiles are not filled, and their depth is
+filled in only for the boxes `DrawRecover` asks about, with verdicts identical to the flat fill's.
+Measured per cube on Desert Island at 720p (thread CPU, `LBA2_PERFTRACE_CPU=1`), before it:
+
+| | per cube | per frame (~11 cubes) |
+| --- | --- | --- |
+| decor objects | 0.40 ms | 4.4 ms |
+| cell walk and capture | 0.35 ms | 3.8 ms |
+| the software fill of the land | 0.57 ms | 6.3 ms |
+| `TerrainGpu_End` (smooth terrain, grass) | 0.57 ms | 6.2 ms |
+| the sea: capture 0.31, software fill 0.17 | 0.49 ms | 5.4 ms |
+
+The two fills are gone: the scenery phase fell from 26.8 to 19.6 ms. What is left is CPU work done
+*for* the GPU — `TerrainGpu_End` building the smooth terrain and the grass, the sea's 8 x 8 mesh —
+and the decor, which is the engine's own. The first two are the next step: generate the curve, the
+blades and the waves in the vertex shader from the cube's height map instead of on the CPU.
+
+The original analysis, kept:
 
 With the geometry retained, the software fill is still there — 14.8 ms of it — because its pixels
 are what carry the tags, and the tags are what the composite matches. The way out is the one the
@@ -180,7 +200,8 @@ will run into. **Risk:** mechanical but wide — every shader that reads a verte
 
 ## Order and why
 
-**The order changed once the numbers did.** 2 first now: the software's own rasterising of the
+**Step 2 is done** for the ground and the sea (above); what remains of the scenery phase is the
+capture's own CPU work and the decor. **The order changed once the numbers did.** 2 first then: the software's own rasterising of the
 exterior is 17 ms of the frame and the capture is 5. 1 second, and smaller than it looked when it
 was written. 3 is done. 4 is not a speed change at all.
 

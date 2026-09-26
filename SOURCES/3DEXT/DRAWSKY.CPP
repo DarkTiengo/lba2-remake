@@ -141,8 +141,11 @@ void DrawOneSea(S32 y) // Si on souhaite que l'eau ne soit pas au niveau 0 :)
                 src[3].V_Y0 = Y0 - CameraYr;
                 src[3].V_Z0 = CameraZr - Z0;
 
-                TerrainGpu_Quad(src);
-                Draw_Poly(src, 24);
+                /* The sea's depth is nobody's business but the picture's: a
+                   body in the water is not asked whether it is covered. */
+                if (!TerrainGpu_Quad(src) OR !TerrainGpuSkipFill) {
+                    Draw_Poly(src, 24);
+                }
             } else {
                 // poly noir ?
                 /* on verra		LongWorldRotatePoint( xx, y, zz ) ;

@@ -55,9 +55,25 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
 S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
                    const U16 *uv, S32 water, S32 step);
 
-/* The software terrain fill is flat where the GPU covers it (gfx_fastterrain):
- * the pixel is wanted for its tag and its depth, not for its colour. */
+/* The software leaves the terrain the GPU covers to the GPU (gfx_fastterrain).
+ * Outdoors, with the GPU's shadows on, it does not paint it at all: the scenery
+ * group owns the whole scene window (GpuObj_ClaimGroup) and the composite shows
+ * the GPU's nearest surface there. The terrain's depth, which the game still
+ * reads (DrawRecover's verdict on the hero being covered), is filled in only
+ * where it is asked for (TerrainGpu_EnsureDepth). Otherwise, the fill is flat
+ * where the GPU covers it: the pixel is wanted for its tag and its depth. */
 extern S32 TerrainGpuFastFill;
+
+/** Set by the scenery pass while the terrain the GPU covers is left unpainted. */
+extern S32 TerrainGpuSkipFill;
+
+/** Whether the scenery pass about to run can leave that terrain unpainted. */
+S32 TerrainGpu_CanSkipFill(void);
+
+/** The software depth buffer holds the terrain inside the box [x0, x1] x
+ *  [y0, y1], as the classic fill would have left it. A no-op unless the last
+ *  scenery pass left terrain unpainted. */
+void TerrainGpu_EnsureDepth(S32 x0, S32 y0, S32 x1, S32 y1);
 
 /** Captures the main cube's camera before horizon cubes shift it. */
 void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ);
@@ -69,8 +85,9 @@ void TerrainGpu_SetWaterCube(S32 cubeX, S32 cubeZ);
 void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S32 fogEnd, S32 fogColor,
                            S32 sea);
 
-/** One plane quad in camera space, as handed to Draw_Poly. */
-void TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]);
+/** One plane quad in camera space, as handed to Draw_Poly. Returns TRUE when
+ *  the GPU draws it. */
+S32 TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]);
 
 /** Closes the draw opened by BeginCube or BeginPlane. */
 void TerrainGpu_End(void);

@@ -106,6 +106,9 @@ static S32 s_drawOpen = FALSE;
 static U32 s_nextId = 1;
 static S32 s_groupOpen = FALSE;
 static U32 s_groupId = 0;
+static S32 s_groupClaim = FALSE; ///< the group ends owning the box below
+S32 GpuObjSceneryClaimed = FALSE;
+static S32 s_claimX0, s_claimY0, s_claimX1, s_claimY1;
 static S32 s_sceneDepth = FALSE;
 
 // --- Private functions -------------------------------------------------------
@@ -566,6 +569,7 @@ void GpuObj_BeginGroup(void) {
     GpuObj_SnapshotBegin(0, 0, (S32)ModeDesiredX, (S32)ModeDesiredY);
     s_groupId = s_nextId++;
     s_groupOpen = TRUE;
+    s_groupClaim = FALSE;
 
     /* A group opens on a freshly cleared frame. The clear wrote Log directly,
        so drop the tags it made stale: a pixel the group leaves at the clear
@@ -596,6 +600,46 @@ void GpuObj_EndGroup(void) {
     if (s_snapValid) {
         Tag(any ? s_groupId : 0);
     }
+    GpuObjSceneryClaimed = FALSE;
+    if (!any || !s_groupClaim) {
+        return;
+    }
+    s_groupClaim = FALSE;
+    GpuObjSceneryClaimed = TRUE;
+
+    /* The pixels the group left as they were are its own too: the software did
+       not paint the ground there, the GPU does. */
+    S32 x0 = s_claimX0;
+    S32 y0 = s_claimY0;
+    S32 x1 = s_claimX1 + 1;
+    S32 y1 = s_claimY1 + 1;
+    if (!ClipBoxToPlanes(&x0, &y0, &x1, &y1)) {
+        return;
+    }
+    T_PLANE *plane = PlaneOf(Log, TRUE);
+    if (plane == NULL) {
+        return;
+    }
+    const U8 *log = (const U8 *)Log;
+    for (S32 y = y0; y < y1; y++) {
+        size_t row = (size_t)y * s_planeW;
+        for (S32 x = x0; x < x1; x++) {
+            plane->Tag[row + x] = s_groupId;
+        }
+        memcpy(plane->Snap + row + x0, log + row + x0, (size_t)(x1 - x0));
+    }
+    GrowBox(plane, x0, y0, x1, y1);
+}
+
+void GpuObj_ClaimGroup(S32 x0, S32 y0, S32 x1, S32 y1) {
+    if (!s_groupOpen) {
+        return;
+    }
+    s_groupClaim = TRUE;
+    s_claimX0 = x0;
+    s_claimY0 = y0;
+    s_claimX1 = x1;
+    s_claimY1 = y1;
 }
 
 void GpuObj_RefreshTags(S32 x0, S32 y0, S32 x1, S32 y1) {

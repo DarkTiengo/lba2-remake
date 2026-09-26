@@ -66,7 +66,7 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 skyX;       // xyz the world's X axis, w cloud cover
     vec4 skyZ;       // xyz the world's Z axis, w storm
     vec4 skySun;     // xyz toward the sun, w seconds
-    vec4 skyFogRange; // x view depth where the fog starts, y where it is total
+    vec4 skyFogRange; // x view depth where the fog starts, y where it is total, z 1 when the software left the ground unpainted
     vec4 skyCamera;  // x height above the cloud ceiling, yz world X and Z, w 1 space, 2 heavy gas
     vec4 skyPlanet;  // toward the planet seen from space (world frame), w its angular radius
 };
@@ -1260,10 +1260,15 @@ vec3 FogToSky(vec3 c, ivec2 p) {
     }
     float f = clamp((d - skyFogRange.x) / (skyFogRange.y - skyFogRange.x), 0.0, 1.0);
     /* A neighbouring cube fogs by its own distances: what already shows the
-       fog colour past the fog's start is fog too, whatever this cube says. */
-    ivec2 fs = textureSize(u_frame, 0);
-    vec3 soft = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
-    vec3 diff = min(abs(c - skyFog.rgb), abs(soft - skyFog.rgb));
+       fog colour past the fog's start is fog too, whatever this cube says.
+       Unless the software did not paint the ground: its pixel is then the
+       clear colour, which is the fog's, and says nothing. */
+    vec3 diff = abs(c - skyFog.rgb);
+    if (skyFogRange.z < 0.5) {
+        ivec2 fs = textureSize(u_frame, 0);
+        vec3 soft = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
+        diff = min(diff, abs(soft - skyFog.rgb));
+    }
     float fogged = 1.0 - smoothstep(0.02, 0.09, max(max(diff.r, diff.g), diff.b));
     f = max(f, fogged * step(skyFogRange.x, d));
     if (f <= 0.0) {

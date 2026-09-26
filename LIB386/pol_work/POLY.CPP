@@ -216,7 +216,10 @@ void Switch_FogNZW(void) {
     Current_Jmp_LeftSlope = Jmp_LeftSlopeZBufFPU;
 }
 
+U32 Fill_Bank = FILL_POLY_TEXTURES;
+
 void Switch_Fillers(U32 Bank) {
+    Fill_Bank = Bank;
 #ifdef ENABLE_POLY_RECORDING
     if (g_polyrec_recording)
         polyrec_record_switch_fillers(Bank);

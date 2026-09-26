@@ -13,6 +13,9 @@
  *══════════════════════════════════════════════════════════════════════════*/
 
 #include "C_EXTERN.H"
+#include "3DEXT/TERRAIN_GPU.H" /* TerrainGpu_EnsureDepth */
+
+#include <SVGA/GPUOBJ.H> /* GpuObj_OnCopyMask */
 
 extern T_OBJET *APtObj; // dans OBJECT.CPP
 
@@ -65,6 +68,16 @@ void PtrInit3DGame() {
 		   ▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀   ▀▀  ▀▀▀▀▀
  *══════════════════════════════════════════════════════════════════════════*/
 
+/* ZBufBoxOverWrite2 puts back, over the body just drawn, the scenery pixels
+   that stand in front of it, from Screen. Those pixels are the scenery's to the
+   GPU renderer too: they take Screen's tags along, so the composite shows the
+   GPU's scenery there and not the software's (flat, or unpainted) fill. */
+static void RecoverTags(void) {
+    if (GpuObj_Active()) {
+        GpuObj_OnCopyMask(Screen, ClipXMin, ClipYMin, ClipXMax, ClipYMax);
+    }
+}
+
 // Routine de recouvrement: trouver le moyen de passer les mêmes paramètres
 // en extérieur et en intérieur pour optimiser avec un pointeur de fonction
 S32 DrawRecover(S32 xw, S32 yw, S32 zw, S32 ymax, S32 zvmax) {
@@ -92,7 +105,9 @@ S32 DrawRecover(S32 xw, S32 yw, S32 zw, S32 ymax, S32 zvmax) {
         //		z1 = CameraZr-Z0-256 ;	// calculer par rapport à la zv
         z1 = CameraZr - Z0 - zvmax; // calculer par rapport à la zv
 
+        TerrainGpu_EnsureDepth(ClipXMin, ClipYMin, ClipXMax + 1, ClipYMax); /* it reads one pixel past the box */
         flagbox = ZBufBoxOverWrite2(z0, z1, ClipXMin, ClipYMin, ClipXMax, ClipYMax);
+        RecoverTags();
 
         if (!flagbox)
             BoxMovingAdd(ClipXMin, ClipYMin, ClipXMax, ClipYMax);
@@ -122,7 +137,9 @@ void DrawRecover3(S32 xw, S32 yw, S32 zw, S32 ymax, S32 zvmax) {
         //		z0 = CameraZr-Z0-256 ;	// calculer par rapport à la zv
         z0 = CameraZr - Z0 - zvmax; // calculer par rapport à la zv
 
+        TerrainGpu_EnsureDepth(ClipXMin, ClipYMin, ClipXMax + 1, ClipYMax); /* it reads one pixel past the box */
         flagbox = ZBufBoxOverWrite2(z0, z0, ClipXMin, ClipYMin, ClipXMax, ClipYMax);
+        RecoverTags();
 
         if (!flagbox)
             BoxMovingAdd(ClipXMin, ClipYMin, ClipXMax, ClipYMax);

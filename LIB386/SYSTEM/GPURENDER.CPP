@@ -430,6 +430,7 @@ static void PushCompositeParams(void) {
             memcpy(sky + 16, GpuObjSunDir, sizeof(float) * 3);
             sky[19] = GpuWater_GetTime();
             GpuSky_GetFog(sky + 20, sky + 21);
+            sky[22] = GpuObjSceneryClaimed ? 1.0f : 0.0f;
             GpuSky_GetCamera(sky + 24);
             GpuSky_GetPlanet(sky + 28);
         }

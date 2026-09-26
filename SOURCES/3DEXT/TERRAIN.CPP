@@ -82,6 +82,228 @@ void DrawSkySeaZBuf() {
 }
 
 /*──────────────────────────────────────────────────────────────────────────*/
+/* The terrain the GPU draws, left unpainted by the software.
+
+   Outdoors the software fill of a terrain triangle the GPU covers is wanted for
+   one thing only: its depth, which DrawRecover reads to decide whether the hero
+   stands behind a hill (and the camera acts on that). So the triangle is kept
+   as it would have been filled, and its depth is filled in later, a tile at a
+   time, only where something asks for it: the box of a body DrawRecover checks.
+   A tile only chooses the triangles: each is filled whole, once, with the
+   filler and the clip window the terrain used, so the depth is the classic one
+   to the bit (clipped to the tile, a triangle would get new corners, rounded).
+   The depth buffer keeps the nearest of what is written into it, so filling
+   later does not change what ends up in it. */
+
+S32 TerrainGpuSkipFill = FALSE;
+
+#define DEPTH_TILE 32
+#define MAX_DEFERRED_TRIS (1 << 18)
+
+typedef struct {
+    Struc_Point P[3];
+} T_DEFERRED_TRI;
+
+static T_DEFERRED_TRI *s_deferred = NULL;
+static U8 *s_deferredDone = NULL; /* the triangle's depth has been filled */
+static S32 s_nbDeferred = 0;
+static S32 s_maxDeferred = 0;
+static S32 s_deferClip[4];        /* the clip window the terrain was filled in */
+static S32 s_tilesX = 0;
+static S32 s_tilesY = 0;
+static U8 *s_tileDone = NULL;   /* the tile's depth has been filled */
+static S32 *s_binStart = NULL;  /* per tile, first entry in s_binTris (tiles + 1) */
+static S32 *s_binTris = NULL;   /* triangles overlapping each tile, tile after tile */
+static S32 s_binCap = 0;
+static S32 s_binsBuilt = FALSE;
+static U8 *s_depthScratch = NULL; /* where the depth fill's colour goes */
+static size_t s_depthScratchSize = 0;
+
+S32 TerrainGpu_CanSkipFill(void) {
+    return TerrainGpuFastFill AND GpuObj_Active() AND GpuObjShadows AND PtrZBuffer != NULL;
+}
+
+static void ResetDeferredDepth(void) {
+    s_nbDeferred = 0;
+    s_binsBuilt = FALSE;
+}
+
+/* Keeps the triangle in Tab_Points for a later depth fill. FALSE when the list
+   is full: the caller fills it now. */
+static S32 DeferDepth(void) {
+    if (s_nbDeferred >= s_maxDeferred) {
+        if (s_maxDeferred >= MAX_DEFERRED_TRIS) {
+            return FALSE;
+        }
+        S32 grown = s_maxDeferred ? s_maxDeferred * 2 : 16384;
+        T_DEFERRED_TRI *list = (T_DEFERRED_TRI *)realloc(s_deferred, (size_t)grown * sizeof(T_DEFERRED_TRI));
+        if (list == NULL) {
+            return FALSE;
+        }
+        s_deferred = list;
+        U8 *done = (U8 *)realloc(s_deferredDone, (size_t)grown);
+        if (done == NULL) {
+            return FALSE;
+        }
+        s_deferredDone = done;
+        s_maxDeferred = grown;
+    }
+    if (s_nbDeferred == 0) {
+        s_deferClip[0] = ClipXMin;
+        s_deferClip[1] = ClipYMin;
+        s_deferClip[2] = ClipXMax;
+        s_deferClip[3] = ClipYMax;
+    }
+    /* A cell's textured triangle lies over its coloured one, corner for corner. */
+    if (s_nbDeferred > 0 AND !memcmp(s_deferred[s_nbDeferred - 1].P, Tab_Points, 3 * sizeof(Struc_Point))) {
+        return TRUE;
+    }
+    memcpy(s_deferred[s_nbDeferred].P, Tab_Points, 3 * sizeof(Struc_Point));
+    s_deferredDone[s_nbDeferred] = FALSE;
+    s_nbDeferred++;
+    s_binsBuilt = FALSE;
+    return TRUE;
+}
+
+static void TriTiles(const T_DEFERRED_TRI *t, S32 *tx0, S32 *ty0, S32 *tx1, S32 *ty1) {
+    S32 x0 = Min3(t->P[0].Pt_XE, t->P[1].Pt_XE, t->P[2].Pt_XE);
+    S32 y0 = Min3(t->P[0].Pt_YE, t->P[1].Pt_YE, t->P[2].Pt_YE);
+    S32 x1 = Max3(t->P[0].Pt_XE, t->P[1].Pt_XE, t->P[2].Pt_XE);
+    S32 y1 = Max3(t->P[0].Pt_YE, t->P[1].Pt_YE, t->P[2].Pt_YE);
+    *tx0 = x0 < 0 ? 0 : x0 / DEPTH_TILE;
+    *ty0 = y0 < 0 ? 0 : y0 / DEPTH_TILE;
+    *tx1 = x1 < 0 ? -1 : ade_min(x1 / DEPTH_TILE, s_tilesX - 1);
+    *ty1 = y1 < 0 ? -1 : ade_min(y1 / DEPTH_TILE, s_tilesY - 1);
+}
+
+/* Sorts the kept triangles into the tiles their boxes overlap. */
+static S32 BuildDepthBins(void) {
+    S32 tilesX = ((S32)ModeDesiredX + DEPTH_TILE - 1) / DEPTH_TILE;
+    S32 tilesY = ((S32)ModeDesiredY + DEPTH_TILE - 1) / DEPTH_TILE;
+    if (tilesX != s_tilesX OR tilesY != s_tilesY OR s_tileDone == NULL) {
+        free(s_tileDone);
+        free(s_binStart);
+        s_tilesX = tilesX;
+        s_tilesY = tilesY;
+        s_tileDone = (U8 *)malloc((size_t)(tilesX * tilesY));
+        s_binStart = (S32 *)malloc((size_t)(tilesX * tilesY + 1) * sizeof(S32));
+        if (s_tileDone == NULL OR s_binStart == NULL) {
+            free(s_tileDone);
+            free(s_binStart);
+            s_tileDone = NULL;
+            s_binStart = NULL;
+            s_tilesX = s_tilesY = 0;
+            return FALSE;
+        }
+    }
+    S32 tiles = tilesX * tilesY;
+    memset(s_tileDone, 0, (size_t)tiles);
+    memset(s_binStart, 0, (size_t)(tiles + 1) * sizeof(S32));
+
+    S32 total = 0;
+    for (S32 i = 0; i < s_nbDeferred; i++) {
+        S32 tx0, ty0, tx1, ty1;
+        TriTiles(&s_deferred[i], &tx0, &ty0, &tx1, &ty1);
+        for (S32 ty = ty0; ty <= ty1; ty++) {
+            for (S32 tx = tx0; tx <= tx1; tx++) {
+                s_binStart[ty * tilesX + tx + 1]++;
+                total++;
+            }
+        }
+    }
+    if (total > s_binCap) {
+        S32 *bins = (S32 *)realloc(s_binTris, (size_t)total * sizeof(S32));
+        if (bins == NULL) {
+            return FALSE;
+        }
+        s_binTris = bins;
+        s_binCap = total;
+    }
+    for (S32 t = 0; t < tiles; t++) {
+        s_binStart[t + 1] += s_binStart[t];
+    }
+    /* Fill each bin from its start, then shift the starts back. */
+    for (S32 i = 0; i < s_nbDeferred; i++) {
+        S32 tx0, ty0, tx1, ty1;
+        TriTiles(&s_deferred[i], &tx0, &ty0, &tx1, &ty1);
+        for (S32 ty = ty0; ty <= ty1; ty++) {
+            for (S32 tx = tx0; tx <= tx1; tx++) {
+                s_binTris[s_binStart[ty * tilesX + tx]++] = i;
+            }
+        }
+    }
+    for (S32 t = tiles; t > 0; t--) {
+        s_binStart[t] = s_binStart[t - 1];
+    }
+    s_binStart[0] = 0;
+    s_binsBuilt = TRUE;
+    return TRUE;
+}
+
+void TerrainGpu_EnsureDepth(S32 x0, S32 y0, S32 x1, S32 y1) {
+    if (s_nbDeferred == 0 OR Log == NULL) {
+        return;
+    }
+    if (!s_binsBuilt AND !BuildDepthBins()) {
+        return;
+    }
+    size_t frame = (size_t)ModeDesiredX * (size_t)ModeDesiredY;
+    if (s_depthScratchSize < frame) {
+        free(s_depthScratch);
+        s_depthScratch = (U8 *)malloc(frame);
+        s_depthScratchSize = s_depthScratch ? frame : 0;
+        if (s_depthScratch == NULL) {
+            return;
+        }
+    }
+    S32 tx0 = ade_max(x0, 0) / DEPTH_TILE;
+    S32 ty0 = ade_max(y0, 0) / DEPTH_TILE;
+    S32 tx1 = ade_min(x1 / DEPTH_TILE, s_tilesX - 1);
+    S32 ty1 = ade_min(y1 / DEPTH_TILE, s_tilesY - 1);
+    if (x1 < 0 OR y1 < 0 OR tx0 > tx1 OR ty0 > ty1) {
+        return;
+    }
+
+    /* The terrain's own filler, writing its colour where nobody looks. */
+    S32 clipX0 = ClipXMin, clipY0 = ClipYMin, clipX1 = ClipXMax, clipY1 = ClipYMax;
+    U32 bank = Fill_Bank;
+    void *log = Log;
+    Log = s_depthScratch;
+    Switch_Fillers(FILL_POLY_FOG_ZBUFFER);
+    ClipXMin = s_deferClip[0];
+    ClipYMin = s_deferClip[1];
+    ClipXMax = s_deferClip[2];
+    ClipYMax = s_deferClip[3];
+
+    for (S32 ty = ty0; ty <= ty1; ty++) {
+        for (S32 tx = tx0; tx <= tx1; tx++) {
+            S32 tile = ty * s_tilesX + tx;
+            if (s_tileDone[tile]) {
+                continue;
+            }
+            s_tileDone[tile] = TRUE;
+            for (S32 b = s_binStart[tile]; b < s_binStart[tile + 1]; b++) {
+                S32 t = s_binTris[b];
+                if (s_deferredDone[t]) {
+                    continue;
+                }
+                s_deferredDone[t] = TRUE;
+                Struc_Point points[3];
+                memcpy(points, s_deferred[t].P, sizeof(points));
+                Fill_Poly(POLY_FLAT, 0, 3, points);
+            }
+        }
+    }
+
+    Switch_Fillers(bank);
+    Log = log;
+    ClipXMin = clipX0;
+    ClipYMin = clipY0;
+    ClipXMax = clipX1;
+    ClipYMax = clipY1;
+}
+
+/*──────────────────────────────────────────────────────────────────────────*/
 
 void ClsTerrainZBuf() {
     SetClearColor((U8)FogCoul);
@@ -89,6 +311,7 @@ void ClsTerrainZBuf() {
     SetClearColor(0);
 
     memset(PtrZBuffer, 255, SIZE_Z_BUFFER); // Clear ZBuffer
+    ResetDeferredDepth();
 }
 
 /*──────────────────────────────────────────────────────────────────────────*/
@@ -99,6 +322,16 @@ void ClsTerrainZBuf() {
    sampling, the Gouraud table and the fog step that nobody sees. */
 static inline S32 TerrainFill(S32 type, S32 gpuCovers) {
     return (gpuCovers AND TerrainGpuFastFill) ? POLY_FLAT : type;
+}
+
+/* Fills the triangle in Tab_Points, or keeps it for its depth alone when the
+   GPU draws it and the scenery pass leaves such terrain unpainted. An animated
+   triangle is always filled: the water refresh wants to know it was drawn. */
+static inline S32 TerrainFillPoly(S32 type, S32 color, S32 gpuCovers, S32 animated) {
+    if (gpuCovers AND TerrainGpuSkipFill AND !animated AND DeferDepth()) {
+        return FALSE;
+    }
+    return Fill_Poly(TerrainFill(type, gpuCovers), color, 3, Tab_Points);
 }
 
 static inline void DrawFeuillePolyZBuf(S32 xi, S32 zi, T_SOMMET_ROT *ptrs) {
@@ -204,9 +437,7 @@ if (ptrh->Sens == 0) {
                     gpuCovers = TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag],
                                                color, NULL, FALSE, ptrh->SampleStep);
                 }
-                Fill_Poly(TerrainFill(ListTypePolygone[ptrh->PolyFlag], gpuCovers),
-                          color, 3,
-                          Tab_Points);
+                TerrainFillPoly(ListTypePolygone[ptrh->PolyFlag], color, gpuCovers, FALSE);
             }
 
             if (ptrh->TexFlag) {
@@ -236,7 +467,7 @@ if (ptrh->Sens == 0) {
                                                ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER,
                                                ptrh->SampleStep);
                 }
-                if (Fill_Poly(TerrainFill(type, gpuCovers), color, 3, Tab_Points)) {
+                if (TerrainFillPoly(type, color, gpuCovers, (ptrh->CodeJeu & 12) == 12)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
 
                         if (NbAniPoly < MaxPolySea - 1) {
@@ -304,9 +535,7 @@ if (ptrh->Sens == 0) {
                     gpuCovers = TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag],
                                                color, NULL, FALSE, ptrh->SampleStep);
                 }
-                Fill_Poly(TerrainFill(ListTypePolygone[ptrh->PolyFlag], gpuCovers),
-                          color, 3,
-                          Tab_Points);
+                TerrainFillPoly(ListTypePolygone[ptrh->PolyFlag], color, gpuCovers, FALSE);
             }
 
             if (ptrh->TexFlag) {
@@ -336,7 +565,7 @@ if (ptrh->Sens == 0) {
                                                ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER,
                                                ptrh->SampleStep);
                 }
-                if (Fill_Poly(TerrainFill(type, gpuCovers), color, 3, Tab_Points)) {
+                if (TerrainFillPoly(type, color, gpuCovers, (ptrh->CodeJeu & 12) == 12)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
                         if (NbAniPoly < MaxPolySea - 1) {
                             PtrAniPoly->X0 = (S16)Min3(x0, x2, x3);
@@ -403,9 +632,7 @@ if (ptrh->Sens == 0) {
                     gpuCovers = TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag],
                                                color, NULL, FALSE, ptrh->SampleStep);
                 }
-                Fill_Poly(TerrainFill(ListTypePolygone[ptrh->PolyFlag], gpuCovers),
-                          color, 3,
-                          Tab_Points);
+                TerrainFillPoly(ListTypePolygone[ptrh->PolyFlag], color, gpuCovers, FALSE);
             }
 
             if (ptrh->TexFlag) {
@@ -435,7 +662,7 @@ if (ptrh->Sens == 0) {
                                                ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER,
                                                ptrh->SampleStep);
                 }
-                if (Fill_Poly(TerrainFill(type, gpuCovers), color, 3, Tab_Points)) {
+                if (TerrainFillPoly(type, color, gpuCovers, (ptrh->CodeJeu & 12) == 12)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
                         if (NbAniPoly < MaxPolySea - 1) {
                             PtrAniPoly->X0 = (S16)Min3(x0, x1, x3);
@@ -503,9 +730,7 @@ if (ptrh->Sens == 0) {
                     gpuCovers = TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, ListTypePolygone[ptrh->PolyFlag],
                                                color, NULL, FALSE, ptrh->SampleStep);
                 }
-                Fill_Poly(TerrainFill(ListTypePolygone[ptrh->PolyFlag], gpuCovers),
-                          color, 3,
-                          Tab_Points);
+                TerrainFillPoly(ListTypePolygone[ptrh->PolyFlag], color, gpuCovers, FALSE);
             }
 
             if (ptrh->TexFlag) {
@@ -535,7 +760,7 @@ if (ptrh->Sens == 0) {
                                                ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER,
                                                ptrh->SampleStep);
                 }
-                if (Fill_Poly(TerrainFill(type, gpuCovers), color, 3, Tab_Points)) {
+                if (TerrainFillPoly(type, color, gpuCovers, (ptrh->CodeJeu & 12) == 12)) {
                     if (MaxPolySea AND(ptrh->CodeJeu & 12) == 12) { // hihi je suis un polygone animé...
                         if (NbAniPoly < MaxPolySea - 1) {
                             PtrAniPoly->X0 = (S16)Min3(x1, x2, x3);

@@ -249,6 +249,17 @@ void GpuObj_EndDraw(void);
 void GpuObj_BeginGroup(void);
 void GpuObj_EndGroup(void);
 
+/** The open group owns every pixel of the box [x0, x1] x [y0, y1] when it
+ *  ends, whether its fills changed the pixel or not: the exterior scenery, when
+ *  the software leaves the terrain the GPU draws unpainted. What the frame shows
+ *  there is then the GPU's nearest scene surface, until a later draw changes
+ *  the pixel. Ignored when the group ends without a draw. */
+void GpuObj_ClaimGroup(S32 x0, S32 y0, S32 x1, S32 y1);
+
+/** The last group to end claimed its box: the software frame under the scenery
+ *  is the clear colour, not a picture of the ground. */
+extern S32 GpuObjSceneryClaimed;
+
 /** Clears the atlas (the brick set changed with the room) and returns it, or
  *  NULL when it cannot be allocated. */
 U8 *GpuObj_AtlasReset(void);

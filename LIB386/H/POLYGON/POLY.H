@@ -171,6 +171,7 @@ extern U8 Fill_Logical_Palette[256];
 
 // -----------------------------------------------------------------------------
 void Switch_Fillers(U32 Bank);
+extern U32 Fill_Bank; ///< the bank Switch_Fillers last selected, to put it back after a detour
 
 S32 Fill_Poly(S32 Type_Poly, S32 Color_Poly, S32 Nb_Points,
               Struc_Point *Ptr_Points);
