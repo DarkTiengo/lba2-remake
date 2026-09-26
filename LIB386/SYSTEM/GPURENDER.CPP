@@ -36,6 +36,13 @@ void *GpuRender_CreateRenderer(void * /*sdlWindow*/) {
 void GpuRender_Shutdown(void) {
 }
 
+bool GpuRender_TakeFrame(void) {
+    return false;
+}
+
+void GpuRender_SetFrameFiltered(bool /*filtered*/) {
+}
+
 bool GpuRender_BeginComposite(void * /*sdlRenderer*/) {
     return false;
 }
@@ -116,6 +123,10 @@ static SDL_GPURenderState *s_composite = NULL;
 
 /* Fixed-size lookup data. */
 static SDL_GPUTexture *s_palette = NULL;
+static SDL_GPUTexture *s_frameIndex = NULL; ///< the software frame's palette indices (R8), when taken
+static bool s_frameTaken = false;           ///< the coming composite reads s_frameIndex
+static bool s_frameIndexed = false;         ///< the composite being prepared reads it
+static bool s_frameFiltered = false;
 static SDL_GPUTexture *s_lut = NULL;
 static SDL_GPUTexture *s_pages = NULL;
 static SDL_GPUTexture *s_atlas = NULL;
@@ -236,6 +247,7 @@ static void ReleaseFrameResources(void) {
     ReleaseTexture(&s_rtHalfNext);
     ReleaseTexture(&s_depth);
     ReleaseTexture(&s_tags);
+    ReleaseTexture(&s_frameIndex);
     free(s_tagScratch);
     s_tagScratch = NULL;
     free(s_tagUpload);
@@ -472,6 +484,8 @@ static void PushCompositeParams(void) {
         }
         acc[12] = s_rtHistory && GpuObjCapValid ? 1.0f : 0.0f;
         acc[13] = (float)(s_presentNumber % 1024u);
+        acc[14] = s_frameIndexed ? 1.0f : 0.0f;
+        acc[15] = s_frameFiltered ? 1.0f : 0.0f;
     }
     SDL_COMPILE_TIME_ASSERT(half_params, sizeof(params) <= sizeof(s_params));
     memcpy(s_params, params, sizeof(params));
@@ -505,15 +519,16 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     s_halfH = (th + 1) / 2;
     s_depth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, s_depthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, tw, th, 1);
     s_tags = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER, w, h, 1);
+    s_frameIndex = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER, w, h, 1);
     s_tagScratch = (float *)malloc((size_t)w * h * sizeof(float));
     s_tagUpload = (float *)malloc((size_t)w * h * sizeof(float));
     if (!s_objColor || !s_objId || !s_objLight || !s_objShadow || !s_objHeight || !s_depth || !s_tags ||
-        !s_tagScratch || !s_tagUpload) {
+        !s_frameIndex || !s_tagScratch || !s_tagUpload) {
         ReleaseFrameResources();
         return false;
     }
 
-    SDL_GPUTextureSamplerBinding bindings[7];
+    SDL_GPUTextureSamplerBinding bindings[9];
     bindings[0].texture = s_objColor;
     bindings[0].sampler = s_linear;
     bindings[1].texture = s_objId;
@@ -528,11 +543,15 @@ static bool EnsureFrameResources(U32 w, U32 h) {
     bindings[5].sampler = s_nearest;
     bindings[6].texture = s_rtHalf;
     bindings[6].sampler = s_nearest;
+    bindings[7].texture = s_frameIndex;
+    bindings[7].sampler = s_nearest;
+    bindings[8].texture = s_palette;
+    bindings[8].sampler = s_nearest;
 
     SDL_GPURenderStateCreateInfo stateInfo;
     SDL_zero(stateInfo);
     stateInfo.fragment_shader = s_compositeFrag;
-    stateInfo.num_sampler_bindings = 7;
+    stateInfo.num_sampler_bindings = 9;
     stateInfo.sampler_bindings = bindings;
     SDL_GPUBuffer *storage[2] = {s_bvhNodes, s_bvhTris};
     stateInfo.num_storage_buffers = 2;
@@ -669,11 +688,11 @@ static bool CreatePipeline(void) {
     s_terrainVert = CreateShader(GPUTERRAIN_vert_spv, GPUTERRAIN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 3);
     s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
-    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1, 2);
+    s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 10, 1, 2);
     /* The half-resolution pass: the composite's source built with HALF_PASS,
        bound as the composite is (a stand-in texture at the frame's slot). */
     s_fullscreenVert = CreateShader(FULLSCREEN_vert_spv, FULLSCREEN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
-    s_halfFrag = CreateShader(COMPOSITE_HALF_frag_spv, COMPOSITE_HALF_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 9, 1, 2);
+    s_halfFrag = CreateShader(COMPOSITE_HALF_frag_spv, COMPOSITE_HALF_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 11, 1, 2);
     if (!s_objVert || !s_terrainVert || !s_objFrag || !s_compositeFrag || !s_fullscreenVert || !s_halfFrag) {
         return false;
     }
@@ -1397,14 +1416,14 @@ static void RenderHalf(SDL_GPUCommandBuffer *cmd) {
         return;
     }
     SDL_BindGPUGraphicsPipeline(pass, s_pipelineHalf);
-    SDL_GPUTextureSamplerBinding bindings[9];
-    SDL_GPUTexture *const textures[9] = {s_objColor, s_objColor, s_objId, s_tags,     s_objLight,
-                                         s_objShadow, s_objHeight, s_objColor, s_rtHalf};
-    for (int i = 0; i < 9; i++) {
+    SDL_GPUTextureSamplerBinding bindings[11];
+    SDL_GPUTexture *const textures[11] = {s_objColor, s_objColor,  s_objId,     s_tags,    s_objLight, s_objShadow,
+                                          s_objHeight, s_objColor, s_frameIndex, s_palette, s_rtHalf};
+    for (int i = 0; i < 11; i++) {
         bindings[i].texture = textures[i];
-        bindings[i].sampler = (i == 0 || i == 1 || i == 8) ? s_linear : s_nearest;
+        bindings[i].sampler = (i == 0 || i == 1 || i == 10) ? s_linear : s_nearest;
     }
-    SDL_BindGPUFragmentSamplers(pass, 0, bindings, 9);
+    SDL_BindGPUFragmentSamplers(pass, 0, bindings, 11);
     SDL_GPUBuffer *storage[2] = {s_bvhNodes, s_bvhTris};
     SDL_BindGPUFragmentStorageBuffers(pass, 0, storage, 2);
     SDL_PushGPUFragmentUniformData(cmd, 0, s_params, s_paramsSize);
@@ -1887,7 +1906,19 @@ void GpuRender_Shutdown(void) {
     s_device = NULL;
 }
 
+bool GpuRender_TakeFrame(void) {
+    s_frameTaken = GpuObjAvailable && GpuObjEnabled && s_renderer != NULL && Log != NULL &&
+                   EnsureFrameResources(ModeDesiredX, ModeDesiredY);
+    return s_frameTaken;
+}
+
+void GpuRender_SetFrameFiltered(bool filtered) {
+    s_frameFiltered = filtered;
+}
+
 bool GpuRender_BeginComposite(void *sdlRenderer) {
+    s_frameIndexed = s_frameTaken;
+    s_frameTaken = false;
     if (!GpuObjAvailable || !GpuObjEnabled || sdlRenderer != s_renderer || Log == NULL) {
         return false;
     }
@@ -1947,7 +1978,8 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
        upscaled: the pixel art filter runs there. */
     const bool boxEmpty = box[2] <= box[0] || box[3] <= box[1];
     const bool lastEmpty = s_tagBox[2] <= s_tagBox[0] || s_tagBox[3] <= s_tagBox[1];
-    if (count == 0 && !s_upscale && lastEmpty && s_tagsCleared && !GpuStorm_Active()) {
+    /* A frame taken as indices has no other way to the screen. */
+    if (count == 0 && !s_upscale && lastEmpty && s_tagsCleared && !GpuStorm_Active() && !s_frameIndexed) {
         return false; /* no rays either: count is 0 */
     }
 
@@ -1986,6 +2018,9 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     memcpy(s_tagBox, box, sizeof(s_tagBox));
     U32 tagBytes = upW * upH * sizeof(float);
     U32 need = (U32)SDL_arraysize(s_pagePtrs) * 65536;
+    if (s_frameIndexed && w * h > need) {
+        need = w * h;
+    }
     const U32 atlasBytes = (U32)GPUOBJ_ATLAS_SIZE * GPUOBJ_ATLAS_SIZE * 2;
     const bool atlasUpload = GpuObjAtlasDirty && GpuObjAtlas != NULL;
     if (atlasUpload && atlasBytes > need)
@@ -2040,6 +2075,9 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         palette[i * 4 + 3] = 0xFF;
     }
     UploadTexture(copy, s_palette, 0, 0, 0, 256, 1, palette, sizeof(palette));
+    if (s_frameIndexed) {
+        UploadTexture(copy, s_frameIndex, 0, 0, 0, w, h, Log, w * h);
+    }
     if (s_lutRows > 0) {
         UploadTexture(copy, s_lut, 0, 0, 0, 256, s_lutRows, s_lutData, s_lutRows * 256);
     }

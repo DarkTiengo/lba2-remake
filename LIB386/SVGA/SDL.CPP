@@ -33,6 +33,7 @@ S32 screenLockCount = 0;
 bool frameDirty = false;
 static PrePresentFn s_prePresent = NULL;
 static PrePresentFn s_overlayPrePresent = NULL;
+static bool (*s_frameQuery)(void) = NULL;
 static PresentTimingFn s_presentBegin = NULL;
 static PresentTimingFn s_presentEnd = NULL;
 static U32 paletteLUT[PAL_MAX_COLORS];
@@ -248,6 +249,10 @@ void SetPrePresentCallback(PrePresentFn fn) {
     s_prePresent = fn;
 }
 
+void SetPrePresentFrameQuery(bool (*fn)(void)) {
+    s_frameQuery = fn;
+}
+
 void SetOverlayPrePresentCallback(PrePresentFn fn) {
     s_overlayPrePresent = fn;
 }
@@ -298,6 +303,18 @@ static void CommitPresentTarget(void * /*pixels*/, U32 /*pitch*/) {
 static void PresentFrame() {
     assert(sdlPalette != NULL);
     assert(Log != NULL);
+
+    /* The GPU renderer takes the frame as the game drew it, palette indices,
+       and looks them up itself: no conversion to colours here and no upload by
+       the renderer (which made a Vulkan buffer every frame for it). Unless an
+       overlay is about to draw on the converted frame. */
+    if (s_frameQuery != NULL && !s_frameQuery() && PresentRendererFrameIndexed()) {
+        if (s_prePresent)
+            s_prePresent(NULL, 0, 0, 0, NULL);
+        if (s_overlayPrePresent)
+            s_overlayPrePresent(NULL, 0, 0, 0, NULL);
+        return;
+    }
 
     void *stagingPixels;
     U32 stagingPitch;

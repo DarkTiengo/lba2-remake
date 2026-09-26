@@ -1246,6 +1246,10 @@ static void Console_Draw(void) {
     }
 }
 
+bool Console_WantsFrame(void) {
+    return s_console_open || (s_screenshot_path[0] && !s_screenshot_png);
+}
+
 void Console_PrePresent(U32 *frameBuffer, U32 pitch, U32 width, U32 height, const U8 *palette_rgb) {
     U32 y, x;
     /* Screenshot without console: PNG is done by game (SavePNG); only PPM here. */

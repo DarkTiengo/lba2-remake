@@ -2193,6 +2193,11 @@ static bool ProfileNameOrExit(const char *name, const char *source) {
  * reached. Executing a console command from here is what the console itself
  * already does when it is open during a modal, so it is no new exposure.
  */
+/* Whether a pre-present overlay draws on the next frame (SetPrePresentFrameQuery). */
+static bool OverlaysWantFrame(void) {
+    return Console_WantsFrame() || TouchOverlay_WantsFrame();
+}
+
 static void ControlPrePresent(U32 *frameBuffer, U32 pitch, U32 width, U32 height,
                               const U8 *palette_rgb) {
     Control_ServiceListen();
@@ -2520,6 +2525,7 @@ int main(int argc, char *argv[]) {
     /* Console hooks: keyboard toggle/input interception + final-frame overlay compositing. */
     SetEventFilter(Console_FeedEvent);
     SetPrePresentCallback(ControlPrePresent);
+    SetPrePresentFrameQuery(OverlaysWantFrame);
 
     /* Touch virtual gamepad (Android / mobile). Init before Perftrace so
        timing callbacks nest correctly. No-op on non-Android builds.

@@ -41,6 +41,8 @@ void Console_PrintColored(int colour, const char *fmt, ...);
 
 /** Called from video layer pre-present callback. Overlays console onto ARGB frameBuffer if open. */
 void Console_PrePresent(U32 *frameBuffer, U32 pitch, U32 width, U32 height, const U8 *palette_rgb);
+/** Console_PrePresent will draw on (or save) the next frame. */
+bool Console_WantsFrame(void);
 
 /** Event filter: call from ManageEvents. Returns 1 if event was consumed (toggle or console input). */
 int Console_FeedEvent(const void *sdlEvent);

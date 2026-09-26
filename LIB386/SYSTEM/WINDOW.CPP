@@ -182,6 +182,7 @@ static void PresentCurrentTexture() {
     if (SDL_GetRenderLogicalPresentationRect(sdlRenderer, &dst)) {
         const bool shrink = (float)windowSurfaceResX > dst.w + 0.5f || (float)windowSurfaceResY > dst.h + 0.5f;
         SDL_SetTextureScaleMode(sdlTexture, shrink ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+        GpuRender_SetFrameFiltered(shrink);
     }
 
     Window_FlushPresent();
@@ -460,6 +461,16 @@ void PresentRendererFrame(const void *pixels, U32 pitch) {
     Window_FlushPresent(); /* the pending frame shows this texture */
     SDL_UpdateTexture(sdlTexture, NULL, pixels, (int)pitch);
     PresentCurrentTexture();
+}
+
+bool PresentRendererFrameIndexed(void) {
+    assert(sdlRenderer != NULL);
+    SyncRendererKind();
+    if (!rendererIsGpu || !GpuRender_TakeFrame()) {
+        return false;
+    }
+    PresentCurrentTexture();
+    return true;
 }
 
 bool LockRendererTexture(void **pixels, int *pitch) {

@@ -61,6 +61,10 @@ void Window_DeferPresent(bool defer);     ///< the presents until the next call 
 void Window_FlushPresent(void);           ///< presents the pending frame, if any
 void Window_FlushStalePresent(void);      ///< presents it if it has waited too long (a loop that stopped presenting)
 void PresentRendererFrame(const void *pixels, U32 pitch);
+/** Presents with the GPU renderer reading the software frame (Log) itself;
+ *  the renderer's texture is not touched. FALSE when the GPU renderer is not
+ *  the one presenting: the caller converts and presents as usual. */
+bool PresentRendererFrameIndexed(void);
 bool LockRendererTexture(void **pixels, int *pitch);
 void UnlockAndPresentRendererTexture();
 void WindowToSurfaceCoords(S32 windowX, S32 windowY, S32 *surfaceX, S32 *surfaceY);

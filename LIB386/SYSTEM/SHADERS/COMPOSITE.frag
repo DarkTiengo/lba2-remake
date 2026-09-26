@@ -23,13 +23,18 @@ layout(set = 2, binding = 7) uniform sampler2D u_rtHalf;
 
 /* The frame's bodies for sun rays (GPUBVH.H): nodes are two vec4 (min, first;
    max, leaf count), triangles three (a vertex, two edges). */
+/* The software frame as the game drew it, palette indices (R8), and the
+   palette: when history.z says so, the frame is read from these, and u_frame
+   (the texture the renderer draws with) holds nothing. */
+layout(set = 2, binding = 8) uniform sampler2D u_frameIndex;
+layout(set = 2, binding = 9) uniform sampler2D u_framePalette;
 #ifdef HALF_PASS
 /* The previous present's traced shadows and occlusion (s_rtHalf before this
    pass replaces it), a view distance in alpha: what the pass accumulates into. */
-layout(set = 2, binding = 8) uniform sampler2D u_rtHistory;
-#define BVH_BINDING 9
+layout(set = 2, binding = 10) uniform sampler2D u_rtHistory;
+#define BVH_BINDING 11
 #else
-#define BVH_BINDING 8
+#define BVH_BINDING 10
 #endif
 layout(std430, set = 2, binding = BVH_BINDING) readonly buffer BvhNodes {
     vec4 bvhNodes[];
@@ -80,7 +85,8 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 prevRow0;   // this present's scene space into the previous present's: rows, translation in w
     vec4 prevRow1;
     vec4 prevRow2;
-    vec4 history;    // x 1 when the previous present's traced result can be reused, y the present's number
+    vec4 history;    // x 1 when the previous present's traced result can be reused, y the present's number,
+                     // z 1 when the frame is u_frameIndex's, w 1 when it is shown smaller than its pixels (filtered)
 };
 
 // --- Flames ----------------------------------------------------------------------
@@ -408,8 +414,41 @@ vec2 SoftShadow(vec2 uv) {
 // --- Software frame -----------------------------------------------------------
 ivec2 g_frameSize;
 
+/* Software frame pixel q, in its own pixels. */
+vec3 FrameTexel(ivec2 q) {
+    if (history.z > 0.5) {
+        int index = int(texelFetch(u_frameIndex, q, 0).r * 255.0 + 0.5);
+        return texelFetch(u_framePalette, ivec2(index, 0), 0).rgb;
+    }
+    return texelFetch(u_frame, q, 0).rgb;
+}
+
+ivec2 FrameSize() {
+    return history.z > 0.5 ? textureSize(u_frameIndex, 0) : textureSize(u_frame, 0);
+}
+
+/* The frame at uv: its nearest pixel, or filtered between four when it is shown
+   smaller than it is (what the renderer's sampler did). */
+vec3 FrameAt(vec2 uv) {
+    if (history.z < 0.5) {
+        return texture(u_frame, uv).rgb;
+    }
+    ivec2 size = textureSize(u_frameIndex, 0);
+    if (history.w < 0.5) {
+        return FrameTexel(clamp(ivec2(uv * vec2(size)), ivec2(0), size - ivec2(1)));
+    }
+    vec2 at = uv * vec2(size) - 0.5;
+    ivec2 base = ivec2(floor(at));
+    vec2 f = at - vec2(base);
+    vec3 a = FrameTexel(clamp(base, ivec2(0), size - ivec2(1)));
+    vec3 b = FrameTexel(clamp(base + ivec2(1, 0), ivec2(0), size - ivec2(1)));
+    vec3 c = FrameTexel(clamp(base + ivec2(0, 1), ivec2(0), size - ivec2(1)));
+    vec3 d = FrameTexel(clamp(base + ivec2(1, 1), ivec2(0), size - ivec2(1)));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
 vec3 Src(ivec2 p) {
-    return texelFetch(u_frame, clamp(p, ivec2(0), g_frameSize - ivec2(1)), 0).rgb;
+    return FrameTexel(clamp(p, ivec2(0), g_frameSize - ivec2(1)));
 }
 
 /* Perceptual distance used by xBR, on a 0..255-ish luma-weighted scale. */
@@ -554,7 +593,7 @@ vec3 Deband(vec2 uv, vec3 color) {
 }
 
 vec3 SoftwarePixel(vec2 uv) {
-    vec3 c = pixelFilter > 0.0 ? XbrUpscale(uv) : texture(u_frame, uv).rgb;
+    vec3 c = pixelFilter > 0.0 ? XbrUpscale(uv) : FrameAt(uv);
     return deband > 0.0 ? Deband(uv, c) : c;
 }
 
@@ -1017,8 +1056,8 @@ bool IsSky(ivec2 p, bool match, float tag) {
             if (tag > 0.0) {
                 return true;
             }
-            ivec2 fs = textureSize(u_frame, 0);
-            vec3 soft = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
+            ivec2 fs = FrameSize();
+            vec3 soft = FrameTexel(clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)));
             vec3 gpu = texelFetch(u_objColor, p, 0).rgb;
             vec3 d = abs(soft - gpu);
             if (max(max(d.r, d.g), d.b) < 0.12) {
@@ -1043,8 +1082,8 @@ bool IsSky(ivec2 p, bool match, float tag) {
             return true;
         }
     }
-    ivec2 fs = textureSize(u_frame, 0);
-    vec3 f = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
+    ivec2 fs = FrameSize();
+    vec3 f = FrameTexel(clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)));
     vec3 diff = abs(f - skyFog.rgb);
     return max(max(diff.r, diff.g), diff.b) < 0.07;
 }
@@ -1279,8 +1318,8 @@ vec3 FogToSky(vec3 c, ivec2 p) {
        clear colour, which is the fog's, and says nothing. */
     vec3 diff = abs(c - skyFog.rgb);
     if (skyFogRange.z < 0.5) {
-        ivec2 fs = textureSize(u_frame, 0);
-        vec3 soft = texelFetch(u_frame, clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)), 0).rgb;
+        ivec2 fs = FrameSize();
+        vec3 soft = FrameTexel(clamp(ivec2(v_uv * vec2(fs)), ivec2(0), fs - ivec2(1)));
         diff = min(diff, abs(soft - skyFog.rgb));
     }
     float fogged = 1.0 - smoothstep(0.02, 0.09, max(max(diff.r, diff.g), diff.b));
@@ -1391,8 +1430,8 @@ void main() {
 }
 #else
 void main() {
-    g_frameSize = textureSize(u_frame, 0);
-    vec4 frame = texture(u_frame, v_uv) * v_color;
+    g_frameSize = FrameSize();
+    vec4 frame = history.z > 0.5 ? vec4(FrameAt(v_uv), 1.0) * v_color : texture(u_frame, v_uv) * v_color;
 
     /* Tags are per software-frame pixel; the GPU targets may be larger (the
        window's resolution), so each is addressed in its own texels. */

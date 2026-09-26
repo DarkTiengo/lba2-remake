@@ -630,6 +630,10 @@ static void DrawLabelCentred(U32 *fb, S32 pitchPixels, S32 x0, S32 y0, S32 x1, S
     DrawStringARGB(fb, pitchPixels, tx, ty, label, 255, 255, 255, alpha, width, height);
 }
 
+bool TouchOverlay_WantsFrame(void) {
+    return CurrentLevel() != OVL_OFF;
+}
+
 void TouchOverlay_Render(U32 *frameBuffer, U32 pitch, U32 width, U32 height,
                          const U8 *palette_rgb) {
     (void)palette_rgb;

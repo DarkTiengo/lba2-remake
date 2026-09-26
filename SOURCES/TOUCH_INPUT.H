@@ -55,6 +55,8 @@ S32 TouchOverlay_HandleEvent(const void *sdlEvent);
 
 /* Draw the semi-transparent overlay onto the ARGB framebuffer. Called from
  * the PrePresent chain. Parameters match the PrePresentFn signature. */
+/** TouchOverlay_Render will draw on the next frame. */
+bool TouchOverlay_WantsFrame(void);
 void TouchOverlay_Render(U32 *frameBuffer, U32 pitch, U32 width, U32 height,
                          const U8 *palette_rgb);
 

@@ -56,6 +56,12 @@ void SetPrePresentCallback(PrePresentFn fn);
  *  overlay. Same signature as PrePresentFn. */
 void SetOverlayPrePresentCallback(PrePresentFn fn);
 
+/** Whether the pre-present callbacks will draw on the next frame. When they
+ *  will not, and the GPU renderer composites, the frame goes to the GPU as its
+ *  palette indices and the callbacks are called with a NULL frame buffer (they
+ *  still get their per-present service). NULL: they always will. */
+void SetPrePresentFrameQuery(bool (*fn)(void));
+
 /** Optional timing taps around the present path (palette LUT scan + texture upload + GL submit + vsync wait).
     Both callbacks must be set together (or both NULL); called at most once per UnlockVideoSurface. */
 typedef void (*PresentTimingFn)(void);

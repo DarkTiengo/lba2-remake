@@ -28,6 +28,15 @@ void GpuRender_Shutdown(void);
 
 /** Renders the captured bodies and, when any pixel shows one, arms the
  *  composite state on the renderer. Returns TRUE when EndComposite is owed. */
+/** The next composite reads the software frame itself: Log's palette indices,
+ *  sent as they are and looked up in the palette by the composite, instead of
+ *  a frame the CPU converted to colours and the renderer uploaded. FALSE when
+ *  the GPU renderer cannot composite now; the caller converts as before. */
+bool GpuRender_TakeFrame(void);
+
+/** The frame is shown smaller than its pixels: read it filtered. */
+void GpuRender_SetFrameFiltered(bool filtered);
+
 bool GpuRender_BeginComposite(void *sdlRenderer);
 void GpuRender_EndComposite(void *sdlRenderer);
 
