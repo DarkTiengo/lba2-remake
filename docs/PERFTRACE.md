@@ -176,6 +176,13 @@ about.
 Adding a new phase: bump `PERFTRACE_PHASE_COUNT` in `PERFTRACE.H`, add the
 enum entry, and the dump format auto-includes the new column.
 
+Set `LBA2_PERFTRACE_CPU=1` to measure the game thread's CPU time instead of the
+wall clock (Linux, Android and MinGW builds). The scenery is the engine's own
+arithmetic and then reads the same across runs even while something else uses
+the machine; the present includes waiting on the driver, and in this mode reports
+only what the thread spent, not how long it waited. The measurements in
+[the retained-scenery plan](plan/GPU_SCENE_RETENTION.md) are taken this way.
+
 ## What perftrace is not
 
 - **Not a profiler.** It tells you which *phase* of the frame is heavy, not which

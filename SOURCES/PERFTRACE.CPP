@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define PERFTRACE_RING_SIZE 256
 
@@ -40,11 +41,31 @@ static U64 s_capture_start_ticks;
 static U64 s_capture_last_ticks;
 static U64 s_total_frames;
 
+/* LBA2_PERFTRACE_CPU=1 measures the game thread's CPU time instead of the wall
+   clock. A phase that is the engine's own arithmetic (the scenery) then reads
+   the same twice on a machine that is doing something else meanwhile; a phase
+   that waits on the driver (the present) reads what the thread spent, not how
+   long it waited. */
+static int s_threadCpu = -1;
+
 static U64 perf_now(void) {
+#ifdef CLOCK_THREAD_CPUTIME_ID
+    if (s_threadCpu < 0) {
+        const char *env = getenv("LBA2_PERFTRACE_CPU");
+        s_threadCpu = env != NULL && env[0] == '1';
+    }
+    if (s_threadCpu) {
+        struct timespec ts;
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+        return (U64)ts.tv_sec * 1000000000ULL + (U64)ts.tv_nsec;
+    }
+#endif
     return (U64)SDL_GetPerformanceCounter();
 }
 
 static U64 ticks_to_us(U64 ticks) {
+    if (s_threadCpu > 0)
+        return ticks / 1000ULL;
     if (s_freq == 0)
         return 0;
     return (ticks * 1000000ULL) / s_freq;
