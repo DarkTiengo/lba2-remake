@@ -540,6 +540,10 @@ static bool EnsureVertexBuffer(U32 size) {
         SDL_ReleaseGPUBuffer(s_device, s_vertexBuffer);
         s_vertexBuffer = NULL;
     }
+    /* The new buffer holds nothing of the mirror, and may well come back at the
+       old one's address, so the pointer cannot be what says so. */
+    s_mirroredBuffer = NULL;
+    s_mirroredVerts = 0;
     U32 capacity = s_vertexCapacity ? s_vertexCapacity : (1u << 20);
     while (capacity < size) {
         capacity *= 2;
