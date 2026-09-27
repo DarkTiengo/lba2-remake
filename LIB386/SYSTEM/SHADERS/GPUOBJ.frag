@@ -128,6 +128,7 @@ const int FLAG_EMISSIVE = 8;
 const int FLAG_WATER = 16;
 const int FLAG_SKY = 32;
 const int FLAG_WATER_TERRAIN = 64;
+const int FLAG_GRASS = 512;
 
 vec3 Pal(int i) {
     return texelFetch(u_palette, ivec2(i & 255, 0), 0).rgb;
@@ -578,7 +579,9 @@ void main() {
     bool baked = (Flags() & FLAG_BAKED) != 0 && !water;
     /* One- and two-step R8 alpha markers let the composite find water edges
        without another full-resolution render target. */
-    float material = water ? (1.0 / 255.0) : (sky ? (2.0 / 255.0) : clamp(emissive, 0.0, 1.0));
+    float material = water ? (1.0 / 255.0)
+                           : (sky ? (2.0 / 255.0)
+                                  : ((Flags() & FLAG_GRASS) != 0 ? (4.0 / 255.0) : clamp(emissive, 0.0, 1.0)));
     o_light = vec4(min(DynamicLight(v_vpos.xyz, surfaceNormal, !baked), vec3(2.0)) * 0.5, material);
     if (!sky) {
         o_shadow = vec4(0.0, 0.0, PackDistance(v_vpos.xyz, (Flags() & FLAG_ISO) != 0));

@@ -159,8 +159,8 @@ once a cube, and the CPU's grid is placed only where the game asks for depth (12
 Then the decor of the horizon's cubes: kept on the GPU as models, placed by a rotation and an
 origin a draw, its depth drawn in only where `DrawRecover` asks; and the sea's 8 x 8 mesh, cut by
 the vertex shader from a tile's four corners. On the Release build at 720p the scenery phase went
-from 4.85 to 2.78 ms, the vertices uploaded a present from 128 000 to 27 000, and the frame from
-13.5 to 9.6 ms. What is left of the scenery phase is the current cube's decor (kept in software
+from 4.19 to 2.78 ms, the vertices uploaded a present from 128 000 to 27 000, and the frame from
+12.2 to 9.8 ms. What is left of the scenery phase is the current cube's decor (kept in software
 for `AdjustShadowDecors`), the group's tags and the copy into Screen, the grass's tufts; of the
 present, the tag scan (0.7 ms). The frame is now bound by the GPU: most of the present is the wait
 for it.

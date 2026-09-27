@@ -75,7 +75,7 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 stormGroundX; // xyz the world's X axis in scene space, w the camera's world X
     vec4 stormGroundZ; // and its Z axis, w the camera's world Z
     vec4 skyFog;     // rgb the fog colour at the horizon, w: 1 the GPU draws the sky, 2 above the clouds
-    vec4 skyUp;      // xyz world up in scene space, w daylight
+    vec4 skyUp;      // xyz world up in scene space (always), w daylight
     vec4 skyX;       // xyz the world's X axis, w cloud cover
     vec4 skyZ;       // xyz the world's Z axis, w storm
     vec4 skySun;     // xyz toward the sun, w seconds
@@ -304,20 +304,35 @@ vec3 ScenePoint(ivec2 q, float d) {
 
 /* The surface under pixel p: its scene point and a normal from the neighbours
    on the same surface (the nearer in distance on each axis), facing the camera. */
+/* A grass blade (GPUOBJ.frag marks it 4/255): too thin for its neighbours to
+   say which way it faces. */
+bool GrassMarker(float alpha) {
+    return alpha >= 0.013 && alpha < 0.018;
+}
+
 bool SurfaceAt(ivec2 p, out vec3 pos, out vec3 n) {
     float d = UnpackDistance(p);
     if (d <= 0.0) {
         return false;
     }
     pos = ScenePoint(p, d);
+    /* A blade takes the light of the ground it grows from: its normal is the
+       world's up, and its rays start above it, as the ground's would. Blades
+       are not in the hierarchy; a normal made from the blades and the ground
+       around it pointed anywhere, and its rays started inside the hill. */
+    if (GrassMarker(texelFetch(u_objLight, p, 0).a)) {
+        n = normalize(skyUp.xyz);
+        return true;
+    }
     ivec2 size = textureSize(u_objShadow, 0);
     vec3 axis[2];
     for (int a = 0; a < 2; a++) {
         ivec2 step = a == 0 ? ivec2(2, 0) : ivec2(0, 2);
         ivec2 qa = clamp(p + step, ivec2(0), size - ivec2(1));
         ivec2 qb = clamp(p - step, ivec2(0), size - ivec2(1));
-        float da = UnpackDistance(qa);
-        float db = UnpackDistance(qb);
+        /* The ground between blades is made from the ground only. */
+        float da = GrassMarker(texelFetch(u_objLight, qa, 0).a) ? -1.0 : UnpackDistance(qa);
+        float db = GrassMarker(texelFetch(u_objLight, qb, 0).a) ? -1.0 : UnpackDistance(qb);
         bool useA = da > 0.0 && (db <= 0.0 || abs(da - d) <= abs(db - d));
         if (!useA && db <= 0.0) {
             axis[a] = vec3(0.0);

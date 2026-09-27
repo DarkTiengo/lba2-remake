@@ -445,6 +445,8 @@ static void PushCompositeParams(void) {
         float *sky = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12 + 12 + 4 +
                      RT_MAX_LIGHTS * 4 + 8 + GPUSTORM_UNIFORM_FLOATS;
         const S32 fog = GpuSky_FogIndex();
+        /* Up is the rays' too (a grass blade takes the ground's normal). */
+        memcpy(sky + 4, GpuObjUpDir, sizeof(float) * 3);
         if (fog >= 0 && GpuObjSunExterior) {
             const U32 c = GetVideoPaletteLUT()[fog];
             const float storm = GpuSky_Storm();
