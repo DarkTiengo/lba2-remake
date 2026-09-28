@@ -68,7 +68,9 @@ extern S32 AffGpuSuspended;
 
 /** A decor body of the scenery placed as BodyDisplay(x, y, z, 0, beta, 0, obj)
  *  would place it, drawn by the GPU from the model it keeps (index the body's
- *  number in the island's objects). 1: drawn, box the screen box it may cover;
+ *  number in the island's objects; island names the objects' file, and the
+ *  models kept are dropped when it changes). While GpuObjTreeModel is set the
+ *  model is a tree (GPUTREE.H). 1: drawn, box the screen box it may cover;
  *  0: out of the clip window, nothing to draw; -1: not for the GPU to draw
  *  alone, BodyDisplay is still needed. */
 S32 AffGpu_DecorDraw(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta, S32 box[4]);

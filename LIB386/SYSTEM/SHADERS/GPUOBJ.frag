@@ -129,6 +129,7 @@ const int FLAG_WATER = 16;
 const int FLAG_SKY = 32;
 const int FLAG_WATER_TERRAIN = 64;
 const int FLAG_GRASS = 512;
+const int FLAG_FOLIAGE = 4096;
 
 vec3 Pal(int i) {
     return texelFetch(u_palette, ivec2(i & 255, 0), 0).rgb;
@@ -221,6 +222,18 @@ vec4 ProceduralFire(vec2 local) {
     return vec4(c * 1.15, smoothstep(0.06, 0.18, heat));
 }
 
+/* Value noise over the tree's leaves (v_uv.zw, where a leaf lies on it). */
+float LeafNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = fract(sin(dot(i, vec2(127.1, 311.7))) * 43758.5453);
+    float b = fract(sin(dot(i + vec2(1.0, 0.0), vec2(127.1, 311.7))) * 43758.5453);
+    float c = fract(sin(dot(i + vec2(0.0, 1.0), vec2(127.1, 311.7))) * 43758.5453);
+    float d = fract(sin(dot(i + vec2(1.0, 1.0), vec2(127.1, 311.7))) * 43758.5453);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
 float ShadeValue(out float spec) {
     if ((Flags() & FLAG_BAKED) != 0) {
         /* Authored intensity, interpolated across the polygon. */
@@ -240,6 +253,15 @@ float ShadeValue(out float spec) {
     vec3 h = normalize(l + view);
     spec = pow(max(dot(n, h), 0.0), 28.0) * step(0.0, ndl);
 
+    if ((Flags() & FLAG_FOLIAGE) != 0) {
+        /* Leaves: light wraps round the crown, which is never lit to a hard
+           terminator, and clumps of them sit a little lighter or darker than
+           their neighbours, within the palette's own ramp. No gloss. */
+        spec *= 0.15;
+        float wrapped = clamp((ndl + 0.5) / 1.5, 0.0, 1.0);
+        float tuft = (LeafNoise(v_uv.zw / 240.0) - 0.5) * 1.0;
+        return clamp(v_normal.w * wrapped + tuft, 0.0, 15.0);
+    }
     return clamp(v_normal.w * max(ndl, 0.0), 0.0, 15.0);
 }
 
@@ -331,6 +353,11 @@ vec3 GlobalLight(vec3 color, vec3 normal) {
     float rim = pow(1.0 - clamp(dot(n, view), 0.0, 1.0), 3.0);
     float behind = clamp(dot(l, -view) * 0.6 + 0.4, 0.0, 1.0);
     color += sunColor.rgb * rim * behind * sunColor.w * (0.4 + 0.6 * up);
+    if ((Flags() & FLAG_FOLIAGE) != 0) {
+        /* The sun behind a crown shines through its leaves, in their colour. */
+        float through = pow(clamp(dot(l, -view), 0.0, 1.0), 4.0) * (1.0 - lit);
+        color += color * sunColor.rgb * through * 0.9 * sunColor.w;
+    }
     return color;
 }
 

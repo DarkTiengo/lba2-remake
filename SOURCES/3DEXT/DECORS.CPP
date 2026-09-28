@@ -3,6 +3,8 @@
 #include <SVGA/GPUOBJ.H>
 #include <OBJECT/AFF_GPU.H>
 #include "TERRAIN_GPU.H"
+#include "TREES.H"
+#include <SVGA/GPUTREE.H>
 
 /*══════════════════════════════════════════════════════════════════════════*
 		      █▀▀▀▄ █▀▀▀▀ █▀▀▀▀ █▀▀▀█ █▀▀▀█ ██▀▀▀
@@ -385,6 +387,17 @@ void DecorsGpu_EnsureDepth(S32 x0, S32 y0, S32 x1, S32 y1) {
     ClipYMax = clip[3];
 }
 
+/* The island's model file, for the GPU's model store: two files share an
+   island's number (Citadel Island before and after the storm) and number their
+   models differently. */
+static S32 IslandFileKey(void) {
+    U32 h = 2166136261u;
+    for (const char *c = IslandName; *c != 0; c++) {
+        h = (h ^ (U32)(*c >= 'A' && *c <= 'Z' ? *c - 'A' + 'a' : *c)) * 16777619u;
+    }
+    return (S32)(h & 0x7FFFFFFF);
+}
+
 /* Leaves the decor to the GPU when it can draw it alone: TRUE when nothing is
    left for BodyDisplay to do. */
 static S32 DecorToGpu(T_DECORS *ptrobj) {
@@ -394,7 +407,7 @@ static S32 DecorToGpu(T_DECORS *ptrobj) {
     const S32 index = (S32)(ptrobj->Body & 0xFFFF);
     const S32 beta = ptrobj->Beta & 0xFFFF;
     S32 box[4];
-    const S32 drawn = AffGpu_DecorDraw(Island, index, HQR_Get(HQR_Isle_Obj, index), ptrobj->Xworld,
+    const S32 drawn = AffGpu_DecorDraw(IslandFileKey(), index, HQR_Get(HQR_Isle_Obj, index), ptrobj->Xworld,
                                        ptrobj->Yworld, ptrobj->Zworld, beta, box);
     if (drawn < 0) {
         return FALSE;
@@ -534,6 +547,13 @@ void AffichageObjetDecorsZBuf(void) {
         /* Tell the GPU capture when this decor is a lamp: its bright glass glows. */
         GpuObjLampModel = IsLampModel(Island, (S32)(ptrobj->Body & 0xFFFF));
         GpuObjLampPalette = PtrPal;
+        /* And when it is a tree: its leaves are shaded as foliage, it sways. */
+        U32 foliage = 0;
+        if (Trees_Find((S32)(ptrobj->Body & 0xFFFF), &foliage)) {
+            GpuTree_Begin(foliage, ptrobj->Xworld, ptrobj->Zworld);
+        } else {
+            GpuTree_End();
+        }
         if (DecorToGpu(ptrobj)) {
             continue;
         }
@@ -551,6 +571,7 @@ void AffichageObjetDecorsZBuf(void) {
         }
     }
     GpuObjLampModel = FALSE;
+    GpuTree_End();
 
     //	Switch_Fillers( FILL_TEXTURES_ON );
 

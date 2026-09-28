@@ -17,6 +17,7 @@
 #include "MENU_LABELS.H"
 #include "3DEXT/TERRAIN_GPU.H"
 #include <SVGA/GPUSKY.H>
+#include <SVGA/GPUTREE.H>
 #include <SVGA/GPUSTORM.H>
 #include <SVGA/GPUWATER.H>
 
@@ -129,6 +130,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_CAM_STICK_SENS 2144
 #define MENU_ID_CAM_INVERT 2145
 #define MENU_ID_CAM_HOLD 2146
+#define MENU_ID_GPU_TREES 2147
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -225,7 +227,7 @@ U16 GpuEffectsMenu[] = {
 // Scenery: water, sky, weather and the ground, opened from the GPU effects page.
 U16 GpuSceneryMenu[] = {
     0,   // selected
-    7,   // nb entries
+    8,   // nb entries
     260, // y center
     0,   // .dia num
 
@@ -243,6 +245,8 @@ U16 GpuSceneryMenu[] = {
     MENU_ID_GPU_SMOOTH_TERRAIN,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_GRASS,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_TREES,
 };
 
 // Lighting and shadows, opened from the GPU effects page.
@@ -632,6 +636,10 @@ static void Display_CycleOption(S32 id, S32 dir) {
         TerrainGpuGrass ^= 1;
         break;
 
+    case MENU_ID_GPU_TREES:
+        GpuTreeEnabled ^= 1;
+        break;
+
     case MENU_ID_FOLLOW_CAMERA:
         FollowCamera ^= 1;
         break;
@@ -881,6 +889,11 @@ static void BuildCustomMenuText(S32 num, char *string) {
     case MENU_ID_GPU_GRASS:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_GRASS),
                        GetLocalizedMenuLabel(TerrainGpuGrass ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_TREES:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_TREES),
+                       GetLocalizedMenuLabel(GpuTreeEnabled ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
         break;
 
     case MENU_ID_GPU_SKY:
@@ -4372,6 +4385,7 @@ static void GereGpuSceneryMenu(void) {
         case MENU_ID_GPU_VIEW_DISTANCE:
         case MENU_ID_GPU_SMOOTH_TERRAIN:
         case MENU_ID_GPU_GRASS:
+        case MENU_ID_GPU_TREES:
             Display_CycleOption(select, 1);
             break;
         }

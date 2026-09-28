@@ -1,0 +1,5 @@
+add_executable(test_gpu_tree test_gpu_tree.cpp ${CMAKE_SOURCE_DIR}/LIB386/SVGA/GPUTREE.CPP)
+target_include_directories(test_gpu_tree PRIVATE ${CMAKE_SOURCE_DIR}/LIB386/H)
+set_target_properties(test_gpu_tree PROPERTIES CXX_STANDARD 11)
+add_test(NAME test_gpu_tree COMMAND test_gpu_tree)
+register_host_test(test_gpu_tree)

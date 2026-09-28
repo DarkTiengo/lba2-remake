@@ -107,6 +107,10 @@ static SDL_GPUBuffer *s_bvhTris = NULL;
 static bool s_rayScene = false; ///< this present's hierarchy is built: the composite traces shadow rays
 /* The lights the composite traces shadow rays toward: the nearest to the camera. */
 #define RT_MAX_LIGHTS 8
+/* The object vertex shaders' draw uniform (PLACE.glsl), in floats. Every push
+   sends all of it: a shorter one leaves the rest of the block holding whatever
+   the ring had there, a tree's sway or a model's light included. */
+#define DRAW_VERTEX_UNIFORM_FLOATS 72
 static float s_rtLights[RT_MAX_LIGHTS][4]; ///< scene position, radius
 static float s_rtWeights[RT_MAX_LIGHTS];   ///< intensity times luma, as the shaders weigh lights
 static U32 s_nbRtLights = 0;
@@ -1740,7 +1744,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
            drew it: a run of z-buffered bodies (drawn front to back, depth
            decides) shares a slice, any other body lands in front of everything
            before it; all of them in the front half, over the scene. */
-        float sliceUniform[56] = {0.0f, 0.0f, windTime, wind};
+        float sliceUniform[DRAW_VERTEX_UNIFORM_FLOATS] = {0.0f, 0.0f, windTime, wind};
         /* A draw kept from an earlier frame is placed again here, in the vertex
            shader, through the difference between the camera that captured it and
            the one this frame draws with: rows of the rotation with the
@@ -1806,6 +1810,9 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             }
             memcpy(sliceUniform + 4, rows, sizeof(rows));
             memcpy(sliceUniform + 52, draw->MeshLight, sizeof(draw->MeshLight));
+        }
+        if (draw->Tree) {
+            memcpy(sliceUniform + 56, draw->TreeUniform, sizeof(draw->TreeUniform));
         }
         if (draw->HasCapCamera) {
             for (S32 r = 0; r < 3; r++) {
@@ -1912,7 +1919,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         full.w = (int)s_targetW;
         full.h = (int)s_targetH;
         SDL_SetGPUScissor(pass, &full);
-        const float sceneSlice[24] = {0.5f, 0.5f, windTime, wind};
+        const float sceneSlice[DRAW_VERTEX_UNIFORM_FLOATS] = {0.5f, 0.5f, windTime, wind};
         SDL_PushGPUVertexUniformData(cmd, 0, sceneSlice, sizeof(sceneSlice));
         T_DRAW_UNIFORMS u;
         SDL_zero(u);
@@ -1931,8 +1938,8 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             T_DRAW_UNIFORMS u = uniforms[i];
             u.GlassPass = 1.0f;
             SDL_SetGPUScissor(pass, &glassScissor[k]);
-            float glassUniform[24] = {glassSlice[k * 4], glassSlice[k * 4 + 1], glassSlice[k * 4 + 2],
-                                      glassSlice[k * 4 + 3]};
+            float glassUniform[DRAW_VERTEX_UNIFORM_FLOATS] = {glassSlice[k * 4], glassSlice[k * 4 + 1],
+                                                              glassSlice[k * 4 + 2], glassSlice[k * 4 + 3]};
             SDL_PushGPUVertexUniformData(cmd, 0, glassUniform, sizeof(glassUniform));
             SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(T_DRAW_UNIFORMS));
             SDL_DrawGPUPrimitives(pass, draws[i]->Count, 1, glassFirst[k], 0);

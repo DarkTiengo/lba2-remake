@@ -12,6 +12,7 @@ function(add_render_primitive_test test_name)
         ${CMAKE_SOURCE_DIR}/LIB386/OBJECT/AFF_OBJ.CPP
         ${CMAKE_SOURCE_DIR}/LIB386/OBJECT/AFF_GPU.CPP
         ${CMAKE_SOURCE_DIR}/LIB386/SVGA/GPUOBJ.CPP
+        ${CMAKE_SOURCE_DIR}/LIB386/SVGA/GPUTREE.CPP
     )
     target_include_directories(${test_name} PRIVATE
         ${CMAKE_SOURCE_DIR}/LIB386/H

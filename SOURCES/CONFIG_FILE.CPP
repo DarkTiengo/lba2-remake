@@ -1,5 +1,6 @@
 #include "3DEXT/TERRAIN_GPU.H"
 #include <SVGA/GPUSKY.H>
+#include <SVGA/GPUTREE.H>
 #include "SPRITE_GPU.H"
 #include "GPUTUNE.H"
 #include <SVGA/GPUSTORM.H>
@@ -161,6 +162,8 @@ static const T_SETTING BootSettings[] = {
      "GPU renderer: the software terrain fill is flat where the GPU covers it (its colour is the GPU's)"},
     {"GpuGrass", NULL, "gfx_grass", &TerrainGpuGrass, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: blades of grass swaying in the wind where the island has grass"},
+    {"GpuTrees", NULL, "gfx_trees", &GpuTreeEnabled, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
+     "GPU renderer: trees and bushes sway in the wind, their leaves shaded as foliage"},
     {"GpuSky", NULL, "gfx_sky", &GpuSkyEnabled, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: procedural sky with the sun, drifting clouds and stars"},
     {"GpuStorm", NULL, "gfx_storm", &GpuStormEnabled, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,

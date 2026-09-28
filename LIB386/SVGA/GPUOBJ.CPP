@@ -391,6 +391,7 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     draw->LandSlot = 0;
     draw->LandSmooth = FALSE;
     draw->Mesh = FALSE;
+    draw->Tree = FALSE;
     if (GpuObjCapValid) {
         for (S32 k = 0; k < 9; k++) {
             draw->CapMat[k] = GpuObjCapMat[k];

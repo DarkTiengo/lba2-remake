@@ -14,6 +14,7 @@
 #include "../CONFIG_FILE.H"
 #include "../DISTRIB.H"
 #include "../FOLLOWCAM.H" // cam_* cvars and the camtrace toggle
+#include "../3DEXT/TREES.H" // decors
 #include "../PLAYACF.H"
 #include <POLYGON/POLYFILT.H>
 
@@ -2661,6 +2662,7 @@ void Console_RegisterAll(void) {
                               "Logs island + from -> to cube on each ChangeCube, tracing the game's "
                               "cube-to-cube flow across a playthrough or the demo reel.");
     FollowCam_RegisterCommands();
+    Trees_RegisterCommands();
     Console_RegisterCommandEx("inputflow", cmd_inputflow, "Per-boundary input flow counters",
                               "inputflow | inputflow reset",
                               "Counts the input signal on both sides of each layer it crosses and "

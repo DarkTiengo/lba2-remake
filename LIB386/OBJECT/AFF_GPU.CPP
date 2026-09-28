@@ -10,6 +10,7 @@
 #include <POLYGON/POLY.H>
 #include <SVGA/CLIP.H>
 #include <SVGA/GPUOBJ.H>
+#include <SVGA/GPUTREE.H>
 #include <SVGA/SCREEN.H>
 #include <SVGA/SCREENXY.H>
 
@@ -305,6 +306,94 @@ static void AddGlow(U32 color, const float *pos) {
     s_glowCount++;
 }
 
+/* The leaves of the tree being drawn (GpuObjTreeFoliage), in model space. */
+static const T_BODY_HEADER *s_leafBody = NULL;
+static float s_leafMin[3], s_leafMax[3];
+static S32 s_leafCount = 0;
+
+static void LeafPolygon(U32 type, void *poly) {
+    const U16 *w = (const U16 *)poly;
+    if (type >= 96 || (type & 2) != 0) {
+        return;
+    }
+    if (!GpuTree_IsFoliage(GpuObjTreeFoliage, (type >> 2) > POLY_DITHER_TABLE, w[4])) {
+        return;
+    }
+    const TYPE_VT16 *points = (const TYPE_VT16 *)((const U8 *)s_leafBody + s_leafBody->OffPoints);
+    const S32 nbPoints = (type & 1) != 0 ? 4 : 3;
+    for (S32 i = 0; i < nbPoints; i++) {
+        if (w[i] >= s_leafBody->NbPoints) {
+            continue;
+        }
+        const float p[3] = {(float)points[w[i]].X, (float)points[w[i]].Y, (float)points[w[i]].Z};
+        for (S32 a = 0; a < 3; a++) {
+            s_leafMin[a] = s_leafCount == 0 || p[a] < s_leafMin[a] ? p[a] : s_leafMin[a];
+            s_leafMax[a] = s_leafCount == 0 || p[a] > s_leafMax[a] ? p[a] : s_leafMax[a];
+        }
+        s_leafCount++;
+    }
+}
+
+/* A tree's placement for its draw (GPUTREE.H), in the space its vertices are
+   written in: `rot` takes the model's axes there (rows), `origin` is where its
+   base lands, `wind` is the island's wind there. */
+static void SetTree(T_GPUOBJ_DRAW *draw, T_BODY_HEADER *body, const float rot[9], const float origin[3],
+                    const float wind[3]) {
+    if (draw == NULL || !GpuTreeEnabled || !GpuObjTreeModel || TypeProj != TYPE_3D) {
+        return;
+    }
+    const S32 map = RepMask;
+    PTR_U8 const page = PtrMap;
+    s_leafBody = body;
+    s_leafCount = 0;
+    BodyWalkPolys(body, LeafPolygon);
+    PtrMap = page;
+    RepMask = map;
+
+    T_GPUTREE tree;
+    memset(&tree, 0, sizeof(tree));
+    float upLen = 0.0f, windLen = 0.0f;
+    for (S32 a = 0; a < 3; a++) {
+        tree.Base[a] = origin[a];
+        tree.Up[a] = rot[a * 3 + 1];
+        tree.Wind[a] = wind[a];
+        upLen += tree.Up[a] * tree.Up[a];
+        windLen += wind[a] * wind[a];
+    }
+    if (upLen <= 0.0f || windLen <= 0.0f) {
+        return;
+    }
+    upLen = sqrtf(upLen);
+    windLen = sqrtf(windLen);
+    for (S32 a = 0; a < 3; a++) {
+        tree.Up[a] /= upLen;
+        tree.Wind[a] /= windLen;
+    }
+    if (s_leafCount > 0) {
+        float c[3], reach = 0.0f;
+        for (S32 a = 0; a < 3; a++) {
+            c[a] = 0.5f * (s_leafMin[a] + s_leafMax[a]);
+            const float e = 0.5f * (s_leafMax[a] - s_leafMin[a]);
+            reach += e * e;
+        }
+        for (S32 r = 0; r < 3; r++) {
+            tree.Centre[r] = origin[r] + rot[r * 3] * c[0] + rot[r * 3 + 1] * c[1] + rot[r * 3 + 2] * c[2];
+        }
+        tree.Radius = sqrtf(reach);
+    }
+    tree.Phase = GpuObjTreePhase;
+    draw->Tree = TRUE;
+    GpuTree_Uniform(&tree, draw->TreeUniform);
+}
+
+/* The island's wind in view space: the world's direction through the camera. */
+static void ViewWind(float out[3]) {
+    const TYPE_MAT *m = &MatriceWorld;
+    out[0] = m->F.M11 * GPUTREE_WIND_X + m->F.M13 * GPUTREE_WIND_Z;
+    out[1] = m->F.M21 * GPUTREE_WIND_X + m->F.M23 * GPUTREE_WIND_Z;
+    out[2] = m->F.M31 * GPUTREE_WIND_X + m->F.M33 * GPUTREE_WIND_Z;
+}
+
 static void EmitSphere(const U16 *w, S32 pass) {
     T_GPU_PROJ center;
     Project(w[2], &center);
@@ -504,6 +593,15 @@ S32 AffGpu_Begin(void) {
         if (Fill_Flag_Fog) {
             memcpy(s_draw->Logical, Fill_Logical_Palette, sizeof(s_draw->Logical));
         }
+        if (GpuObjTreeModel) {
+            /* A decor stands still: its root group's rotation is the model's. */
+            const TYPE_MAT *r = &TabMat[0];
+            const float rot[9] = {r->F.M11, r->F.M12, r->F.M13, r->F.M21, r->F.M22,
+                                  r->F.M23, r->F.M31, r->F.M32, r->F.M33};
+            float wind[3];
+            ViewWind(wind);
+            SetTree(s_draw, lBody, rot, s_origin, wind);
+        }
     }
 
     GpuObj_SnapshotBegin(ScreenXMin - SNAPSHOT_MARGIN, ScreenYMin - SNAPSHOT_MARGIN,
@@ -595,6 +693,11 @@ void AffGpu_Entity(U32 type, void *poly) {
                 m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_CHROMAKEY);
             }
         }
+    }
+
+    if (GpuObjTreeModel && m.Mode != (float)GPUOBJ_MODE_PASS &&
+        GpuTree_IsFoliage(GpuObjTreeFoliage, polyType > POLY_DITHER_TABLE, color)) {
+        m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_FOLIAGE);
     }
 
     /* UVs come from the body data: Fill_Poly reuses the point list it is given. */
@@ -1354,6 +1457,9 @@ static void MeshPolygon(U32 type, void *poly) {
         s_buildFail = TRUE;
         return;
     }
+    if (GpuObjTreeModel && GpuTree_IsFoliage(GpuObjTreeFoliage, polyType > POLY_DITHER_TABLE, color)) {
+        m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_FOLIAGE);
+    }
 
     float uvs[4][2];
     memset(uvs, 0, sizeof(uvs));
@@ -1568,6 +1674,18 @@ S32 AffGpu_DecorDraw(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 
     draw->MeshLight[1] = s_light[1];
     draw->MeshLight[2] = s_light[2];
     draw->MeshLight[3] = lightLen * FactorLight / 256.0f;
+    {
+        /* The model's own space: its axes, its base at the origin, the wind
+           carried back from view space through the placement's rotation. */
+        static const float axes[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        static const float base[3] = {0.0f, 0.0f, 0.0f};
+        float view[3], wind[3];
+        ViewWind(view);
+        for (S32 c = 0; c < 3; c++) {
+            wind[c] = rows[c] * view[0] + rows[4 + c] * view[1] + rows[8 + c] * view[2];
+        }
+        SetTree(draw, body, axes, base, wind);
+    }
     GpuObj_EndDraw();
     return 1;
 }

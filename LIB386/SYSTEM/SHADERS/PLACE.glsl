@@ -24,10 +24,42 @@ layout(set = 1, binding = 0) uniform Draw {
     vec4 land;     // a land draw: xyz the cube's local origin in view space, w the far clip
     vec4 landInfo; // x the cube's slot, y 1 grown on the curve, zw the cube's place in the sea's phase
     vec4 instance; // a kept model's placement (GPUOBJ.vert): xyz the view-space light, w the shade scale; 0 otherwise
+    /* A tree in the wind (SVGA/GPUTREE.H), in the space the draw's vertices
+       are written in; tree0.w 0 when the draw is not a tree. */
+    vec4 tree0; // the world's up, w 1
+    vec4 tree1; // the model's base, w where it stands in the gusts
+    vec4 tree2; // the island's wind
+    vec4 tree3; // the middle of its leaves, w how far they reach (0: none)
 };
 
 const int FLAG_GRASS = 512;
 const int FLAG_WAVES = 1024;
+const int FLAG_FOLIAGE = 4096;
+
+const float TREE_HEIGHT = 3000.0; // GPUTREE_HEIGHT
+const float TREE_BEND = 60.0;     // GPUTREE_BEND
+const float TREE_FLUTTER = 14.0;  // GPUTREE_FLUTTER
+
+/* How far the wind carries a point of the tree `rel` from its base: bent along
+   the wind more the higher it stands, gusts from the grass's field, leaves
+   fluttering each on its own. GpuTree_Sway (SVGA/GPUTREE.CPP) is the same. */
+vec3 TreeSway(vec3 rel, bool leaf) {
+    vec3 up = tree0.xyz;
+    vec3 dir = tree2.xyz;
+    float phase = tree1.w;
+    float h = max(dot(rel, up), 0.0) / TREE_HEIGHT;
+    float gust = 0.5 + 0.5 * sin(time * 1.1 - phase * 0.8);
+    float lean = TREE_BEND * h * h * wind * (0.15 + 0.85 * gust);
+    float bob = TREE_BEND * h * h * 0.12 * sin(time * 1.9 + phase * 2.3);
+    vec3 moved = dir * (lean + bob);
+    if (leaf) {
+        vec3 side = cross(up, dir);
+        float leaf = dot(rel, dir) * 0.021 + dot(rel, side) * 0.017 + dot(rel, up) * 0.013;
+        float f = TREE_FLUTTER * min(h * 4.0, 1.0) * wind * (0.3 + 0.7 * gust) * sin(time * 4.3 + leaf);
+        moved += (up * 0.5 + side * 0.85) * f;
+    }
+    return moved;
+}
 
 /* The sea's broad swell at world (x, z): the same five components as
    GpuWater_SampleSurface (SVGA/GPUWATER.CPP) and WATER.glsl. Returns the

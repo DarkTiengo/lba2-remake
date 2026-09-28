@@ -32,6 +32,28 @@ void main() {
         light.xyz = instance.xyz;
     }
     bool placed = false;
+    vec4 uv = a_uv;
+    if (tree0.w > 0.0) {
+        /* A tree in the wind, moved in its own space before it is placed. */
+        vec3 rel = a_vpos.xyz - tree1.xyz;
+        bool leaf = (int(a_vpos.w + 0.5) & FLAG_FOLIAGE) != 0;
+        vpos.xyz += TreeSway(rel, leaf);
+        if (leaf && tree3.w > 0.0) {
+            /* The crown is shaded as the round mass of leaves it stands for
+               more than as its facets; the length is the shade's scale. */
+            float len = length(normal.xyz);
+            vec3 out_ = normalize(a_vpos.xyz - tree3.xyz);
+            normal.xyz = normalize(mix(normal.xyz / max(len, 1e-6), out_, 0.55)) * len;
+            /* Where the leaf lies on the tree, the same from any camera: the
+               fragment shader's tufts. */
+            vec3 side = cross(tree0.xyz, tree2.xyz);
+            uv.zw = vec2(dot(rel, side) + dot(rel, tree2.xyz) * 0.7, dot(rel, tree0.xyz));
+        }
+        placed = true;
+    } else if ((int(a_vpos.w + 0.5) & FLAG_FOLIAGE) != 0) {
+        /* Not a tree in this draw (gfx_trees off): shaded as any body. */
+        vpos.w = float(int(a_vpos.w + 0.5) & ~FLAG_FOLIAGE);
+    }
     if ((int(a_vpos.w + 0.5) & FLAG_WAVES) != 0 && waves.z > 0.5) {
         /* The sea: raised along the world's up, in the space it was captured in. */
         vec3 n;
@@ -66,6 +88,6 @@ void main() {
     v_light = light;
     v_vpos = vpos;
     v_mat = a_mat;
-    v_uv = a_uv;
+    v_uv = uv;
     v_slice = vec2(sliceNear, sliceSize);
 }
