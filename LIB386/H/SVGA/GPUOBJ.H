@@ -124,6 +124,7 @@ void GpuObj_MeshReset(void);
 #define GPUOBJ_FLAG_GRASS 512        ///< a grass blade: the tip sways by uv.zw (clip offset of the wind), phase in mat.w
 #define GPUOBJ_FLAG_WAVES 1024       ///< a point of the sea's mesh, undisplaced: the vertex shader raises the swell at world uv.zw * 512
 #define GPUOBJ_FLAG_TERRAIN 2048     ///< exterior ground, distinct from actors/decor at the waterline
+#define GPUOBJ_FLAG_LAVA 4096        ///< authored lava surface, with palette-preserving procedural detail
 #define GPUOBJ_FLAG_FOLIAGE 8192     ///< a tree's leaf (GPUTREE.H): shaded as foliage and fluttering while its draw is a tree
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
@@ -259,6 +260,7 @@ extern S32 GpuObjGlow;        ///< lamp globes on 3D models cast light (gfx_lamp
 extern S32 GpuObjLampModel;   ///< set by the caller while it draws a lamp model
 extern const U8 *GpuObjLampPalette; ///< the scene's 768-byte RGB palette, for the lamp glass
 extern S32 GpuObjFire;        ///< procedural flames and firelight on fire textures (gfx_fire)
+extern S32 GpuObjLava;        ///< authored lava shading (gfx_lava)
 
 /* The animated fire regions of the object texture page (ANIMTEX.CPP): polygons
    sampling them get procedural flames and cast flickering light. */

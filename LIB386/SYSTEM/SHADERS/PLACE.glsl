@@ -32,8 +32,11 @@ layout(set = 1, binding = 0) uniform Draw {
     vec4 tree3; // the middle of its leaves, w how far they reach (0: none)
 };
 
+#include "LAVA.glsl"
+
 const int FLAG_GRASS = 512;
 const int FLAG_WAVES = 1024;
+const int FLAG_LAVA = 4096;
 const int FLAG_FOLIAGE = 8192;
 
 const float TREE_HEIGHT = 3000.0; // GPUTREE_HEIGHT
@@ -80,6 +83,16 @@ float Swell(vec2 world, out vec3 n) {
         h += rise * sin(phase);
         d += direction[i] * (rise * cos(phase) * frequency[i] / 512.0);
     }
+    n = vec3(-d.x, 1.0, -d.y) / sqrt(dot(d, d) + 1.0);
+    return h;
+}
+
+/* Lava shares the water mesh path, but its much lower and slower motion reads
+   as a viscous surface rather than a second ocean. */
+float LavaSwell(vec2 world, out vec3 n) {
+    float h, flow, fine;
+    vec2 d, warp;
+    LavaField(world, waves.x, h, d, warp, flow, fine);
     n = vec3(-d.x, 1.0, -d.y) / sqrt(dot(d, d) + 1.0);
     return h;
 }

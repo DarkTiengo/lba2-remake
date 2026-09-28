@@ -63,6 +63,7 @@ static void TakeStep(S32 step) {
         break;
     case STEP_WATER:
         GpuWaterEnabled = FALSE;
+        GpuObjLava = FALSE;
         break;
     default:
         GpuObjSunlight = FALSE;
@@ -89,6 +90,7 @@ void GpuTune_Start(void) {
     TerrainGpuSmooth = TRUE;
     GpuObjShadows = TRUE;
     GpuWaterEnabled = TRUE;
+    GpuObjLava = TRUE;
     GpuObjSunlight = TRUE;
     GpuObjLightsEnabled = TRUE;
     GpuSkyEnabled = TRUE;

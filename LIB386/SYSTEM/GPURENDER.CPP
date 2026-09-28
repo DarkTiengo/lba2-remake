@@ -58,6 +58,7 @@ void GpuRender_EndComposite(void * /*sdlRenderer*/) {
 #include "SHADERS/GPUOBJ.frag.spv.h"
 #include "SHADERS/GPUOBJ.vert.spv.h"
 #include "SHADERS/GPUTERRAIN.vert.spv.h"
+#include "lava_png_embedded.h"
 
 // --- Private state -----------------------------------------------------------
 static SDL_Renderer *s_renderer = NULL;
@@ -140,6 +141,13 @@ static bool s_frameFiltered = false;
 static SDL_GPUTexture *s_lut = NULL;
 static SDL_GPUTexture *s_pages = NULL;
 static SDL_GPUTexture *s_atlas = NULL;
+static SDL_GPUTexture *s_lavaAlbedo = NULL;
+static SDL_GPUSampler *s_lavaSampler = NULL;
+static U8 *s_lavaPixels = NULL;
+static U32 s_lavaWidth = 0;
+static U32 s_lavaHeight = 0;
+static bool s_lavaUploaded = false;
+static bool s_lavaReady = false;
 
 static SDL_GPUBuffer *s_vertexBuffer = NULL;
 static U32 s_vertexCapacity = 0;
@@ -223,6 +231,90 @@ static SDL_GPUTexture *CreateTexture(SDL_GPUTextureType type, SDL_GPUTextureForm
         Log_Warn("[GPU] Unable to create %ux%u texture: %s", w, h, SDL_GetError());
     }
     return texture;
+}
+
+static bool LoadLavaTexture(void) {
+    SDL_IOStream *io = SDL_IOFromConstMem(kLavaPng, kLavaPngSize);
+    if (io == NULL) {
+        Log_Warn("[GPU] Unable to open embedded lava texture: %s", SDL_GetError());
+        return false;
+    }
+    SDL_Surface *loaded = SDL_LoadPNG_IO(io, true);
+    if (loaded == NULL) {
+        Log_Warn("[GPU] Unable to decode embedded lava texture: %s", SDL_GetError());
+        return false;
+    }
+    SDL_Surface *rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(loaded);
+    if (rgba == NULL || rgba->w <= 0 || rgba->h <= 0 || rgba->pitch < rgba->w * 4) {
+        Log_Warn("[GPU] Unable to convert embedded lava texture: %s", SDL_GetError());
+        if (rgba != NULL)
+            SDL_DestroySurface(rgba);
+        return false;
+    }
+
+    const size_t rowBytes = (size_t)rgba->w * 4;
+    const size_t totalBytes = rowBytes * (size_t)rgba->h;
+    s_lavaPixels = (U8 *)malloc(totalBytes);
+    if (s_lavaPixels == NULL) {
+        SDL_DestroySurface(rgba);
+        Log_Warn("[GPU] Unable to allocate embedded lava texture pixels");
+        return false;
+    }
+    if (!SDL_LockSurface(rgba)) {
+        free(s_lavaPixels);
+        s_lavaPixels = NULL;
+        SDL_DestroySurface(rgba);
+        Log_Warn("[GPU] Unable to lock embedded lava texture: %s", SDL_GetError());
+        return false;
+    }
+    for (S32 y = 0; y < rgba->h; y++) {
+        memcpy(s_lavaPixels + (size_t)y * rowBytes, (const U8 *)rgba->pixels + (size_t)y * rgba->pitch,
+               rowBytes);
+    }
+    SDL_UnlockSurface(rgba);
+    s_lavaWidth = (U32)rgba->w;
+    s_lavaHeight = (U32)rgba->h;
+    SDL_DestroySurface(rgba);
+
+    SDL_GPUTextureCreateInfo lavaInfo;
+    SDL_zero(lavaInfo);
+    lavaInfo.type = SDL_GPU_TEXTURETYPE_2D;
+    lavaInfo.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    lavaInfo.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    lavaInfo.width = s_lavaWidth;
+    lavaInfo.height = s_lavaHeight;
+    lavaInfo.layer_count_or_depth = 1;
+    lavaInfo.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    U32 side = SDL_max(s_lavaWidth, s_lavaHeight);
+    while (side > 0) {
+        lavaInfo.num_levels++;
+        side >>= 1;
+    }
+    s_lavaAlbedo = SDL_CreateGPUTexture(s_device, &lavaInfo);
+    if (s_lavaAlbedo == NULL) {
+        Log_Warn("[GPU] Unable to create lava texture: %s", SDL_GetError());
+        free(s_lavaPixels);
+        s_lavaPixels = NULL;
+        return false;
+    }
+    SDL_GPUSamplerCreateInfo samplerInfo;
+    SDL_zero(samplerInfo);
+    samplerInfo.min_filter = SDL_GPU_FILTER_LINEAR;
+    samplerInfo.mag_filter = SDL_GPU_FILTER_LINEAR;
+    samplerInfo.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+    samplerInfo.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT;
+    samplerInfo.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT;
+    samplerInfo.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT;
+    s_lavaSampler = SDL_CreateGPUSampler(s_device, &samplerInfo);
+    if (s_lavaSampler == NULL) {
+        Log_Warn("[GPU] Unable to create lava sampler: %s", SDL_GetError());
+        ReleaseTexture(&s_lavaAlbedo);
+        free(s_lavaPixels);
+        s_lavaPixels = NULL;
+        return false;
+    }
+    return true;
 }
 
 static SDL_GPUShader *CreateShader(const unsigned char *code, size_t size, SDL_GPUShaderStage stage,
@@ -702,7 +794,7 @@ static bool EnsureShadowBuffer(U32 size) {
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
     s_terrainVert = CreateShader(GPUTERRAIN_vert_spv, GPUTERRAIN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 4);
-    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
+    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 5, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
     s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 10, 1, 2);
     /* The half-resolution pass: the composite's source built with HALF_PASS,
@@ -924,6 +1016,9 @@ static bool CreatePipeline(void) {
                             GPUOBJ_ATLAS_SIZE, 1);
     GpuObjAtlasDirty = TRUE;
 
+    if (s_nearest && s_linear && s_palette && s_lut && s_pages && s_atlas)
+        LoadLavaTexture();
+
     return s_nearest && s_linear && s_palette && s_lut && s_pages && s_atlas;
 }
 
@@ -936,6 +1031,16 @@ static void ReleasePipeline(void) {
     ReleaseTexture(&s_lut);
     ReleaseTexture(&s_pages);
     ReleaseTexture(&s_atlas);
+    ReleaseTexture(&s_lavaAlbedo);
+    if (s_lavaSampler) {
+        SDL_ReleaseGPUSampler(s_device, s_lavaSampler);
+        s_lavaSampler = NULL;
+    }
+    free(s_lavaPixels);
+    s_lavaPixels = NULL;
+    s_lavaWidth = s_lavaHeight = 0;
+    s_lavaUploaded = false;
+    s_lavaReady = false;
     if (s_vertexBuffer) {
         SDL_ReleaseGPUBuffer(s_device, s_vertexBuffer);
         s_vertexBuffer = NULL;
@@ -1290,11 +1395,11 @@ static void UploadBuffer2(SDL_GPUCopyPass *pass, SDL_GPUBuffer *buffer, const vo
     SDL_UploadToGPUBuffer(pass, &source, &region, true);
 }
 
-static void UploadTexture(SDL_GPUCopyPass *pass, SDL_GPUTexture *texture, U32 layer, U32 x, U32 y, U32 w, U32 h,
+static bool UploadTexture(SDL_GPUCopyPass *pass, SDL_GPUTexture *texture, U32 layer, U32 x, U32 y, U32 w, U32 h,
                           const void *data, U32 size) {
     void *mapped = SDL_MapGPUTransferBuffer(s_device, s_transfer, true);
     if (mapped == NULL) {
-        return;
+        return false;
     }
     memcpy(mapped, data, size);
     SDL_UnmapGPUTransferBuffer(s_device, s_transfer);
@@ -1313,6 +1418,7 @@ static void UploadTexture(SDL_GPUCopyPass *pass, SDL_GPUTexture *texture, U32 la
     region.h = h;
     region.d = 1;
     SDL_UploadToGPUTexture(pass, &source, &region, false);
+    return true;
 }
 
 /* Row of rows*256 bytes of lookup data for this present, deduplicated; -1 when full. */
@@ -1553,7 +1659,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     vbind.offset = 0;
     SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
 
-    SDL_GPUTextureSamplerBinding samplers[4];
+    SDL_GPUTextureSamplerBinding samplers[5];
     samplers[0].texture = s_palette;
     samplers[0].sampler = s_nearest;
     samplers[1].texture = s_lut;
@@ -1562,7 +1668,9 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     samplers[2].sampler = s_nearest;
     samplers[3].texture = s_atlas;
     samplers[3].sampler = s_nearest;
-    SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
+    samplers[4].texture = s_lavaAlbedo != NULL ? s_lavaAlbedo : s_palette;
+    samplers[4].sampler = s_lavaSampler != NULL ? s_lavaSampler : s_nearest;
+    SDL_BindGPUFragmentSamplers(pass, 0, samplers, 5);
 
     const double seconds = (double)SDL_GetTicks() / 1000.0;
 
@@ -1735,6 +1843,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         }
     }
     fire[18] = (float)fmod(seconds, 1000.0);
+    fire[19] = GpuObjLava && s_lavaReady ? 1.0f : 0.0f;
     SDL_PushGPUFragmentUniformData(cmd, 2, fire, sizeof(fire));
     float water[GPUWATER_UNIFORM_FLOATS];
     GpuWater_GetUniforms(water);
@@ -1814,6 +1923,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
                                : 0.0f;
         sliceUniform[40] = (float)draw->First;
         sliceUniform[41] = (float)draw->Procedural;
+        sliceUniform[42] = GpuObjLava ? 1.0f : 0.0f;
         if (draw->Procedural == GPUOBJ_PROC_LAND) {
             sliceUniform[44] = draw->LandOrigin[0];
             sliceUniform[45] = draw->LandOrigin[1];
@@ -1891,7 +2001,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
                 } else {
                     SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
                 }
-                SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
+                SDL_BindGPUFragmentSamplers(pass, 0, samplers, 5);
             }
             SDL_SetGPUScissor(pass, &scissor);
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));
@@ -1940,7 +2050,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         sbind.buffer = s_shadowBuffer;
         sbind.offset = 0;
         SDL_BindGPUVertexBuffers(pass, 0, &sbind, 1);
-        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
+        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 5);
         SDL_Rect full;
         full.x = 0;
         full.y = 0;
@@ -1960,7 +2070,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     if (nbGlass > 0) {
         SDL_BindGPUGraphicsPipeline(pass, s_pipelineGlass);
         SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
-        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 4);
+        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 5);
         for (U32 k = 0; k < nbGlass; k++) {
             const U32 i = glassDraw[k];
             T_DRAW_UNIFORMS u = uniforms[i];
@@ -2139,6 +2249,9 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     const bool atlasUpload = GpuObjAtlasDirty && GpuObjAtlas != NULL;
     if (atlasUpload && atlasBytes > need)
         need = atlasBytes;
+    const U32 lavaBytes = s_lavaWidth * s_lavaHeight * 4;
+    if (s_lavaPixels != NULL && lavaBytes > need)
+        need = lavaBytes;
     const U32 shadowBytes = shadowVerts * (U32)sizeof(T_GPUOBJ_VERTEX);
     /* The hierarchy's size is known only once it is built: room for the largest. */
     if (s_rayScene) {
@@ -2207,6 +2320,10 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     if (atlasUpload) {
         UploadTexture(copy, s_atlas, 0, 0, 0, GPUOBJ_ATLAS_SIZE, GPUOBJ_ATLAS_SIZE, GpuObjAtlas, atlasBytes);
         GpuObjAtlasDirty = FALSE;
+    }
+    if (s_lavaPixels != NULL && s_lavaAlbedo != NULL) {
+        s_lavaUploaded = UploadTexture(copy, s_lavaAlbedo, 0, 0, 0, s_lavaWidth, s_lavaHeight, s_lavaPixels,
+                                       lavaBytes);
     }
     if (count > 0) {
         /* A new buffer holds nothing yet. */
@@ -2292,6 +2409,9 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         SDL_UploadToGPUTexture(copy, &source, &region, false);
     }
     SDL_EndGPUCopyPass(copy);
+    if (s_lavaUploaded)
+        SDL_GenerateMipmapsForGPUTexture(cmd, s_lavaAlbedo);
+
     Uint64 t2 = SDL_GetPerformanceCounter();
     if (count > 0) {
         RenderDraws(cmd, kept, uniforms, count);
@@ -2305,7 +2425,14 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     }
     if (!SDL_SubmitGPUCommandBuffer(cmd)) {
         s_shoreSentRevision = ~0u;
+        s_lavaUploaded = false;
         return false;
+    }
+    if (s_lavaUploaded) {
+        s_lavaReady = true;
+        s_lavaUploaded = false;
+        free(s_lavaPixels);
+        s_lavaPixels = NULL;
     }
     Uint64 t3 = SDL_GetPerformanceCounter();
 

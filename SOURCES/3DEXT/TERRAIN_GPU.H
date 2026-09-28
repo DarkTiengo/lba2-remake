@@ -106,7 +106,11 @@ void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ);
 
 /** Selects the island cube whose local sea coordinates are being captured. */
 void TerrainGpu_SetWaterCube(S32 cubeX, S32 cubeZ);
-/* Authored 1/12/15 half-cells define a fixed island-wide coastal envelope. */
+/** Selects the broad plane material from island-wide authored fluid coverage. */
+void TerrainGpu_SetLavaSea(S32 lavaSea);
+
+/* Authored water or lava half-cells define the selected fluid's fixed
+   island-wide coastal envelope. */
 void TerrainGpu_ResetShore(void);
 void TerrainGpu_SetShoreCube(S32 cubeX, S32 cubeZ, const U8 cells[64 * 64]);
 void TerrainGpu_FinishShore(void);

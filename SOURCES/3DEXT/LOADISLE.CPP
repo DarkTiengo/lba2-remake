@@ -175,6 +175,8 @@ void LoadIsland() {
         TheEndCheckFile(islandFilePath);
 
     TerrainGpu_ResetShore();
+    S32 texturedLava = 0;
+    S32 texturedWater = 0;
     for (S32 cz = 0; cz < 16; cz++) {
         for (S32 cx = 0; cx < 16; cx++) {
             const S32 mapIndex = IsleMapIndex[cz * 16 + cx] & 127;
@@ -189,13 +191,27 @@ void LoadIsland() {
             for (S32 cell = 0; cell < 64 * 64; cell++) {
                 const T_HALF_POLY *a = &polys[cell * 2];
                 const T_HALF_POLY *b = &polys[cell * 2 + 1];
+                const T_HALF_POLY *halves[2] = {a, b};
+                for (S32 half = 0; half < 2; half++) {
+                    const T_HALF_POLY *h = halves[half];
+                    if (h->TexFlag) {
+                        if (h->CodeJeu == 9 || h->CodeJeu == 13) {
+                            texturedLava++;
+                        } else if (h->CodeJeu == 1 || h->CodeJeu == 12 || h->CodeJeu == 15) {
+                            texturedWater++;
+                        }
+                    }
+                }
                 shore[cell] = (U8)((a->Sens ? 4 : 0) |
                                    ((a->TexFlag && (a->CodeJeu == 1 || a->CodeJeu == 12 || a->CodeJeu == 15)) ? 1 : 0) |
-                                   ((b->TexFlag && (b->CodeJeu == 1 || b->CodeJeu == 12 || b->CodeJeu == 15)) ? 2 : 0));
+                                   ((b->TexFlag && (b->CodeJeu == 1 || b->CodeJeu == 12 || b->CodeJeu == 15)) ? 2 : 0) |
+                                   ((a->TexFlag && (a->CodeJeu == 9 || a->CodeJeu == 13)) ? 8 : 0) |
+                                   ((b->TexFlag && (b->CodeJeu == 9 || b->CodeJeu == 13)) ? 16 : 0));
             }
             TerrainGpu_SetShoreCube(cx, cz, shore);
         }
     }
+    TerrainGpu_SetLavaSea(texturedLava > 64 && texturedLava > 4 * texturedWater);
     TerrainGpu_FinishShore();
 
     if (!Load_HQR(islandFilePath, GroundTexture, HQR_TEX_GROUND))

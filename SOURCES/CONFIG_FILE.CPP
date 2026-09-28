@@ -170,6 +170,8 @@ static const T_SETTING BootSettings[] = {
      "GPU renderer: modern rain, lightning bolts and flashes lighting the scene"},
     {"GpuFire", NULL, "gfx_fire", &GpuObjFire, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: procedural flames and flickering firelight on fire textures"},
+    {"GpuLava", NULL, "gfx_lava", &GpuObjLava, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
+     "GPU renderer: slow molten flow and glowing cracks on authored lava"},
     {"GpuSpecular", NULL, "gfx_specular", &GpuObjSpecular, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: specular highlights on 3D models"},
     {"FixedTimestep", NULL, NULL, &FixedTimestep, SETTING_OR_DEFAULT, 16, 0, 100,

@@ -28,6 +28,7 @@ S32 GpuObjDeband = TRUE;
 S32 GpuObjSpecular = TRUE;
 S32 GpuObjUiScale = TRUE;
 S32 GpuObjFire = TRUE;
+S32 GpuObjLava = TRUE;
 S32 GpuObjGlow = TRUE;
 S32 GpuObjShadows = TRUE;
 S32 GpuObjSunlight = TRUE;

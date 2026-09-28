@@ -24,6 +24,7 @@ layout(set = 2, binding = 0) uniform sampler2D u_palette;    // 256x1 RGBA
 layout(set = 2, binding = 1) uniform sampler2D u_lut;        // 256xN R8: logical palettes, CLUT blocks
 layout(set = 2, binding = 2) uniform sampler2DArray u_pages; // 256x256xN R8 texture pages
 layout(set = 2, binding = 3) uniform sampler2D u_atlas;       // interior bricks: index, coverage
+layout(set = 2, binding = 4) uniform sampler2D u_lava;        // project-authored lava albedo
 
 layout(set = 3, binding = 0) uniform Draw {
     float drawId;
@@ -51,7 +52,7 @@ layout(set = 3, binding = 1) uniform Lights {
 
 layout(set = 3, binding = 2) uniform Fire {
     vec4 fireRects[4]; // texel x, y, w, h in the fire page
-    vec4 fireInfo;     // count, page slot, time in seconds, unused
+    vec4 fireInfo;     // count, page slot, time in seconds, modern lava enabled
 };
 
 /* Light reaching a point, soft quadratic falloff; normals shade bodies,
@@ -131,6 +132,7 @@ const int FLAG_SKY = 32;
 const int FLAG_WATER_TERRAIN = 64;
 const int FLAG_GRASS = 512;
 const int FLAG_TERRAIN = 2048;
+const int FLAG_LAVA = 4096;
 const int FLAG_FOLIAGE = 8192;
 
 vec3 Pal(int i) {
@@ -289,9 +291,9 @@ vec4 TexColor(int texel, float shade, bool shaded, int clut) {
     return vec4(mix(Pal(Lut(rowA, texel)), Pal(Lut(rowB, texel)), fract(shade)), 1.0);
 }
 
-vec4 Textured(float shade, bool shaded) {
+vec4 Textured(float shade, bool shaded, vec2 uvOffset) {
     int clut = int(clutRow);
-    vec2 t = v_uv.xy - 0.5;
+    vec2 t = v_uv.xy + uvOffset - 0.5;
     vec2 f = fract(t);
     ivec2 i = ivec2(floor(t));
     vec4 c00 = TexColor(Texel(i.x, i.y), shade, shaded, clut);
@@ -373,6 +375,7 @@ vec2 PackDistance(vec3 p, bool iso) {
 }
 
 #include "WATER.glsl"
+#include "LAVA.glsl"
 
 void main() {
     int mode = int(v_light.w);
@@ -507,7 +510,26 @@ void main() {
     int base = int(v_mat.x);
     bool water = (Flags() & FLAG_WATER) != 0 && waterInfo.y > 0.5;
     bool sky = (Flags() & FLAG_SKY) != 0;
+    bool lava = (Flags() & FLAG_LAVA) != 0 && fireInfo.w > 0.5;
+    float lavaHeight = 0.0;
+    float lavaFlow = 0.0;
+    float lavaFine = 0.0;
+    vec2 lavaSlope = vec2(0.0);
+    vec2 lavaWarp = vec2(0.0);
+    vec2 lavaUvOffset = vec2(0.0);
+    if (lava) {
+        LavaField(v_uv.zw * 512.0, waterInfo.x, lavaHeight, lavaSlope,
+                  lavaWarp, lavaFlow, lavaFine);
+        /* The authored page remains recognizable while its texels creep with
+           the same field as the project material. */
+        lavaUvOffset = lavaWarp * 0.22;
+    }
     vec3 surfaceNormal = v_normal.xyz;
+    if (lava) {
+        mat3 axes = mat3(waterAxisX.xyz, waterAxisY.xyz, waterAxisZ.xyz);
+        vec3 movingNormal = normalize(axes * normalize(vec3(-lavaSlope.x, 1.0, -lavaSlope.y)));
+        surfaceNormal = normalize(mix(normalize(surfaceNormal), movingNormal, 0.56));
+    }
 
     if (water && waterInfo.w >= 0.0) {
         color = WaterColor(surfaceNormal, v_waterCoast);
@@ -515,7 +537,7 @@ void main() {
         /* CodeJeu 12/15 is the retail shoreline animation. Its page receives
            250 ms updates in the software path, unlike SkySeaTexture's layout. */
         surfaceNormal = normalize(v_normal.xyz);
-        color = Textured(0.0, false).rgb;
+        color = Textured(0.0, false, vec2(0.0)).rgb;
     } else if (mode == MODE_SOLID) {
         color = Pal(Logical(base));
         if ((Flags() & FLAG_EMISSIVE) != 0) {
@@ -540,10 +562,10 @@ void main() {
         color = fire.rgb * fire.a;
         emissive = fire.a * 0.8;
     } else if (mode == MODE_TEX) {
-        color = Textured(0.0, false).rgb;
+        color = Textured(0.0, false, lavaUvOffset).rgb;
     } else if (mode == MODE_TEXSHADED) {
         float shade = ShadeValue(spec);
-        color = Textured(shade, true).rgb;
+        color = Textured(shade, true, lavaUvOffset).rgb;
         color += spec * specular * 0.25 * color;
     } else if (mode == MODE_CLUT) {
         /* Gouraud table fill: the CLUT row is the shade, the column the colour. */
@@ -593,6 +615,29 @@ void main() {
         color = min(color, vec3(0.97));
     }
 
+    if (lava) {
+        /* Two differently scaled flows stop the authored texture from sliding
+           as one rigid sheet. Island-space coordinates keep both continuous
+           across cube boundaries. */
+        mat2 turn = mat2(0.8660254, -0.5, 0.5, 0.8660254);
+        vec2 lavaTexUv = v_uv.zw / 8.0 + lavaWarp;
+        vec2 lavaTexUv2 = turn * v_uv.zw / 12.5 - lavaWarp * 0.72 + vec2(0.31, 0.17);
+        vec3 albedoA = texture(u_lava, lavaTexUv).rgb;
+        vec3 albedoB = texture(u_lava, lavaTexUv2).rgb;
+        vec3 albedo = mix(albedoA, albedoB, 0.26 + lavaFine * 0.12) * vec3(1.60, 1.35, 1.10);
+        color = mix(color, albedo, 0.72);
+        float molten = smoothstep(0.38, 0.83, albedo.r) * (0.78 + lavaFlow * 0.22);
+        float crust = smoothstep(0.48, 0.77, 1.0 - lavaFlow + (0.5 - lavaFine) * 0.16);
+        float vein = (1.0 - smoothstep(0.008, 0.045, abs(lavaFlow - 0.58))) *
+                     smoothstep(0.40, 0.72, lavaFine);
+        float pulse = 0.92 + 0.08 * sin(lavaHeight * 0.12 +
+                                        waterInfo.x * 14.0 * (6.28318530718 / 256.0));
+
+        color = mix(color * vec3(1.02, 0.98, 0.94), color * vec3(0.68, 0.59, 0.56), crust * 0.22);
+        color += (vec3(0.16, 0.035, 0.003) * vein + vec3(0.22, 0.045, 0.003) * molten) * pulse;
+        emissive = max(emissive, max(vein * 0.15, molten * 0.30));
+    }
+
     bool litBody = (mode == MODE_SHADED || mode == MODE_TEXSHADED || mode == MODE_CLUT) &&
                    (Flags() & FLAG_BAKED) == 0 && emissive <= 0.0;
     if (litBody && sunDir.w > 0.0) {
@@ -608,14 +653,14 @@ void main() {
     bool baked = (Flags() & FLAG_BAKED) != 0 && !water;
     /* R8 alpha markers let the composite find water and ground contacts
        without mistaking an actor standing beside the sea for a seabed. */
-    float material = clamp(emissive, 0.0, 1.0);
+    float material = clamp(emissive, 0.0, lava ? 0.5 : 1.0);
     if (water)
         material = 1.0 / 255.0;
     else if (sky)
         material = 2.0 / 255.0;
     else if ((Flags() & FLAG_GRASS) != 0)
         material = 4.0 / 255.0;
-    else if ((Flags() & FLAG_TERRAIN) != 0)
+    else if (!lava && (Flags() & FLAG_TERRAIN) != 0)
         material = 5.0 / 255.0;
     o_light = vec4(min(DynamicLight(v_vpos.xyz, surfaceNormal, !baked), vec3(2.0)) * 0.5, material);
     if (!sky) {

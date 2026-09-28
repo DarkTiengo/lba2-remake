@@ -31,6 +31,7 @@ extern "C" {
 
 static U8 s_shoreCells[SHORE_CELLS * SHORE_CELLS];
 static float *s_shoreWeights = NULL;
+static S32 s_lavaSea = FALSE;
 
 static float ShoreSegmentDistance2(float px, float pz, float ax, float az, float bx, float bz) {
     const float vx = bx - ax, vz = bz - az;
@@ -60,6 +61,7 @@ static float ShoreTriangleDistance2(float px, float pz, const float a[2], const 
 }
 
 void TerrainGpu_ResetShore(void) {
+    s_lavaSea = FALSE;
     GpuWater_SetShoreField(NULL, 0);
     GpuWater_SetSeaPage(NULL);
     memset(s_shoreCells, 0, sizeof(s_shoreCells));
@@ -85,14 +87,15 @@ void TerrainGpu_FinishShore(void) {
     for (size_t i = 0; i < count; i++)
         nearest[i] = limit2;
     static const U8 corners[2][2][3] = {{{0, 1, 2}, {2, 3, 0}}, {{3, 0, 1}, {1, 2, 3}}};
+    const S32 fluidShift = s_lavaSea ? 3 : 0;
     for (S32 z = 0; z < SHORE_CELLS; z++) {
         for (S32 x = 0; x < SHORE_CELLS; x++) {
             const U8 cell = s_shoreCells[z * SHORE_CELLS + x];
-            if ((cell & 3) == 0)
+            if (((cell >> fluidShift) & 3) == 0)
                 continue;
             const float p[4][2] = {{(float)x, (float)z}, {(float)x, (float)(z + 1)}, {(float)(x + 1), (float)(z + 1)}, {(float)(x + 1), (float)z}};
             for (S32 half = 0; half < 2; half++) {
-                if (!(cell & (1 << half)))
+                if (!(cell & (1 << (half + fluidShift))))
                     continue;
                 const U8 *c = corners[(cell >> 2) & 1][half];
                 for (S32 vz = z - SHORE_RADIUS; vz <= z + SHORE_RADIUS + 1; vz++) {
@@ -146,6 +149,7 @@ static T_GPUOBJ_DRAW *s_draw = NULL;
 static float s_planeTexOffset = 0.0f;
 static float s_planeTexMask = 65535.0f;
 static S32 s_waterPlane = FALSE;
+static S32 s_lavaPlane = FALSE;
 static S32 s_skyPlane = FALSE;
 static S32 s_skyBehind = FALSE; ///< the sky plane is drawn behind everything, as the painter does
 static float s_waterCameraX = 0.0f;
@@ -220,6 +224,7 @@ typedef struct {
     U8 HasUv;
     S32 Lights[3];
     S32 Flags;
+    S32 Lava;
     S32 PerVertexShade;
     S32 Color;
     float Mode;
@@ -419,14 +424,12 @@ static void PlanePoint(const STRUC_CLIPVERTEX src[4], float u, float t, float ou
     out[4] = a * src[0].V_MapV + b * src[1].V_MapV + c * src[2].V_MapV + d * src[3].V_MapV;
 }
 
-/* A point of the sea's mesh, where the flat sea lies. The swell is the vertex
-   shader's (GPUOBJ.vert): it raises the point before projecting it, so the
-   depth buffer sees the crest and homogeneous clipping still handles cells
-   straddling the near plane -- and the waves move every frame, not only on the
-   frames the scenery is captured again. The shader writes the height into
-   normal.w for the contact pass, which compares the fixed sea datum to the
-   fixed shoreline. */
-static void WaterMeshVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth, float texU, float texV) {
+/* A point of the broad fluid mesh, where the authored plane lies. The vertex
+   shader raises it before projection, so the depth buffer sees the crest and
+   homogeneous clipping still handles cells straddling the near plane. Water
+   writes its height into normal.w for the contact pass; lava reuses the same
+   mesh with its own lower, slower field. */
+static void FluidMeshVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth, float texU, float texV, S32 lava) {
     const TYPE_MAT *m = &MatriceWorld;
     const float worldX = x * m->F.M11 + y * m->F.M21 - depth * m->F.M31 + s_waterCameraX;
     const float worldZ = x * m->F.M13 + y * m->F.M23 - depth * m->F.M33 + s_waterCameraZ;
@@ -435,7 +438,8 @@ static void WaterMeshVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth, f
     v->normal[1] = m->F.M22;
     v->normal[2] = m->F.M32;
     v->normal[3] = 0.0f;
-    v->vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_WAVES);
+    v->vpos[3] = (float)(GPUOBJ_FLAG_BAKED |
+                         (lava ? GPUOBJ_FLAG_LAVA : (GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_WAVES)));
     v->light[0] = (float)CameraXLight;
     v->light[1] = (float)CameraYLight;
     v->light[2] = (float)CameraZLight;
@@ -448,10 +452,10 @@ static void WaterMeshVertex(T_GPUOBJ_VERTEX *v, float x, float y, float depth, f
     v->uv[3] = worldZ / 512.0f;
 }
 
-static void WaterVertex(T_GPUOBJ_VERTEX *v, const STRUC_CLIPVERTEX src[4], float u, float t) {
+static void FluidVertex(T_GPUOBJ_VERTEX *v, const STRUC_CLIPVERTEX src[4], float u, float t, S32 lava) {
     float point[5];
     PlanePoint(src, u, t, point);
-    WaterMeshVertex(v, point[0], point[1], point[2], point[3] / 256.0f, point[4] / 256.0f);
+    FluidMeshVertex(v, point[0], point[1], point[2], point[3] / 256.0f, point[4] / 256.0f, lava);
 }
 
 /* How far smooth terrain lifts the point of grid position (gx, gz) whose
@@ -496,7 +500,7 @@ static float SmoothOffset(float gx, float gz, float flat, float cornerWeight) {
    moved toward the Catmull-Rom curve through the heights around them, fading
    with the distance and down at the sea's level. */
 static S32 SmoothTri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], float mode, S32 flags,
-                     S32 perVertexShade, float constantShade, S32 color, const U16 *uv) {
+                     S32 perVertexShade, float constantShade, S32 color, const U16 *uv, S32 lava) {
     static const S32 kCornerX[4] = {0, 0, 1, 1};
     static const S32 kCornerZ[4] = {0, 1, 1, 0};
     T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(3);
@@ -522,8 +526,8 @@ static S32 SmoothTri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], f
             vert->uv[0] = (float)uv[i * 2] / 256.0f;
             vert->uv[1] = (float)uv[i * 2 + 1] / 256.0f;
         }
-        vert->uv[2] = (float)gx;
-        vert->uv[3] = (float)gz;
+        vert->uv[2] = (float)(gx + (lava ? s_cubeX * 64 : 0));
+        vert->uv[3] = (float)(gz + (lava ? s_cubeZ * 64 : 0));
     }
     return TRUE;
 }
@@ -659,6 +663,7 @@ static void GrassTri(const T_GRASS_TRI *t) {
 #define LAND_FLAT_SHIFT 21 ///< 3 bits: the triangle's corners that do not curve
 #define LAND_UV (1u << 24)
 #define LAND_GRASS (1u << 25)
+#define LAND_LAVA (1u << 26)
 
 static U8 s_slotFlat[GPUOBJ_MAX_HEIGHTMAPS][GRID_SIDE * GRID_SIDE]; ///< corners of triangles drawn flat
 static S32 s_landSlot = -1;
@@ -739,6 +744,7 @@ void TerrainGpu_LandBuild(const T_TERRAIN_HALF *halves, const U8 *intensity, con
             for (S32 layer = 0; layer < 2; layer++) {
                 S32 fillType;
                 S32 water = FALSE;
+                S32 lava = FALSE;
                 if (layer == 0) {
                     if (!h->PolyFlag) {
                         continue;
@@ -757,20 +763,22 @@ void TerrainGpu_LandBuild(const T_TERRAIN_HALF *halves, const U8 *intensity, con
                     fillType = h->TexType;
                     water = h->CodeJeu == LAND_CJ_WATER || h->CodeJeu == LAND_CJ_FOOT_WATER ||
                             h->CodeJeu == LAND_CJ_ANIMATED_WATER;
+                    lava = h->CodeJeu == 9 || h->CodeJeu == 13;
                 }
                 S32 perVertexShade, chromakey;
                 float constantShade;
                 const float mode = LandMode(fillType, color, &perVertexShade, &constantShade, &chromakey);
-                if (water || mode == (float)GPUOBJ_MODE_PASS) {
+                if (water || lava || mode == (float)GPUOBJ_MODE_PASS) {
                     for (S32 i = 0; i < 3; i++) {
                         flat[(zi + kCZ[corners[i]]) * GRID_SIDE + xi + kCX[corners[i]]] = 1;
                     }
                 }
                 U32 *r = out + n * GPUOBJ_LAND_WORDS;
                 r[0] = (U32)cell | (half ? LAND_HALF : 0) | (sens ? LAND_SENS : 0) | (water ? LAND_WATER : 0) |
+                       (lava ? LAND_LAVA : 0) |
                        (chromakey ? LAND_CHROMAKEY : 0) | (perVertexShade ? LAND_VERTEX_SHADE : 0) |
                        ((U32)mode << LAND_MODE_SHIFT) | (layer == 1 ? LAND_UV : 0) |
-                       (h->Step == GRASS_STEP && !water && mode != (float)GPUOBJ_MODE_PASS ? LAND_GRASS : 0);
+                       (h->Step == GRASS_STEP && !water && !lava && mode != (float)GPUOBJ_MODE_PASS ? LAND_GRASS : 0);
                 r[1] = (U32)(color & 0xFF) | ((U32)constantShade << 8) | raw << 16;
                 /* The texture's corners, in the triangle's order. */
                 for (S32 i = 0; i < 3; i++) {
@@ -922,7 +930,8 @@ S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32
     float mode;
     const S32 water = uv != NULL && (codeJeu == LAND_CJ_WATER || codeJeu == LAND_CJ_FOOT_WATER ||
                                      codeJeu == LAND_CJ_ANIMATED_WATER);
-    S32 flags = GPUOBJ_FLAG_BAKED | (water ? 0 : GPUOBJ_FLAG_TERRAIN);
+    const S32 lava = uv != NULL && (codeJeu == 9 || codeJeu == 13);
+    S32 flags = GPUOBJ_FLAG_BAKED | (water ? 0 : GPUOBJ_FLAG_TERRAIN) | (lava ? GPUOBJ_FLAG_LAVA : 0);
     S32 perVertexShade = FALSE;
     float constantShade = 0.0f;
 
@@ -958,7 +967,7 @@ S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32
         flags |= GPUOBJ_FLAG_CHROMAKEY;
     }
 
-    if (TerrainGpuGrass && step == GRASS_STEP && !water && mode != (float)GPUOBJ_MODE_PASS &&
+    if (TerrainGpuGrass && step == GRASS_STEP && !water && !lava && mode != (float)GPUOBJ_MODE_PASS &&
         s_nbGrassTris < MAX_GRASS_TRIS) {
         static const S32 kGX[4] = {0, 0, 1, 1};
         static const S32 kGZ[4] = {0, 1, 1, 0};
@@ -1009,6 +1018,7 @@ S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32
             }
             t->Mode = mode;
             t->Flags = flags;
+            t->Lava = lava;
             t->PerVertexShade = perVertexShade;
             t->ConstantShade = constantShade;
             t->Color = color;
@@ -1047,6 +1057,9 @@ S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32
             const TYPE_MAT *m = &MatriceWorld;
             v[i].uv[2] = (p[0] * m->F.M11 + p[1] * m->F.M21 - p[2] * m->F.M31 + s_waterCameraX) / 512.0f;
             v[i].uv[3] = (p[0] * m->F.M13 + p[1] * m->F.M23 - p[2] * m->F.M33 + s_waterCameraZ) / 512.0f;
+        } else if (lava) {
+            v[i].uv[2] = (float)(s_cubeX * 64 + xi + kCornerX[corners[i] & 3]);
+            v[i].uv[3] = (float)(s_cubeZ * 64 + zi + kCornerZ[corners[i] & 3]);
         }
     }
 
@@ -1101,11 +1114,16 @@ void TerrainGpu_SetWaterCube(S32 cubeX, S32 cubeZ) {
     s_waterCameraZ = (float)CameraZ + (float)cubeZ * 32768.0f;
 }
 
+void TerrainGpu_SetLavaSea(S32 lavaSea) {
+    s_lavaSea = lavaSea != FALSE;
+}
+
 void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S32 fogEnd, S32 fogColor,
                            S32 sea) {
     s_draw = NULL;
     s_nbSmoothTris = 0;
-    s_waterPlane = sea;
+    s_lavaPlane = sea && s_lavaSea;
+    s_waterPlane = sea && !s_lavaPlane;
     s_skyPlane = !sea;
     s_skyBehind = FALSE;
     if (s_waterPlane)
@@ -1114,7 +1132,7 @@ void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S
         return;
     }
     OpenDraw(page, NULL, fogStart, fogEnd, fogColor);
-    if (s_draw != NULL && s_waterPlane && GpuWaterEnabled) {
+    if (s_draw != NULL && ((s_waterPlane && GpuWaterEnabled) || (s_lavaPlane && GpuObjLava))) {
         s_draw->Procedural = GPUOBJ_PROC_SEA;
     }
     s_planeTexOffset = (float)texOffset;
@@ -1125,19 +1143,18 @@ S32 TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]) {
     if (s_draw == NULL) {
         return FALSE;
     }
-    if (s_waterPlane && GpuWaterEnabled) {
+    if ((s_waterPlane && GpuWaterEnabled) || (s_lavaPlane && GpuObjLava)) {
         /* The tile's four corners: GPUTERRAIN.vert cuts it into 8 x 8 cells,
-           enough to resolve the broad waves that move the silhouette, as this
-           did on the CPU (the mesh is bilinear in the corners, the world
-           position too). */
+           enough to resolve the broad fluid motion that moves the silhouette
+           (the mesh is bilinear in the corners, the world position too). */
         T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(4);
         if (v == NULL) {
             return FALSE;
         }
-        WaterVertex(v++, src, 0.0f, 0.0f);
-        WaterVertex(v++, src, 0.0f, 1.0f);
-        WaterVertex(v++, src, 1.0f, 1.0f);
-        WaterVertex(v++, src, 1.0f, 0.0f);
+        FluidVertex(v++, src, 0.0f, 0.0f, s_lavaPlane);
+        FluidVertex(v++, src, 0.0f, 1.0f, s_lavaPlane);
+        FluidVertex(v++, src, 1.0f, 1.0f, s_lavaPlane);
+        FluidVertex(v++, src, 1.0f, 0.0f, s_lavaPlane);
         return TRUE;
     }
     T_GPUOBJ_VERTEX *v = GpuObj_AllocVerts(6);
@@ -1154,11 +1171,15 @@ S32 TerrainGpu_Quad(const STRUC_CLIPVERTEX src[4]) {
         v[i].mat[2] = s_planeTexMask;
         v[i].uv[0] = (float)p->V_MapU / 256.0f;
         v[i].uv[1] = (float)p->V_MapV / 256.0f;
-        if (s_waterPlane) {
-            v[i].vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_WATER);
-            v[i].light[0] = (float)CameraXLight;
-            v[i].light[1] = (float)CameraYLight;
-            v[i].light[2] = (float)CameraZLight;
+        if (s_waterPlane || s_lavaPlane) {
+            if (s_lavaPlane) {
+                v[i].vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_LAVA);
+            } else {
+                v[i].vpos[3] = (float)(GPUOBJ_FLAG_BAKED | GPUOBJ_FLAG_WATER);
+                v[i].light[0] = (float)CameraXLight;
+                v[i].light[1] = (float)CameraYLight;
+                v[i].light[2] = (float)CameraZLight;
+            }
             /* Undo the view rotation, then add the island-space main camera.
                Horizon cubes use shifted cameras but share this reference. */
             const TYPE_MAT *m = &MatriceWorld;
@@ -1194,7 +1215,7 @@ void TerrainGpu_End(void) {
         for (S32 k = 0; k < s_nbSmoothTris; k++) {
             const T_SMOOTH_TRI *t = &s_smoothTris[k];
             SmoothTri(t->Xi, t->Zi, t->Corners, t->Lights, t->Mode, t->Flags, t->PerVertexShade, t->ConstantShade,
-                      t->Color, t->HasUv ? t->Uv : NULL);
+                      t->Color, t->HasUv ? t->Uv : NULL, t->Lava);
         }
     }
     s_nbSmoothTris = 0;

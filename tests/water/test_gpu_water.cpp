@@ -22,7 +22,7 @@ float FRatioX = 1000.0f, FRatioY = 1.0f;
 S32 CameraXLight = 0, CameraYLight = 1, CameraZLight = 0;
 S32 TypeProj = TYPE_3D;
 S32 ClipXMin = 0, ClipYMin = 0, ClipXMax = 639, ClipYMax = 479;
-S32 GpuObjEnabled = TRUE, GpuObjAvailable = TRUE;
+S32 GpuObjEnabled = TRUE, GpuObjAvailable = TRUE, GpuObjLava = TRUE;
 }
 
 static T_GPUOBJ_DRAW draw;
@@ -353,6 +353,23 @@ int main() {
     Check(allocated == 6 && vertices[0].vpos[1] == (float)quad[0].V_Y0,
           "disabled water keeps the original flat two-triangle sea");
     GpuWaterEnabled = TRUE;
+    static U8 sentinelSeaPage[65536];
+    GpuWater_SetSeaPage(sentinelSeaPage);
+    TerrainGpu_SetLavaSea(TRUE);
+    Plane(TRUE, quad);
+    Check(allocated == 4 && draw.Procedural == GPUOBJ_PROC_SEA &&
+              ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_LAVA) != 0 &&
+              ((S32)vertices[0].vpos[3] & (GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_WAVES)) == 0 &&
+              GpuWater_GetSeaPage() == sentinelSeaPage,
+          "lava broad plane uses its own animated mesh and keeps the water material/page path separate");
+    GpuObjLava = FALSE;
+    Plane(TRUE, quad);
+    Check(allocated == 6 && draw.Procedural != GPUOBJ_PROC_SEA &&
+              ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_LAVA) != 0,
+          "disabled modern lava keeps the original flat two-triangle plane");
+    GpuObjLava = TRUE;
+    TerrainGpu_SetLavaSea(FALSE);
+    GpuWater_SetSeaPage(planePage);
     float calmHeight, stormHeight;
     float surfaceNormal[3];
     GpuWater_SetWeather(FALSE);
@@ -384,6 +401,17 @@ int main() {
     Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER) == 0 &&
               ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_TERRAIN) != 0,
           "ordinary non-water terrain carries the terrain marker");
+    for (S32 lavaCode = 9; lavaCode <= 13; lavaCode += 4) {
+        TerrainGpu_BeginCube(heights, terrainPage, NULL, 0, 0, 0);
+        allocated = 0;
+        TerrainGpu_Tri(0, 0, corners, lights, POLY_TEXTURE, 0, terrainUv, lavaCode, 0);
+        TerrainGpu_End();
+        Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_LAVA) != 0 &&
+                  ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER) == 0 &&
+                  ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_TERRAIN) != 0 && vertices[0].uv[2] >= 0.0f &&
+                  vertices[0].uv[3] >= 0.0f,
+              "textured CodeJeu 9/13 lava carries a world-stable material phase");
+    }
 
     /* Smooth terrain: a land triangle becomes sixteen on the curve, never below
        its plane, flagged for the shadow rays, the first carrying the original. */
@@ -566,6 +594,18 @@ int main() {
         TerrainGpu_ResetShore();
         Check(GpuWater_GetShoreField(&side, &revision) == NULL && side == 0,
               "next island withdraws its predecessor's coast");
+        std::memset(shoreCells, 0, sizeof(shoreCells));
+        shoreCells[20 * 64 + 63] = 8;
+        TerrainGpu_SetLavaSea(TRUE);
+        TerrainGpu_SetShoreCube(7, 4, shoreCells);
+        TerrainGpu_FinishShore();
+        field = GpuWater_GetShoreField(&side, &revision);
+        if (field != NULL) {
+            const S32 z = 4 * 64 + 20, x = 7 * 64 + 63;
+            Check(field[(size_t)z * side + x] == 0.0f && field[(size_t)z * side + x + 5] == 1.0f,
+                  "lava sea selects the authored lava coastline for mesh damping");
+        }
+        TerrainGpu_ResetShore();
     }
     /* The land the GPU grows whole: one record a fill of a half-cell, built
        once a cube, and a draw that carries the camera the cube is drawn from. */
@@ -614,6 +654,17 @@ int main() {
         TerrainGpu_LandBuild(halves, light, defs);
         Check(GpuObjLandCount[7] == 2 && (w[0] & (1u << 14)) != 0,
               "CodeJeu 1 water remains marked in indexed land records");
+        water->CodeJeu = 9;
+        GpuObjLandCount[7] = -1;
+        TerrainGpu_LandBuild(halves, light, defs);
+        Check(GpuObjLandCount[7] == 2 && (w[0] & (1u << 26)) != 0 && (w[0] & (1u << 14)) == 0 &&
+                  (w[0] & (1u << 25)) == 0,
+              "indexed CodeJeu 9 lava stays pinned, marked lava, and excluded from grass");
+        water->CodeJeu = 13;
+        GpuObjLandCount[7] = -1;
+        TerrainGpu_LandBuild(halves, light, defs);
+        Check(GpuObjLandCount[7] == 2 && (w[0] & (1u << 26)) != 0,
+              "indexed CodeJeu 13 lava receives the same material");
         TerrainGpu_End();
         CameraXr = CameraYr = CameraZr = 0;
     }

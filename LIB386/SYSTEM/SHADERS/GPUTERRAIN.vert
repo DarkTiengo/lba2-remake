@@ -184,6 +184,7 @@ const uint LAND_MAX = 16384u;
 const uint LAND_HALF = 1u << 12;
 const uint LAND_SENS = 1u << 13;
 const uint LAND_WATER = 1u << 14;
+const uint LAND_LAVA = 1u << 26;
 const uint LAND_CHROMAKEY = 1u << 15;
 const uint LAND_VERTEX_SHADE = 1u << 16;
 const uint LAND_UV = 1u << 24;
@@ -265,6 +266,10 @@ void Land() {
         phase = grid + landInfo.zw;
     } else {
         flags |= 2048; /* GPUOBJ_FLAG_TERRAIN */
+        if ((r.x & LAND_LAVA) != 0u) {
+            flags |= 4096; /* GPUOBJ_FLAG_LAVA */
+            phase = grid + landInfo.zw;
+        }
     }
 
     vec3 n = vec3(0.0, 0.0, 1.0);
@@ -316,10 +321,20 @@ void Sea() {
              w.w * Field(first + 3, 3).xyz;
     vec4 uv = w.x * Field(first, 5) + w.y * Field(first + 1, 5) + w.z * Field(first + 2, 5) + w.w * Field(first + 3, 5);
     vec4 normal = Field(first, 1);
+    int flags = int(floor(Field(first, 3).w + 0.5));
+    bool lava = (flags & FLAG_LAVA) != 0;
     float shore;
     vec2 shoreGradient;
     ShoreSample(uv.zw, shore, shoreGradient);
-    if (waves.z > 0.5) {
+    if (lava && records.z > 0.5) {
+        vec3 n;
+        float rawHeight = LavaSwell(uv.zw * 512.0, n);
+        vec2 slope = -n.xz / max(n.y, 0.001) * shore + rawHeight * shoreGradient;
+        float h = rawHeight * shore;
+        vec3 up = vec3(capRow0.y, capRow1.y, capRow2.y);
+        p += h * up;
+        normal = vec4(World(normalize(vec3(-slope.x, 1.0, -slope.y))), h);
+    } else if (!lava && waves.z > 0.5) {
         vec3 n;
         float rawHeight = Swell(uv.zw * 512.0, n);
         vec2 slope = -n.xz / max(n.y, 0.001) * shore + rawHeight * shoreGradient;
@@ -340,7 +355,7 @@ void Sea() {
     v_mat = Field(first, 4);
     v_uv = uv;
     v_slice = vec2(sliceNear, sliceSize);
-    v_waterCoast = shore;
+    v_waterCoast = lava ? 0.0 : shore;
 }
 
 void main() {
