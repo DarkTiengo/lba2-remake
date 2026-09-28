@@ -2,7 +2,7 @@
    movement continuous. The palette remains the source of every colour so
    fades, lightning and scene colour changes reach both water and reflection. */
 layout(set = 3, binding = 3) uniform Water {
-    vec4 waterInfo; // game time (seconds), enabled, rain strength, padding
+    vec4 waterInfo; // game time (seconds), enabled, rain strength, sea page slot (-1 if absent)
     vec4 waterAxisX;
     vec4 waterAxisY;
     vec4 waterAxisZ;
@@ -13,25 +13,22 @@ vec3 WaterTexel(ivec2 p, int offset) {
     /* Match Texel(): the sea and sky share the 256x256 page, and the sky
        starts at a linear offset of 128 bytes rather than at x = 128. */
     int index = (offset + ((((p.y & 255) << 8) | (p.x & 255)))) & 65535;
-    int texel = int(texelFetch(u_pages, ivec3(index & 255, index >> 8, int(page)), 0).r * 255.0 + 0.5);
+    int texel = int(texelFetch(u_pages, ivec3(index & 255, index >> 8, int(waterInfo.w)), 0).r * 255.0 + 0.5);
     return Pal(Logical(texel));
 }
 
-vec3 WaterTexture(vec2 uv, int offset) {
-    vec2 p = uv - 0.5;
-    ivec2 i = ivec2(floor(p));
-    vec2 f = fract(p);
-    return mix(mix(WaterTexel(i, offset), WaterTexel(i + ivec2(1, 0), offset), f.x),
-               mix(WaterTexel(i + ivec2(0, 1), offset), WaterTexel(i + ivec2(1, 1), offset), f.x), f.y);
+/* Fixed samples retain the island's palette and fades without repeating its
+   high-contrast retail texture across the modern sea. */
+vec3 WaterSeaTint() {
+    return (WaterTexel(ivec2(18, 20), 0) + WaterTexel(ivec2(43, 34), 0) +
+            WaterTexel(ivec2(75, 16), 0) + WaterTexel(ivec2(104, 47), 0) +
+            WaterTexel(ivec2(16, 83), 0) + WaterTexel(ivec2(52, 105), 0) +
+            WaterTexel(ivec2(80, 72), 0) + WaterTexel(ivec2(110, 111), 0)) * 0.125;
 }
 
-/* The indexed page contains deliberate pixel accents. A tiny world-space
-   average keeps those accents as soft glints when the sea is viewed obliquely
-   instead of producing isolated white squares. */
-vec3 WaterTextureSoft(vec2 uv, int offset) {
-    vec2 d = vec2(0.10, 0.0);
-    return WaterTexture(uv, offset) * 0.60 +
-           (WaterTexture(uv + d, offset) + WaterTexture(uv - d, offset)) * 0.20;
+vec3 WaterSkyTint() {
+    return (WaterTexel(ivec2(21, 24), 128) + WaterTexel(ivec2(91, 29), 128) +
+            WaterTexel(ivec2(39, 91), 128) + WaterTexel(ivec2(106, 103), 128)) * 0.25;
 }
 
 float WaterHash(vec2 p) {
@@ -101,7 +98,7 @@ vec2 RainRipples(vec2 p, out float glint) {
             ring *= smoothstep(0.02, 0.12, age) * (1.0 - smoothstep(0.76, 1.0, age));
             ring *= resolvable * 0.35;
             slope += delta / max(distance, 0.04) * ring;
-            glint = max(glint, ring * 0.35);
+            glint = max(glint, ring * 0.65);
         }
     }
     return slope * 0.028;
@@ -146,7 +143,7 @@ vec2 WaterImpactWaves(vec2 p, out float foam) {
     return slope;
 }
 
-vec3 WaterColor(out vec3 viewNormal) {
+vec3 WaterColor(out vec3 viewNormal, float coastWeight) {
     vec2 p = v_uv.zw;
     float storm = clamp(waterInfo.z, 0.0, 1.0);
     /* A dominant swell and shorter cross-waves share the same world-anchored
@@ -170,6 +167,7 @@ vec3 WaterColor(out vec3 viewNormal) {
     if (storm > 0.0) {
         slope += RainRipples(p, rainGlint) * storm;
     }
+    slope *= mix(0.45, 1.0, clamp(coastWeight, 0.0, 1.0));
     vec3 normal = normalize(vec3(-slope.x, 1.0, -slope.y));
     mat3 axes = mat3(waterAxisX.xyz, waterAxisY.xyz, waterAxisZ.xyz);
     viewNormal = normalize(axes * normal);
@@ -178,16 +176,18 @@ vec3 WaterColor(out vec3 viewNormal) {
     float facing = clamp(dot(normal, worldView), 0.0, 1.0);
     float fresnel = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
     vec3 reflected = reflect(-worldView, normal);
-    vec2 skyUv = vec2(64.0) + reflected.xz / max(abs(reflected.y), 0.25) * 18.0;
-    vec3 sky = WaterTexture(skyUv, 128);
-    /* The polygon UVs restart at clipped sea-tile boundaries. Sampling the
-       palette page from the world phase keeps the colour field continuous
-       across those triangles and blends two scales to hide page repetition. */
-    vec2 waterUv = p * 0.29 + vec2(0.5) + slope * (0.55 + storm * 0.16);
-    vec3 baseFine = WaterTextureSoft(waterUv, 0);
-    vec3 baseBroad = WaterTextureSoft(p * 0.105 + vec2(0.17, 0.63) - slope * 0.24, 0);
-    vec3 base = mix(baseFine, baseBroad, 0.30);
+    vec3 sky = WaterSkyTint() * (0.94 + 0.06 * clamp(reflected.y, 0.0, 1.0));
+    vec3 base = WaterSeaTint();
+    base *= 0.94 + 0.06 * sin(p.x * 0.31 + sin(p.y * 0.23) * 0.8);
     vec3 color = mix(base * (0.90 + 0.10 * facing), sky, 0.08 + fresnel * 0.62);
+    /* Implied shallow sand/rock tint: the scene has no submerged geometry.
+       This is an opaque optical approximation, not scene refraction. */
+    float shallowDepth = mix(60.0, 1400.0, clamp(coastWeight, 0.0, 1.0));
+    float transmission = 0.34 * exp(-shallowDepth / 430.0) *
+                         (1.0 - smoothstep(0.05, 0.82, coastWeight)) * facing * facing;
+    vec3 bed = mix(base, vec3(dot(base, vec3(0.3, 0.59, 0.11))), 0.40);
+    bed *= vec3(1.13, 1.06, 0.90) * 0.95;
+    color = mix(color, bed, transmission);
     /* Let the analytic waves show as restrained moving value changes even
        where neighbouring palette texels happen to share the same blue. */
     float ripple = 0.5 + 0.5 * sin(dot(p, normalize(vec2(-0.37, 0.93))) * 2.9 -
@@ -201,7 +201,7 @@ vec3 WaterColor(out vec3 viewNormal) {
     /* A palette-derived glint cannot remain bright during a fade to black. */
     color += max(sky, base) * highlight * specular * (0.32 + 0.18 * storm);
     vec3 foamColor = min(max(sky, base) * 1.38, vec3(0.92));
-    float surfaceFoam = max(impactFoam * (0.46 + 0.16 * storm), rainGlint * storm * 0.22);
+    float surfaceFoam = max(impactFoam * (0.46 + 0.16 * storm), rainGlint * storm * 0.52);
     color = mix(color, foamColor, surfaceFoam);
     return color;
 }

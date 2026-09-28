@@ -49,11 +49,12 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
  *  cell's corners (0 = (x, z), 1 = (x, z+1), 2 = (x+1, z+1), 3 = (x+1, z)),
  *  lights are the 8.8 vertex intensities, fillType and color what Fill_Poly
  *  got, uv the six texel coordinates (8.8) or NULL for an untextured fill,
+ *  codeJeu the authored game code (zero for the untextured colour layer),
  *  step the footstep sound the ground makes (T_HALF_POLY.SampleStep).
  *  Returns TRUE when the GPU will draw this triangle's colour, so the software
  *  fill beside it is only needed for its tag and its depth. */
 S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
-                   const U16 *uv, S32 water, S32 step);
+                   const U16 *uv, S32 codeJeu, S32 step);
 
 /* The software leaves the terrain the GPU covers to the GPU (gfx_fastterrain).
  * Outdoors, with the GPU's shadows on, it does not paint it at all: the scenery
@@ -105,6 +106,11 @@ void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ);
 
 /** Selects the island cube whose local sea coordinates are being captured. */
 void TerrainGpu_SetWaterCube(S32 cubeX, S32 cubeZ);
+/* Authored 1/12/15 half-cells define a fixed island-wide coastal envelope. */
+void TerrainGpu_ResetShore(void);
+void TerrainGpu_SetShoreCube(S32 cubeX, S32 cubeZ, const U8 cells[64 * 64]);
+void TerrainGpu_FinishShore(void);
+void TerrainGpu_SampleShore(float worldX, float worldZ, float *weight, float *gradientX, float *gradientZ);
 
 /** Opens a sea or sky plane and marks the material for the GPU compositor. */
 void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S32 fogEnd, S32 fogColor,

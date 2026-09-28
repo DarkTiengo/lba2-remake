@@ -123,6 +123,7 @@ void GpuObj_MeshReset(void);
 #define GPUOBJ_FLAG_DETAIL 128 ///< smooth terrain's small triangles: shadow rays take the original instead, a block at a time
 #define GPUOBJ_FLAG_GRASS 512        ///< a grass blade: the tip sways by uv.zw (clip offset of the wind), phase in mat.w
 #define GPUOBJ_FLAG_WAVES 1024       ///< a point of the sea's mesh, undisplaced: the vertex shader raises the swell at world uv.zw * 512
+#define GPUOBJ_FLAG_TERRAIN 2048     ///< exterior ground, distinct from actors/decor at the waterline
 #define GPUOBJ_FLAG_FOLIAGE 8192     ///< a tree's leaf (GPUTREE.H): shaded as foliage and fluttering while its draw is a tree
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */

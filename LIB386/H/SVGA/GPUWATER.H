@@ -10,6 +10,13 @@ extern S32 GpuWaterEnabled;
 
 #define GPUWATER_MAX_IMPACTS 8
 #define GPUWATER_UNIFORM_FLOATS (16 + GPUWATER_MAX_IMPACTS * 4)
+#define GPUWATER_SHORE_SIDE 1025
+
+/* Island-owned row-major vertex weights; the pointer stays valid until replaced. */
+void GpuWater_SetShoreField(const float *weights, S32 side);
+const float *GpuWater_GetShoreField(S32 *side, U32 *revision);
+void GpuWater_SetSeaPage(const U8 *page);
+const U8 *GpuWater_GetSeaPage(void);
 
 /* Scene time is supplied by the game, never advanced by menu presents. */
 void GpuWater_SetTime(U32 milliseconds);

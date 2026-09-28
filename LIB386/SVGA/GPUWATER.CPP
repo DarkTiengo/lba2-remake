@@ -4,6 +4,27 @@
 #include <string.h>
 
 S32 GpuWaterEnabled = TRUE;
+static const float *s_shoreField = NULL;
+static S32 s_shoreSide = 0;
+static U32 s_shoreRevision = 0;
+static const U8 *s_seaPage = NULL;
+
+void GpuWater_SetShoreField(const float *weights, S32 side) {
+    s_shoreField = weights;
+    s_shoreSide = weights != NULL ? side : 0;
+    s_shoreRevision++;
+}
+
+const float *GpuWater_GetShoreField(S32 *side, U32 *revision) {
+    if (side != NULL)
+        *side = s_shoreSide;
+    if (revision != NULL)
+        *revision = s_shoreRevision;
+    return s_shoreField;
+}
+
+void GpuWater_SetSeaPage(const U8 *page) { s_seaPage = page; }
+const U8 *GpuWater_GetSeaPage(void) { return s_seaPage; }
 static float s_water[16] = {0.0f, 0.0f, 0.0f, 0.0f,
                             1.0f, 0.0f, 0.0f, 0.0f,
                             0.0f, 1.0f, 0.0f, 0.0f,
