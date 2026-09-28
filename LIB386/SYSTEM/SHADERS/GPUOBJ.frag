@@ -129,7 +129,7 @@ const int FLAG_WATER = 16;
 const int FLAG_SKY = 32;
 const int FLAG_WATER_TERRAIN = 64;
 const int FLAG_GRASS = 512;
-const int FLAG_FOLIAGE = 4096;
+const int FLAG_FOLIAGE = 8192;
 
 vec3 Pal(int i) {
     return texelFetch(u_palette, ivec2(i & 255, 0), 0).rgb;

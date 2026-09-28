@@ -34,7 +34,7 @@ layout(set = 1, binding = 0) uniform Draw {
 
 const int FLAG_GRASS = 512;
 const int FLAG_WAVES = 1024;
-const int FLAG_FOLIAGE = 4096;
+const int FLAG_FOLIAGE = 8192;
 
 const float TREE_HEIGHT = 3000.0; // GPUTREE_HEIGHT
 const float TREE_BEND = 60.0;     // GPUTREE_BEND
