@@ -1,10 +1,30 @@
-# Little Big Adventure 2 Classic Community
+# LBA2 Remake
 
 Little Big Adventure 2 (aka Twinsen's Odyssey) is the sequel to Little Big Adventure (aka Relentless: Twinsen's Adventure) in 1997.
 
-This repository is the community fork of the classic source release — a source port maintained with preservation in mind while improving portability and long-term maintainability. Game assets aren't included; you need a legitimate copy of LBA2 to play.
+LBA2 Remake gives the 1997 game a modern look without changing how it plays or what it is. It runs the original engine and the original game data, and draws them again on the GPU. Islands, characters and objects keep their models, palettes and art. They get smooth shading, soft and ray-traced shadows, sunlight and sky, living water, grass and trees in the wind, and a far view. The game underneath is the same: the scripts, the timing and the saves are untouched, and the classic renderer is one menu option away.
 
-## Features
+Game assets aren't included; you need a legitimate copy of LBA2 to play.
+
+## Where it comes from
+
+This project is a fork of [LBA2 Classic Community](https://github.com/LBALab/lba2-classic-community), the community source port of Adeline's [`lba2-classic`](https://github.com/2point21/lba2-classic) release, and it keeps everything that port does (below). The community port preserves the original and makes it build and run on modern systems. This fork goes further on the look: the GPU renderer and the effects built on it are developed here, and aren't part of the community port.
+
+## The GPU renderer
+
+The GPU renderer draws the 3D scene on the GPU while the original software rasterizer keeps deciding what is visible, so every rule of the 1997 engine still holds. Switch it in Options → Display → Renderer. Each effect has its own switch in Display → GPU effects, and Display → Auto-adjust fits them to your machine.
+
+- **Models and scenery** at the window's resolution, up to 4K: smooth per-pixel shading from the models' own palettes, filtered textures, continuous distance fog, a far view of the surrounding island
+- **Light:** sun shadows, sky fill and rim light, soft shadows away from lamps and fires, ray-traced shadows through the terrain and every body, ambient occlusion
+- **Water:** waves and swell on every sea, foam and breakers along the real coastline, splashes where anything enters it, rain rings on the surface
+- **Sky and weather:** a procedural sky with the sun, drifting clouds and stars, the Emerald Moon's view of Twinsun, layered rain with lightning over Citadel Island's storm
+- **Living scenery:** smoothly curved hills, grass that sways in the wind, trees and bushes that bend in the same gusts with their leaves shaded as foliage
+- **Fire and lamps:** procedural flames and firelight, glowing lamp globes that light their surroundings
+- **2D:** rooms, sprites and menus keep their pixel art, upscaled with a pixel-art filter
+
+How it works and every switch: [docs/GPU_RENDERER.md](docs/GPU_RENDERER.md). The options at a glance: [docs/GFX_OPTIONS.md](docs/GFX_OPTIONS.md). The GPU renderer needs Vulkan (Linux, Windows, Android); elsewhere the game keeps the classic look.
+
+## Features of the port
 
 - **The complete game** — the original 1997 engine, ported to 64-bit and modern compilers; bring your own copy of LBA2
 - **Native builds** — Linux, macOS, Windows, and Android / Android TV (7.0+, API 24)
@@ -19,21 +39,25 @@ This repository is the community fork of the classic source release — a source
 - **FMV playback** — via the bundled open-source libsmacker
 - **Debug console** — always-on Quake-style console ([docs/CONSOLE.md](docs/CONSOLE.md))
 
-For a history of project changes, please see the [CHANGELOG.md](CHANGELOG.md).
+For a history of the community port's changes, please see the [CHANGELOG.md](CHANGELOG.md).
 
-## About this repository
+## About the codebase
 
-The original LBA2 engine source is the [`lba2-classic`](https://github.com/2point21/lba2-classic) codebase: it is mostly assembly, with C++ for game logic, and is the canonical historical release. `lba2-classic-community` is a community fork for evolving and modernizing the code: ports of assembly to C++, SDL3 for graphics/audio/input, libsmacker for FMV, native Linux/macOS/Windows/Android builds, and player-facing additions such as widescreen support, gamepad play, and an always-on debug console. The goal is to preserve the history and culture of the original while making the codebase easier to build and extend. See [ASM_TO_CPP_REFERENCE.md](docs/ASM_TO_CPP_REFERENCE.md) for which modules have been ported from ASM to C++ in this fork.
+The original LBA2 engine source is the [`lba2-classic`](https://github.com/2point21/lba2-classic) codebase: it is mostly assembly, with C++ for game logic, and is the canonical historical release. The community port evolves and modernizes it: ports of assembly to C++, SDL3 for graphics/audio/input, libsmacker for FMV, native Linux/macOS/Windows/Android builds, and player-facing additions such as widescreen support, gamepad play, and an always-on debug console. See [ASM_TO_CPP_REFERENCE.md](docs/ASM_TO_CPP_REFERENCE.md) for which modules have been ported from ASM to C++. This fork builds the GPU renderer on top of that work.
 
 ## Playing
 
-Pre-built binaries for Linux, macOS, and Windows.
+This fork has no pre-built binaries yet: build it from source (below), then run it with your game data.
 
-**Stable** — [the latest tagged release](https://github.com/LBALab/lba2-classic-community/releases/latest). A milestone build with less churn than rolling. Pre-1.0 — bugs are still being ironed out, and full-playthrough testing isn't part of the release criteria yet (see the [1.0 bar](docs/RELEASING.md) for what changes at 1.0).
+```bash
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+LBA2_GAME_DIR=/path/to/game ./build/SOURCES/lba2cc
+```
 
-**Bleeding edge** — [the rolling `latest` pre-release](https://github.com/LBALab/lba2-classic-community/releases/tag/latest). Rebuilt from `main` on every push, may contain unreleased changes, and sometimes carries artifacts not yet in the latest stable tag (newly added platforms land here first). Useful for verifying a fix landed or chasing the freshest feature; not play-tested.
+Turn the GPU renderer on in Options → Display → Renderer, or start with `LBA2_GPU=1` to force it for one run.
 
-All releases: [Releases page](https://github.com/LBALab/lba2-classic-community/releases).
+For the community port's own builds (classic renderer only), see [its releases](https://github.com/LBALab/lba2-classic-community/releases).
 
 ### Game data
 
@@ -50,28 +74,7 @@ LBA2_GAME_DIR=/path/to/game ./lba2cc
 
 To re-pick later: `./lba2cc --pick-game-dir`. See [docs/GAME_DATA.md](docs/GAME_DATA.md) for the full discovery order and override precedence.
 
-### Linux
-
-Grab `lba2cc-<version>-anylinux-<arch>.AppImage`, then:
-
-```bash
-chmod +x lba2cc-*-anylinux-*.AppImage
-./lba2cc-*-anylinux-*.AppImage
-```
-
-> On distros without FUSE, or for packagers wrapping the binary, a static `lba2cc-<version>-linux-<arch>.tar.gz` is published alongside the AppImage — extract and run `lba2cc`.
-
-### macOS
-
-Download `lba2cc-<version>-macos-arm64.dmg`, open it, drag `LBA2 Classic Community.app` to Applications. First launch needs right-click → **Open** (macOS Gatekeeper blocks unsigned apps on double-click). The DMG ships its own README covering this — read it before the first launch.
-
-### Windows
-
-Download `lba2cc-<version>-windows-x64.zip`, unzip anywhere, run `lba2cc.exe`. Portable build: no installer, no DLLs needed.
-
-### Android
-
-Download the `lba2cc-<version>-android-arm64-v8a.apk` (or `armeabi-v7a`). Requires **Android 7.0 (API 24)** or later. You must provide your own retail game data (see [Game data](#game-data) and [docs/ANDROID.md](docs/ANDROID.md) for setup).
+Android builds are covered in [docs/ANDROID.md](docs/ANDROID.md); Windows in [docs/WINDOWS.md](docs/WINDOWS.md).
 
 ## Building from source quick start
 
@@ -126,7 +129,7 @@ This source port includes a Quake-style drop-down debug console. It is always av
 ## Project structure
 
 ```text
-lba2-classic-community/
+lba2-remake/
 ├── CMakeLists.txt            # Root build configuration
 ├── CMakePresets.json         # Cross-platform preset builds (linux/macos/windows/...)
 ├── Makefile                  # Convenience targets (build/run/test/format)
@@ -167,13 +170,13 @@ This codebase is a window into 1990s game development at Adeline Software Intern
 
 ## License
 
-This source code is licensed under the [GNU General Public License](https://github.com/LBALab/lba2-classic-community/blob/main/LICENSE).
+This source code is licensed under the [GNU General Public License](LICENSE), as the community port and the original release are.
 
 Please note this license only applies to **Little Big Adventure 2** engine source code. **Little Big Adventure 2** game assets (art, models, textures, audio, etc.) are not open-source and therefore aren't redistributable.
 
 ## How can I contribute?
 
-Read our [Contribution Guidelines](https://github.com/LBALab/lba2-classic-community/blob/main/CONTRIBUTING.md) and the [Code Style](https://github.com/LBALab/lba2-classic-community/blob/main/CODESTYLE.md) reference.
+Read the [Contribution Guidelines](CONTRIBUTING.md) and the [Code Style](CODESTYLE.md) reference.
 
 ## Links
 
