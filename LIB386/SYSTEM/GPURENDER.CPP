@@ -98,6 +98,8 @@ static SDL_GPUTexture *s_objLight = NULL; ///< dynamic light reaching each scene
 static SDL_GPUBuffer *s_heightBuffer = NULL; ///< GpuObjHeightMaps, for GPUTERRAIN.vert
 static bool s_heightsSent = false;           ///< the buffer holds every slot written so far
 static SDL_GPUBuffer *s_landBuffer = NULL;   ///< GpuObjLandRecords, sent with the height maps
+static SDL_GPUBuffer *s_shoreBuffer = NULL;  ///< island-wide coastal attenuation field
+static U32 s_shoreSentRevision = ~0u;
 static SDL_GPUBuffer *s_meshBuffer = NULL;   ///< GpuObjMeshVerts: the decor's models
 static U32 s_meshSent = 0;                   ///< mesh vertices the buffer holds
 static U32 s_meshSentEpoch = 0;
@@ -695,7 +697,7 @@ static bool EnsureShadowBuffer(U32 size) {
 
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    s_terrainVert = CreateShader(GPUTERRAIN_vert_spv, GPUTERRAIN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 3);
+    s_terrainVert = CreateShader(GPUTERRAIN_vert_spv, GPUTERRAIN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 4);
     s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
     s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 10, 1, 2);
@@ -737,6 +739,9 @@ static bool CreatePipeline(void) {
     s_heightBuffer = SDL_CreateGPUBuffer(s_device, &bvhInfo);
     bvhInfo.size = sizeof(GpuObjLandRecords);
     s_landBuffer = SDL_CreateGPUBuffer(s_device, &bvhInfo);
+    bvhInfo.size = GPUWATER_SHORE_SIDE * GPUWATER_SHORE_SIDE * sizeof(float);
+    s_shoreBuffer = SDL_CreateGPUBuffer(s_device, &bvhInfo);
+    s_shoreSentRevision = ~0u;
     s_heightsSent = false;
     SDL_GPUBufferCreateInfo meshInfo;
     SDL_zero(meshInfo);
@@ -744,8 +749,8 @@ static bool CreatePipeline(void) {
     meshInfo.size = GPUOBJ_MESH_MAX_VERTS * (Uint32)sizeof(T_GPUOBJ_VERTEX);
     s_meshBuffer = SDL_CreateGPUBuffer(s_device, &meshInfo);
     s_meshSent = 0;
-    if (!s_heightBuffer || !s_landBuffer || !s_meshBuffer) {
-        Log_Warn("[GPU] Unable to create the height map buffer: %s", SDL_GetError());
+    if (!s_heightBuffer || !s_landBuffer || !s_shoreBuffer || !s_meshBuffer) {
+        Log_Warn("[GPU] Unable to create terrain buffers: %s", SDL_GetError());
         return false;
     }
     if (!s_bvhNodes || !s_bvhTris) {
@@ -956,6 +961,11 @@ static void ReleasePipeline(void) {
         SDL_ReleaseGPUBuffer(s_device, s_landBuffer);
         s_landBuffer = NULL;
     }
+    if (s_shoreBuffer) {
+        SDL_ReleaseGPUBuffer(s_device, s_shoreBuffer);
+        s_shoreBuffer = NULL;
+    }
+    s_shoreSentRevision = ~0u;
     if (s_meshBuffer) {
         SDL_ReleaseGPUBuffer(s_device, s_meshBuffer);
         s_meshBuffer = NULL;
@@ -1336,6 +1346,9 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
                         T_DRAW_UNIFORMS *uniforms, U32 *vertexBytes) {
     s_lutRows = 0;
     s_nbPages = 0;
+    const U8 *seaPage = GpuWater_GetSeaPage();
+    if (GpuWaterEnabled && seaPage != NULL)
+        PageSlot((U8 *)seaPage);
     *vertexBytes = 0;
     U32 n = 0;
     for (U32 i = 0; i < count; i++) {
@@ -1721,6 +1734,14 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     SDL_PushGPUFragmentUniformData(cmd, 2, fire, sizeof(fire));
     float water[GPUWATER_UNIFORM_FLOATS];
     GpuWater_GetUniforms(water);
+    water[3] = -1.0f;
+    const U8 *seaPage = GpuWater_GetSeaPage();
+    for (U32 p = 0; p < s_nbPages; p++) {
+        if (s_pagePtrs[p] == seaPage && seaPage != NULL) {
+            water[3] = (float)p;
+            break;
+        }
+    }
     SDL_PushGPUFragmentUniformData(cmd, 3, water, sizeof(water));
 
     S32 slice = -1;
@@ -1780,6 +1801,13 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         sliceUniform[24] = GpuWater_GetTime();
         sliceUniform[25] = GpuWater_GetWeather();
         sliceUniform[26] = GpuWaterEnabled && draw->HasCapCamera ? 1.0f : 0.0f;
+        U32 shoreRevision;
+        S32 shoreSide;
+        const float *shoreField = GpuWater_GetShoreField(&shoreSide, &shoreRevision);
+        sliceUniform[27] = shoreField != NULL && shoreSide == GPUWATER_SHORE_SIDE &&
+                                   shoreRevision == s_shoreSentRevision
+                               ? 1.0f
+                               : 0.0f;
         sliceUniform[40] = (float)draw->First;
         sliceUniform[41] = (float)draw->Procedural;
         if (draw->Procedural == GPUOBJ_PROC_LAND) {
@@ -1846,8 +1874,8 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
                 bound = wanted;
                 SDL_BindGPUGraphicsPipeline(pass, bound);
                 if (draw->Procedural) {
-                    SDL_GPUBuffer *storage[3] = {s_vertexBuffer, s_heightBuffer, s_landBuffer};
-                    SDL_BindGPUVertexStorageBuffers(pass, 0, storage, 3);
+                    SDL_GPUBuffer *storage[4] = {s_vertexBuffer, s_heightBuffer, s_landBuffer, s_shoreBuffer};
+                    SDL_BindGPUVertexStorageBuffers(pass, 0, storage, 4);
                 } else if (draw->Mesh) {
                     SDL_GPUBufferBinding mbind;
                     mbind.buffer = s_meshBuffer;
@@ -2120,6 +2148,14 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     if (heightUpload) {
         need = SDL_max(need, (U32)(heightTo - heightFrom) * SDL_max(heightSlot, landSlot));
     }
+    S32 shoreSide;
+    U32 shoreRevision;
+    const float *shoreField = GpuWater_GetShoreField(&shoreSide, &shoreRevision);
+    const bool shoreUpload = shoreField != NULL && shoreSide == GPUWATER_SHORE_SIDE &&
+                             shoreRevision != s_shoreSentRevision;
+    const U32 shoreBytes = GPUWATER_SHORE_SIDE * GPUWATER_SHORE_SIDE * (U32)sizeof(float);
+    if (shoreUpload)
+        need = SDL_max(need, shoreBytes);
 
     /* The indices ride in the same transfer buffer. */
     if (count > 0 && nbIndices > 0) {
@@ -2193,6 +2229,22 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         GpuObjHeightMapsDirtyFrom = -1;
         GpuObjHeightMapsDirtyTo = -1;
     }
+    if (shoreUpload) {
+        void *mapped = SDL_MapGPUTransferBuffer(s_device, s_transfer, true);
+        if (mapped != NULL) {
+            memcpy(mapped, shoreField, shoreBytes);
+            SDL_UnmapGPUTransferBuffer(s_device, s_transfer);
+            SDL_GPUTransferBufferLocation source;
+            SDL_zero(source);
+            source.transfer_buffer = s_transfer;
+            SDL_GPUBufferRegion region;
+            SDL_zero(region);
+            region.buffer = s_shoreBuffer;
+            region.size = shoreBytes;
+            SDL_UploadToGPUBuffer(copy, &source, &region, true);
+            s_shoreSentRevision = shoreRevision;
+        }
+    }
     if (count > 0 && s_meshBuffer != NULL) {
         /* The models written since the last present, all of them after a reset. */
         if (s_meshSentEpoch != GpuObjMeshEpoch || s_meshSent > GpuObjMeshCount) {
@@ -2233,7 +2285,6 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         SDL_UploadToGPUTexture(copy, &source, &region, false);
     }
     SDL_EndGPUCopyPass(copy);
-
     Uint64 t2 = SDL_GetPerformanceCounter();
     if (count > 0) {
         RenderDraws(cmd, kept, uniforms, count);
@@ -2245,7 +2296,10 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
         }
         PushCompositeParams();
     }
-    SDL_SubmitGPUCommandBuffer(cmd);
+    if (!SDL_SubmitGPUCommandBuffer(cmd)) {
+        s_shoreSentRevision = ~0u;
+        return false;
+    }
     Uint64 t3 = SDL_GetPerformanceCounter();
 
     if (GpuObjVertsExhausted > 0) {

@@ -616,6 +616,10 @@ bool WaterMarker(float alpha) {
     return alpha > 0.002 && alpha < 0.006;
 }
 
+bool TerrainMarker(float alpha) {
+    return alpha > 0.018 && alpha < 0.020;
+}
+
 bool SkyMarker(float alpha) {
     return alpha >= 0.006 && alpha < 0.012;
 }
@@ -656,15 +660,16 @@ float ShoreSceneDistance(float pixels, float depth, float edgeDepth) {
 
 /* Distance to the actual visible water boundary. Sky markers exclude the
    horizon; terrain, beaches and 3D pier geometry produce the breaking edge. */
-vec2 ShoreFoam(ivec2 p) {
+vec4 ShoreFoam(ivec2 p, out vec3 bankColor) {
+    bankColor = vec3(0.0);
     if (waterEnabled < 0.5) {
-        return vec2(0.0);
+        return vec4(0.0);
     }
     ivec2 size = textureSize(u_objLight, 0);
     float current = texelFetch(u_objLight, p, 0).a;
     bool onWater = WaterMarker(current);
     if (SkyMarker(current)) {
-        return vec2(0.0);
+        return vec4(0.0);
     }
     float surfaceHeight = texelFetch(u_objHeight, p, 0).r;
     /* A projected body can sit beside the sea while its feet are well above
@@ -674,14 +679,23 @@ vec2 ShoreFoam(ivec2 p) {
     float nearest = SHORE_SEARCH_RADIUS + 1.0;
     float nearestDepth = -1.0;
     float nearestEdgeHeight = surfaceHeight;
+    ivec2 nearestPixel = p;
     for (int ring = 1; ring <= 10; ring++) {
-        float radius = float(ring * ring);
         int r = ring * ring;
-        for (int k = 0; k < 4; k++) {
+        /* Keep diagonal probes at roughly the same screen distance as the
+           axial probes so slanted coastlines receive the same search band. */
+        int diagonal = max(1, int(floor(float(r) * 0.70710678)));
+        for (int k = 0; k < 8; k++) {
             ivec2 offset = k == 0 ? ivec2(r, 0) :
                            k == 1 ? ivec2(-r, 0) :
-                           k == 2 ? ivec2(0, r) : ivec2(0, -r);
-            if (radius > nearest) {
+                           k == 2 ? ivec2(0, r) :
+                           k == 3 ? ivec2(0, -r) :
+                           k == 4 ? ivec2(diagonal, diagonal) :
+                           k == 5 ? ivec2(-diagonal, diagonal) :
+                           k == 6 ? ivec2(diagonal, -diagonal) :
+                                    ivec2(-diagonal, -diagonal);
+            float radius = k < 4 ? float(r) : float(diagonal) * 1.41421356;
+            if (radius > min(nearest, SHORE_SEARCH_RADIUS)) {
                 continue;
             }
             ivec2 q = clamp(p + offset, ivec2(0), size - ivec2(1));
@@ -714,38 +728,125 @@ vec2 ShoreFoam(ivec2 p) {
                     nearest = refined;
                     nearestDepth = UnpackDistance(q);
                     nearestEdgeHeight = texelFetch(u_objHeight, q, 0).r;
+                    nearestPixel = q;
                 }
             }
         }
     }
+    /* The sparse compass can leave angular spokes around small rocks. One
+       adaptive probe in each half-angle fills those gaps without another ten
+       full search rings for every sea pixel. */
+    int probeRadius = int(min(SHORE_SEARCH_RADIUS, max(4.0, nearest < SHORE_SEARCH_RADIUS
+                                                      ? nearest * 1.4 + 2.0 : SHORE_SEARCH_RADIUS)));
+    int major = max(1, int(round(float(probeRadius) * 0.92387953)));
+    int minor = max(1, int(round(float(probeRadius) * 0.38268343)));
+    for (int k = 0; k < 8; k++) {
+        ivec2 offset = k == 0 ? ivec2(major, minor) :
+                       k == 1 ? ivec2(-major, minor) :
+                       k == 2 ? ivec2(major, -minor) :
+                       k == 3 ? ivec2(-major, -minor) :
+                       k == 4 ? ivec2(minor, major) :
+                       k == 5 ? ivec2(-minor, major) :
+                       k == 6 ? ivec2(minor, -major) :
+                                ivec2(-minor, -major);
+        ivec2 q = clamp(p + offset, ivec2(0), size - ivec2(1));
+        float marker = texelFetch(u_objLight, q, 0).a;
+        bool boundary = onWater ? (!WaterMarker(marker) && !SkyMarker(marker))
+                                : WaterMarker(marker);
+        if (!boundary) {
+            continue;
+        }
+        ivec2 lo = p;
+        ivec2 hi = q;
+        for (int refine = 0; refine < 5; refine++) {
+            ivec2 mid = (lo + hi) / 2;
+            float midMarker = texelFetch(u_objLight, mid, 0).a;
+            bool midBoundary = onWater ? (!WaterMarker(midMarker) && !SkyMarker(midMarker))
+                                       : WaterMarker(midMarker);
+            if (midBoundary) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        q = hi;
+        float refined = length(vec2(q - p));
+        if (refined < nearest && WaterContactPair(p, q)) {
+            nearest = refined;
+            nearestDepth = UnpackDistance(q);
+            nearestEdgeHeight = texelFetch(u_objHeight, q, 0).r;
+            nearestPixel = q;
+        }
+    }
     if (nearest > SHORE_SEARCH_RADIUS || nearestDepth <= 0.0 || surfaceDepth <= 0.0) {
-        return vec2(0.0);
+        return vec4(0.0);
     }
     float sceneDistance = ShoreSceneDistance(nearest, surfaceDepth, nearestDepth);
+    /* A fixed world phase keeps breaker patches stationary along the shore
+       while the camera moves through the scene. */
+    vec3 surfacePoint = ScenePoint(p, surfaceDepth);
+    vec2 world = vec2(dot(surfacePoint, stormGroundX.xyz) + stormGroundX.w,
+                      dot(surfacePoint, stormGroundZ.xyz) + stormGroundZ.w);
     float storm = clamp(waterStorm, 0.0, 1.0);
-    float crestWidth = 220.0 + storm * 110.0;
-    float washWidth = 620.0 + storm * 420.0;
-    /* A travelling crest reaches the edge, recedes, then leaves a weaker
-       backwash. Its phase is in scene units, not framebuffer pixels. */
-    float phase = sceneDistance * (0.014 - storm * 0.002)
-                - waterTime * (1.25 + storm * 0.45);
-    float pulse = 0.5 + 0.5 * sin(phase);
-    float crest = exp(-pow(sceneDistance / crestWidth, 2.0));
-    /* Even between breaker crests the wet edge catches a restrained highlight;
-       otherwise a deterministic capture can make a real quay contact vanish. */
-    crest *= 0.30 + 0.70 * smoothstep(0.28, 0.78, pulse);
-    float backwash = exp(-sceneDistance / washWidth) *
-                     smoothstep(0.38, 0.82, 0.5 + 0.5 * sin(phase * 0.53 + 1.4));
+    float reach = mix(700.0, 1100.0, storm);
+    float crestWidth = mix(135.0, 200.0, storm);
+    float bend = sin(world.x * 0.003 + sin(world.y * 0.002) * 1.5) * 0.5 +
+                 sin(world.y * 0.006 - world.x * 0.004) * 0.25;
+    float breakup = 0.5 + 0.5 * sin(world.x * 0.0031 + sin(world.y * 0.0023) * 1.1) *
+                                 sin(world.y * 0.0042 - world.x * 0.0017);
+    /* Vary the crest over broad stretches without opening dark holes in the
+       foam where neighboring water fragments meet the same shore. */
+    float patchiness = mix(0.68, 1.0, smoothstep(0.15, 0.85, breakup));
+    float cycle = fract(waterTime / mix(4.8, 3.5, storm) + bend * 0.12);
+    /* A crest crosses the water contact band, breaks at the shore, and leaves
+       a broader, weaker trail that retreats before the next crest arrives. */
+    float incoming = clamp(cycle / 0.55, 0.0, 1.0);
+    float front = reach * (1.0 - incoming) + bend * 35.0;
+    float crest = exp(-pow((sceneDistance - front) / crestWidth, 2.0)) *
+                  (1.0 - smoothstep(0.48, 0.59, cycle)) *
+                  smoothstep(0.0, 0.10, cycle) * patchiness;
+    float arrival = exp(-pow(sceneDistance / (crestWidth * 1.8), 2.0)) *
+                    smoothstep(0.43, 0.55, cycle) *
+                    (1.0 - smoothstep(0.60, 0.72, cycle)) * patchiness;
+    float retreat = clamp((cycle - 0.55) / 0.45, 0.0, 1.0);
+    float washFront = retreat * reach * 0.7;
+    float backwash = exp(-pow((sceneDistance - washFront) / (crestWidth * 2.8), 2.0)) *
+                     smoothstep(0.53, 0.64, cycle) *
+                     (1.0 - smoothstep(0.83, 0.99, cycle)) *
+                     (1.0 - retreat * 0.65) * (0.55 + 0.45 * patchiness);
     if (onWater) {
-        /* Whitewater is strongest on the water side and falls off quickly. */
-        return vec2(crest * (0.34 + 0.52 * pulse) + backwash * (0.06 + 0.06 * storm), 0.0);
+        /* Only actual ground can colour the shallow layer. A hero or prop at
+           the waterline must not leave a coloured halo in the sea. */
+        vec4 bank = texelFetch(u_objColor, nearestPixel, 0);
+        float facing = clamp(dot(normalize(skyUp.xyz), normalize(-surfacePoint)), 0.0, 1.0);
+        float shallow = TerrainMarker(texelFetch(u_objLight, nearestPixel, 0).a) && bank.a > 0.5
+                            ? (1.0 - smoothstep(100.0, 1150.0, sceneDistance)) *
+                                  smoothstep(0.15, 0.65, facing)
+                            : 0.0;
+        bankColor = mix(bank.rgb, vec3(dot(bank.rgb, vec3(0.30, 0.59, 0.11))), 0.15);
+        return vec4(crest * 0.82 + arrival * 0.86 + backwash * 0.38, 0.0, shallow, 0.0);
     }
     /* Land wash is restricted to a shallow rise above the water plane. */
     float rise = surfaceHeight - nearestEdgeHeight;
     float shallow = 1.0 - smoothstep(12.0, CONTACT_HEIGHT_TOLERANCE, rise);
-    float wash = shallow * exp(-sceneDistance / washWidth) *
-                 (0.18 + 0.20 * backwash + 0.06 * pulse + 0.04 * storm);
-    return vec2(0.0, wash);
+    float wash = shallow * (arrival * 0.34 + backwash * 0.22);
+    /* The wash changes the colour of the first low strip of actual ground,
+       masking the old half-cell outline without moving collision geometry. */
+    float wetReach = mix(380.0, 550.0, storm) +
+                     70.0 * sin(world.x * 0.004 + sin(world.y * 0.003) * 0.8);
+    float wet = TerrainMarker(current) ?
+                    (1.0 - smoothstep(12.0, 96.0, rise)) *
+                        (1.0 - smoothstep(30.0, wetReach, sceneDistance))
+                    : 0.0;
+    if (wet > 0.0) {
+        vec4 nearWater = texelFetch(u_objColor, nearestPixel, 0);
+        if (nearWater.a > 0.5) {
+            bankColor = nearWater.rgb;
+        } else {
+            wet = 0.0;
+        }
+    }
+    return vec4(0.0, wash, 0.0, wet);
 }
 
 float WaterImpactAge(float start) {
@@ -1574,11 +1675,20 @@ void main() {
         gpu = Grade(gpu * sceneAO);
     }
     gpu *= (vec3(1.0) + light) * shade;
-    vec2 shore = ShoreFoam(p);
+    vec3 bankColor;
+    vec4 shore = ShoreFoam(p, bankColor);
+    /* A nearby beach or low rock shows through turbid, shallow water as an
+       optical contact tint. There is no submerged geometry to refract yet. */
+    gpu = mix(gpu, bankColor * vec3(0.91, 0.96, 0.98),
+              shore.z * mix(0.42, 0.32, clamp(waterStorm, 0.0, 1.0)));
+    vec3 wetGround = mix(gpu * vec3(0.62, 0.72, 0.79), bankColor, 0.40);
+    gpu = mix(gpu, wetGround, shore.w * 0.70);
     float crest = max(max(gpu.r, gpu.g), gpu.b);
-    vec3 foamColor = min(gpu * 1.30 + vec3(0.10 + crest * 0.10), vec3(0.96));
-    float waterFoam = shore.x * mix(0.66, 0.82, waterStorm);
-    float landWash = shore.y * mix(0.84, 0.96, waterStorm);
+    /* Whitewater needs its own pale scattering colour: a dark storm sea
+       must not turn the breaking crest into another patch of dark water. */
+    vec3 foamColor = min(gpu * 0.20 + vec3(0.58 + crest * 0.18), vec3(0.90));
+    float waterFoam = shore.x * mix(0.72, 0.82, waterStorm);
+    float landWash = shore.y * mix(0.55, 0.65, waterStorm);
     gpu = mix(gpu, foamColor, clamp(waterFoam + landWash, 0.0, 0.78));
     gpu = Storm(scenePixel ? FogToSky(gpu, p) : gpu, p, emissive <= 0.0, true);
     gpu = Screen(gpu, halo);

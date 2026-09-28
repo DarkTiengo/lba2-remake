@@ -259,7 +259,7 @@ if (ptrh->Sens == 0) {
                     const S32 gpuLights[3] = {i0, i1, i2};
                     const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
                     gpuCovers = TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv,
-                                               ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER,
+                                               ptrh->CodeJeu,
                                                ptrh->SampleStep);
                 }
                 if (TerrainFillPoly(type, color, gpuCovers, (ptrh->CodeJeu & 12) == 12)) {
@@ -357,7 +357,7 @@ if (ptrh->Sens == 0) {
                     const S32 gpuLights[3] = {i2, i3, i0};
                     const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
                     gpuCovers = TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv,
-                                               ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER,
+                                               ptrh->CodeJeu,
                                                ptrh->SampleStep);
                 }
                 if (TerrainFillPoly(type, color, gpuCovers, (ptrh->CodeJeu & 12) == 12)) {
@@ -454,7 +454,7 @@ if (ptrh->Sens == 0) {
                     const S32 gpuLights[3] = {i3, i0, i1};
                     const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
                     gpuCovers = TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv,
-                                               ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER,
+                                               ptrh->CodeJeu,
                                                ptrh->SampleStep);
                 }
                 if (TerrainFillPoly(type, color, gpuCovers, (ptrh->CodeJeu & 12) == 12)) {
@@ -552,7 +552,7 @@ if (ptrh->Sens == 0) {
                     const S32 gpuLights[3] = {i1, i2, i3};
                     const U16 gpuUv[6] = {ptrt->Tx0, ptrt->Ty0, ptrt->Tx1, ptrt->Ty1, ptrt->Tx2, ptrt->Ty2};
                     gpuCovers = TerrainGpu_Tri(xi, zi, gpuCorners, gpuLights, type, color, gpuUv,
-                                               ptrh->CodeJeu == CJ_FOOT_WATER || ptrh->CodeJeu == CJ_ANIMATED_WATER,
+                                               ptrh->CodeJeu,
                                                ptrh->SampleStep);
                 }
                 if (TerrainFillPoly(type, color, gpuCovers, (ptrh->CodeJeu & 12) == 12)) {

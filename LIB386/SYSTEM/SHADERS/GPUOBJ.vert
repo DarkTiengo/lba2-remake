@@ -18,6 +18,7 @@ layout(location = 2) out vec4 v_vpos;
 layout(location = 3) flat out vec4 v_mat;
 layout(location = 4) out vec4 v_uv;
 layout(location = 5) flat out vec2 v_slice;
+layout(location = 6) out float v_waterCoast;
 
 #include "PLACE.glsl"
 
@@ -68,4 +69,5 @@ void main() {
     v_mat = a_mat;
     v_uv = a_uv;
     v_slice = vec2(sliceNear, sliceSize);
+    v_waterCoast = (int(a_vpos.w + 0.5) & FLAG_WAVES) != 0 ? 1.0 : 0.0;
 }

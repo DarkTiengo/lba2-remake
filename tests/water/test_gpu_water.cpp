@@ -141,6 +141,7 @@ static float RaisedY(const T_GPUOBJ_VERTEX *v) {
    corners cut into 8 x 8 cells, bilinear in the corners (PlanePoint's
    weights), in the order the CPU once emitted them. */
 static T_GPUOBJ_VERTEX grown[GPUOBJ_PROC_SEA_VERTS];
+static U8 planePage[65536];
 
 static void GrowSea(const T_GPUOBJ_VERTEX corner[4]) {
     static const S32 stepX[6] = {0, 0, 1, 0, 1, 1};
@@ -164,9 +165,8 @@ static void GrowSea(const T_GPUOBJ_VERTEX corner[4]) {
 }
 
 static void Plane(S32 sea, const STRUC_CLIPVERTEX quad[4]) {
-    static U8 page[65536];
     allocated = 0;
-    TerrainGpu_BeginPlane(page, sea ? 0 : 128, 0x7F7F, 100, 1000, 0, sea);
+    TerrainGpu_BeginPlane(planePage, sea ? 0 : 128, 0x7F7F, 100, 1000, 0, sea);
     TerrainGpu_Quad(quad);
     TerrainGpu_End();
 }
@@ -190,9 +190,11 @@ int main() {
     TerrainGpu_SetWaterScene(0, 8, 9);
     GpuWater_SetTime(1000);
     Plane(TRUE, quad);
+    Check(GpuWater_GetSeaPage() == planePage, "sea capture publishes its authored texture page");
     Check(allocated == 4 && draw.Procedural == GPUOBJ_PROC_SEA, "sea emits its tile's corners for the shader to cut");
     GrowSea(vertices);
     Check(((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER) != 0, "Citadel sea is marked");
+    Check(((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_TERRAIN) == 0, "sea vertices are not terrain");
     Check(vertices[0].uv[2] == 513.0f && vertices[0].uv[3] == 574.0f, "island-space phase");
     Check(vertices[0].uv[0] == 1.0f && vertices[0].uv[1] == 2.0f, "original UVs retained");
     Check(vertices[0].light[3] == GPUOBJ_MODE_TEX, "toggle off can use original texture mode");
@@ -372,14 +374,16 @@ int main() {
     TerrainGpu_Tri(0, 0, corners, lights, POLY_TEXTURE, 0, terrainUv, TRUE, 0);
     TerrainGpu_End();
     Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER_TERRAIN) != 0 &&
+              ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_TERRAIN) == 0 &&
               vertices[0].vpos[1] == 0.0f && vertices[0].uv[2] != 0.0f,
           "authored CodeJeu water keeps its animated shoreline geometry and texture");
     TerrainGpu_BeginCube(heights, terrainPage, NULL, 0, 0, 0);
     allocated = 0;
     TerrainGpu_Tri(0, 0, corners, lights, POLY_TEXTURE, 0, terrainUv, FALSE, 0);
     TerrainGpu_End();
-    Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER) == 0,
-          "unmarked terrain such as animated lava or gas keeps its original material");
+    Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER) == 0 &&
+              ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_TERRAIN) != 0,
+          "ordinary non-water terrain carries the terrain marker");
 
     /* Smooth terrain: a land triangle becomes sixteen on the curve, never below
        its plane, flagged for the shadow rays, the first carrying the original. */
@@ -405,7 +409,8 @@ int main() {
         for (int k = 0; k < 3; k++) {
             record = record && vertices[k].uv[2] == gridX[k] && vertices[k].uv[3] == gridZ[k] &&
                      vertices[k].normal[0] == 1.0f && vertices[k].normal[1] == 7.0f &&
-                     ((S32)vertices[k].vpos[3] & GPUOBJ_FLAG_DETAIL) == 0;
+                     ((S32)vertices[k].vpos[3] & GPUOBJ_FLAG_DETAIL) == 0 &&
+                     ((S32)vertices[k].vpos[3] & GPUOBJ_FLAG_TERRAIN) != 0;
         }
         Check(record, "smooth terrain leaves the CPU as a record of its three flat corners");
         /* What GPUTERRAIN.vert makes of it, every point of the four-way
@@ -524,6 +529,44 @@ int main() {
     GpuWater_SetScene(4);
     GpuWater_SetTime(5000);
     Check(!GpuWater_GetImpactWorld(0, impact), "impact expires after its ripple and spray");
+    /* One authored half-cell defines a continuous envelope in island grid
+       coordinates, including points on the edge between two cube slots. */
+    {
+        static U8 shoreCells[64 * 64];
+        std::memset(shoreCells, 0, sizeof(shoreCells));
+        S32 side = -1;
+        U32 before = 0, revision = 0;
+        TerrainGpu_ResetShore();
+        Check(GpuWater_GetShoreField(&side, &before) == NULL && side == 0,
+              "shore reset withdraws the previous field");
+        shoreCells[20 * 64 + 63] = 1;
+        TerrainGpu_SetShoreCube(7, 4, shoreCells);
+        TerrainGpu_FinishShore();
+        const float *field = GpuWater_GetShoreField(&side, &revision);
+        Check(field != NULL && side == GPUWATER_SHORE_SIDE && revision > before,
+              "shore field publishes all 1025 rows and columns");
+        if (field != NULL) {
+            const S32 z = 4 * 64 + 20, x = 7 * 64 + 63;
+            Check(field[(size_t)z * side + x] == 0.0f && field[(size_t)z * side + x + 5] == 1.0f,
+                  "authored water has zero swell and distant sea has full swell");
+            float left, edge, right, dx, dz;
+            TerrainGpu_SampleShore((float)(x + 1) * 512.0f - 1.0f, (float)z * 512.0f,
+                                   &left, &dx, &dz);
+            TerrainGpu_SampleShore((float)(x + 1) * 512.0f, (float)z * 512.0f,
+                                   &edge, &dx, &dz);
+            TerrainGpu_SampleShore((float)(x + 1) * 512.0f + 1.0f, (float)z * 512.0f,
+                                   &right, &dx, &dz);
+            Check(std::fabs(left - edge) < 0.01f && std::fabs(right - edge) < 0.01f,
+                  "shore weight is continuous across neighboring cube coordinates");
+            TerrainGpu_SampleShore(((float)x + 2.5f) * 512.0f, (float)z * 512.0f,
+                                   &edge, &dx, &dz);
+            Check(edge > 0.0f && edge < 1.0f && dx > 0.0f && std::fabs(dz) < 0.001f,
+                  "shore sample interpolates the distance gradient in world units");
+        }
+        TerrainGpu_ResetShore();
+        Check(GpuWater_GetShoreField(&side, &revision) == NULL && side == 0,
+              "next island withdraws its predecessor's coast");
+    }
     /* The land the GPU grows whole: one record a fill of a half-cell, built
        once a cube, and a draw that carries the camera the cube is drawn from. */
     {
@@ -566,6 +609,11 @@ int main() {
                   draw.LandOrigin[0] == -100.0f && draw.LandOrigin[1] == -200.0f && draw.LandOrigin[2] == -300.0f &&
                   draw.LandFar == 30000.0f,
               "the land draw carries its slot and where the cube lies in view");
+        water->CodeJeu = 1;
+        GpuObjLandCount[7] = -1;
+        TerrainGpu_LandBuild(halves, light, defs);
+        Check(GpuObjLandCount[7] == 2 && (w[0] & (1u << 14)) != 0,
+              "CodeJeu 1 water remains marked in indexed land records");
         TerrainGpu_End();
         CameraXr = CameraYr = CameraZr = 0;
     }

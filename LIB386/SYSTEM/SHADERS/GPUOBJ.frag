@@ -11,6 +11,7 @@ layout(location = 2) in vec4 v_vpos;
 layout(location = 3) flat in vec4 v_mat;
 layout(location = 4) in vec4 v_uv;
 layout(location = 5) flat in vec2 v_slice;
+layout(location = 6) in float v_waterCoast;
 
 layout(location = 0) out vec4 o_color;
 layout(location = 1) out vec4 o_id;
@@ -129,6 +130,7 @@ const int FLAG_WATER = 16;
 const int FLAG_SKY = 32;
 const int FLAG_WATER_TERRAIN = 64;
 const int FLAG_GRASS = 512;
+const int FLAG_TERRAIN = 2048;
 
 vec3 Pal(int i) {
     return texelFetch(u_palette, ivec2(i & 255, 0), 0).rgb;
@@ -480,8 +482,8 @@ void main() {
     bool sky = (Flags() & FLAG_SKY) != 0;
     vec3 surfaceNormal = v_normal.xyz;
 
-    if (water && (Flags() & FLAG_WATER_TERRAIN) == 0) {
-        color = WaterColor(surfaceNormal);
+    if (water && waterInfo.w >= 0.0) {
+        color = WaterColor(surfaceNormal, v_waterCoast);
     } else if (water) {
         /* CodeJeu 12/15 is the retail shoreline animation. Its page receives
            250 ms updates in the software path, unlike SkySeaTexture's layout. */
@@ -577,11 +579,17 @@ void main() {
 
     o_color = vec4(clamp(color, 0.0, 1.0), 1.0);
     bool baked = (Flags() & FLAG_BAKED) != 0 && !water;
-    /* One- and two-step R8 alpha markers let the composite find water edges
-       without another full-resolution render target. */
-    float material = water ? (1.0 / 255.0)
-                           : (sky ? (2.0 / 255.0)
-                                  : ((Flags() & FLAG_GRASS) != 0 ? (4.0 / 255.0) : clamp(emissive, 0.0, 1.0)));
+    /* R8 alpha markers let the composite find water and ground contacts
+       without mistaking an actor standing beside the sea for a seabed. */
+    float material = clamp(emissive, 0.0, 1.0);
+    if (water)
+        material = 1.0 / 255.0;
+    else if (sky)
+        material = 2.0 / 255.0;
+    else if ((Flags() & FLAG_GRASS) != 0)
+        material = 4.0 / 255.0;
+    else if ((Flags() & FLAG_TERRAIN) != 0)
+        material = 5.0 / 255.0;
     o_light = vec4(min(DynamicLight(v_vpos.xyz, surfaceNormal, !baked), vec3(2.0)) * 0.5, material);
     if (!sky) {
         o_shadow = vec4(0.0, 0.0, PackDistance(v_vpos.xyz, (Flags() & FLAG_ISO) != 0));

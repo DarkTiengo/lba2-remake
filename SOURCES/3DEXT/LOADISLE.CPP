@@ -174,6 +174,30 @@ void LoadIsland() {
     if (!Load_HQR(islandFilePath, IsleMapIndex, HQR_MAP_IDM))
         TheEndCheckFile(islandFilePath);
 
+    TerrainGpu_ResetShore();
+    for (S32 cz = 0; cz < 16; cz++) {
+        for (S32 cx = 0; cx < 16; cx++) {
+            const S32 mapIndex = IsleMapIndex[cz * 16 + cx] & 127;
+            if (mapIndex == 0)
+                continue;
+            const S32 resource = HQR_START_CUBE + HQR_STEP_CUBE * (mapIndex - 1) + HQR_CUBE_GRD;
+            S32 polySize = 0;
+            const T_HALF_POLY *polys = (const T_HALF_POLY *)HQR_Get(HQR_MapPGround, resource, &polySize);
+            if (polys == NULL || polySize < 64 * 64 * 2 * (S32)sizeof(T_HALF_POLY))
+                continue;
+            U8 shore[64 * 64];
+            for (S32 cell = 0; cell < 64 * 64; cell++) {
+                const T_HALF_POLY *a = &polys[cell * 2];
+                const T_HALF_POLY *b = &polys[cell * 2 + 1];
+                shore[cell] = (U8)((a->Sens ? 4 : 0) |
+                                   ((a->TexFlag && (a->CodeJeu == 1 || a->CodeJeu == 12 || a->CodeJeu == 15)) ? 1 : 0) |
+                                   ((b->TexFlag && (b->CodeJeu == 1 || b->CodeJeu == 12 || b->CodeJeu == 15)) ? 2 : 0));
+            }
+            TerrainGpu_SetShoreCube(cx, cz, shore);
+        }
+    }
+    TerrainGpu_FinishShore();
+
     if (!Load_HQR(islandFilePath, GroundTexture, HQR_TEX_GROUND))
         TheEndCheckFile(islandFilePath);
 

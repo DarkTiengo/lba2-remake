@@ -21,9 +21,123 @@ extern "C" {
 
 #define GRID_SIDE 65
 #define CELL_SIZE 512
+#define SHORE_CELLS 1024
+#define SHORE_VERTS (SHORE_CELLS + 1)
+#define SHORE_RADIUS 4
+#define LAND_CJ_WATER 1
 /* The CodeJeu of shoreline water (LBA_EXT.H), whose fill keeps its authored page. */
 #define LAND_CJ_FOOT_WATER 12
 #define LAND_CJ_ANIMATED_WATER 15
+
+static U8 s_shoreCells[SHORE_CELLS * SHORE_CELLS];
+static float *s_shoreWeights = NULL;
+
+static float ShoreSegmentDistance2(float px, float pz, float ax, float az, float bx, float bz) {
+    const float vx = bx - ax, vz = bz - az;
+    const float t0 = ((px - ax) * vx + (pz - az) * vz) / (vx * vx + vz * vz);
+    const float t = t0 < 0.0f ? 0.0f : (t0 > 1.0f ? 1.0f : t0);
+    const float dx = px - ax - t * vx, dz = pz - az - t * vz;
+    return dx * dx + dz * dz;
+}
+
+static float ShoreTriangleDistance2(float px, float pz, const float a[2], const float b[2], const float c[2]) {
+    const float abx = b[0] - a[0], abz = b[1] - a[1];
+    const float acx = c[0] - a[0], acz = c[1] - a[1];
+    const float apx = px - a[0], apz = pz - a[1];
+    const float det = abx * acz - abz * acx;
+    const float u = (apx * acz - apz * acx) / det;
+    const float v = (abx * apz - abz * apx) / det;
+    if (u >= 0.0f && v >= 0.0f && u + v <= 1.0f)
+        return 0.0f;
+    float d = ShoreSegmentDistance2(px, pz, a[0], a[1], b[0], b[1]);
+    const float e = ShoreSegmentDistance2(px, pz, b[0], b[1], c[0], c[1]);
+    const float f = ShoreSegmentDistance2(px, pz, c[0], c[1], a[0], a[1]);
+    if (e < d)
+        d = e;
+    if (f < d)
+        d = f;
+    return d;
+}
+
+void TerrainGpu_ResetShore(void) {
+    GpuWater_SetShoreField(NULL, 0);
+    GpuWater_SetSeaPage(NULL);
+    memset(s_shoreCells, 0, sizeof(s_shoreCells));
+    if (s_shoreWeights == NULL)
+        s_shoreWeights = (float *)malloc((size_t)SHORE_VERTS * SHORE_VERTS * sizeof(float));
+}
+
+void TerrainGpu_SetShoreCube(S32 cubeX, S32 cubeZ, const U8 cells[64 * 64]) {
+    if (cubeX < 0 || cubeX >= 16 || cubeZ < 0 || cubeZ >= 16 || cells == NULL)
+        return;
+    for (S32 z = 0; z < 64; z++)
+        memcpy(&s_shoreCells[(cubeZ * 64 + z) * SHORE_CELLS + cubeX * 64], &cells[z * 64], 64);
+}
+
+void TerrainGpu_FinishShore(void) {
+    if (s_shoreWeights == NULL)
+        return;
+    const size_t count = (size_t)SHORE_VERTS * SHORE_VERTS;
+    float *nearest = (float *)malloc(count * sizeof(float));
+    if (nearest == NULL)
+        return;
+    const float limit2 = 16.0f;
+    for (size_t i = 0; i < count; i++)
+        nearest[i] = limit2;
+    static const U8 corners[2][2][3] = {{{0, 1, 2}, {2, 3, 0}}, {{3, 0, 1}, {1, 2, 3}}};
+    for (S32 z = 0; z < SHORE_CELLS; z++) {
+        for (S32 x = 0; x < SHORE_CELLS; x++) {
+            const U8 cell = s_shoreCells[z * SHORE_CELLS + x];
+            if ((cell & 3) == 0)
+                continue;
+            const float p[4][2] = {{(float)x, (float)z}, {(float)x, (float)(z + 1)}, {(float)(x + 1), (float)(z + 1)}, {(float)(x + 1), (float)z}};
+            for (S32 half = 0; half < 2; half++) {
+                if (!(cell & (1 << half)))
+                    continue;
+                const U8 *c = corners[(cell >> 2) & 1][half];
+                for (S32 vz = z - SHORE_RADIUS; vz <= z + SHORE_RADIUS + 1; vz++) {
+                    if (vz < 0 || vz > SHORE_CELLS)
+                        continue;
+                    for (S32 vx = x - SHORE_RADIUS; vx <= x + SHORE_RADIUS + 1; vx++) {
+                        if (vx < 0 || vx > SHORE_CELLS)
+                            continue;
+                        float *d = &nearest[(size_t)vz * SHORE_VERTS + vx];
+                        const float d2 = ShoreTriangleDistance2((float)vx, (float)vz, p[c[0]], p[c[1]], p[c[2]]);
+                        if (d2 < *d)
+                            *d = d2;
+                    }
+                }
+            }
+        }
+    }
+    for (size_t i = 0; i < count; i++) {
+        float d = (sqrtf(nearest[i]) - 1.0f) / 3.0f;
+        if (d < 0.0f)
+            d = 0.0f;
+        s_shoreWeights[i] = d * d * (3.0f - 2.0f * d);
+    }
+    free(nearest);
+    GpuWater_SetShoreField(s_shoreWeights, SHORE_VERTS);
+}
+
+void TerrainGpu_SampleShore(float worldX, float worldZ, float *weight, float *gradientX, float *gradientZ) {
+    *weight = 1.0f;
+    *gradientX = 0.0f;
+    *gradientZ = 0.0f;
+    if (GpuWater_GetShoreField(NULL, NULL) == NULL || worldX < 0.0f || worldZ < 0.0f ||
+        worldX >= SHORE_CELLS * 512.0f || worldZ >= SHORE_CELLS * 512.0f)
+        return;
+    const float gx = worldX / 512.0f, gz = worldZ / 512.0f;
+    const S32 ix = (S32)gx, iz = (S32)gz;
+    const float tx = gx - ix, tz = gz - iz;
+    const float a = s_shoreWeights[iz * SHORE_VERTS + ix];
+    const float b = s_shoreWeights[iz * SHORE_VERTS + ix + 1];
+    const float c = s_shoreWeights[(iz + 1) * SHORE_VERTS + ix];
+    const float d = s_shoreWeights[(iz + 1) * SHORE_VERTS + ix + 1];
+    *weight = (a + (b - a) * tx) * (1.0f - tz) + (c + (d - c) * tx) * tz;
+    *gradientX = ((b - a) * (1.0f - tz) + (d - c) * tz) / 512.0f;
+    *gradientZ = ((c - a) * (1.0f - tx) + (d - b) * tx) / 512.0f;
+}
 
 // --- Private state -----------------------------------------------------------
 static T_GPUOBJ_DRAW *s_draw = NULL;
@@ -641,7 +755,8 @@ void TerrainGpu_LandBuild(const T_TERRAIN_HALF *halves, const U8 *intensity, con
                         color = average;
                     }
                     fillType = h->TexType;
-                    water = h->CodeJeu == LAND_CJ_FOOT_WATER || h->CodeJeu == LAND_CJ_ANIMATED_WATER;
+                    water = h->CodeJeu == LAND_CJ_WATER || h->CodeJeu == LAND_CJ_FOOT_WATER ||
+                            h->CodeJeu == LAND_CJ_ANIMATED_WATER;
                 }
                 S32 perVertexShade, chromakey;
                 float constantShade;
@@ -799,13 +914,15 @@ void TerrainGpu_BeginCube(const S16 *heights, U8 *groundTexture, U8 *clutBase, S
 }
 
 S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32 fillType, S32 color,
-                   const U16 *uv, S32 water, S32 step) {
+                   const U16 *uv, S32 codeJeu, S32 step) {
     if (s_draw == NULL) {
         return FALSE;
     }
 
     float mode;
-    S32 flags = GPUOBJ_FLAG_BAKED;
+    const S32 water = uv != NULL && (codeJeu == LAND_CJ_WATER || codeJeu == LAND_CJ_FOOT_WATER ||
+                                     codeJeu == LAND_CJ_ANIMATED_WATER);
+    S32 flags = GPUOBJ_FLAG_BAKED | (water ? 0 : GPUOBJ_FLAG_TERRAIN);
     S32 perVertexShade = FALSE;
     float constantShade = 0.0f;
 
@@ -957,6 +1074,9 @@ void TerrainGpu_SetWaterScene(S32 island, S32 cubeX, S32 cubeZ) {
         const float px = impact[0] - (float)cubeX * 32768.0f;
         float height;
         GpuWater_SampleSurface(impact[0], impact[2], &height, NULL);
+        float shore, shoreDx, shoreDz;
+        TerrainGpu_SampleShore(impact[0], impact[2], &shore, &shoreDx, &shoreDz);
+        height *= shore;
         const float py = impact[1] + height;
         const float pz = impact[2] - (float)cubeZ * 32768.0f;
         const float vx = px * m->F.M11 + py * m->F.M12 + pz * m->F.M13 - (float)CameraXr;
@@ -988,11 +1108,13 @@ void TerrainGpu_BeginPlane(U8 *page, S32 texOffset, S32 texMask, S32 fogStart, S
     s_waterPlane = sea;
     s_skyPlane = !sea;
     s_skyBehind = FALSE;
+    if (s_waterPlane)
+        GpuWater_SetSeaPage(page);
     if (!GpuObj_Active() || TypeProj != TYPE_3D) {
         return;
     }
     OpenDraw(page, NULL, fogStart, fogEnd, fogColor);
-    if (s_draw != NULL && sea && GpuWaterEnabled) {
+    if (s_draw != NULL && s_waterPlane && GpuWaterEnabled) {
         s_draw->Procedural = GPUOBJ_PROC_SEA;
     }
     s_planeTexOffset = (float)texOffset;

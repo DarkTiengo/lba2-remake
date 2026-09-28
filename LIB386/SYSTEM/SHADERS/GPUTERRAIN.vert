@@ -23,6 +23,7 @@ layout(location = 2) out vec4 v_vpos;
 layout(location = 3) flat out vec4 v_mat;
 layout(location = 4) out vec4 v_uv;
 layout(location = 5) flat out vec2 v_slice;
+layout(location = 6) out float v_waterCoast;
 
 layout(std430, set = 0, binding = 0) readonly buffer Records {
     vec4 records4[]; // the vertex array: six vec4 a vertex
@@ -32,6 +33,9 @@ layout(std430, set = 0, binding = 1) readonly buffer Heights {
 };
 layout(std430, set = 0, binding = 2) readonly buffer LandBuffer {
     uvec4 landRecords[]; // two a record, GPUOBJ_LAND_MAX records a slot: (LAND_* bits, shading, uv0, uv1), (uv2, -)
+};
+layout(std430, set = 0, binding = 3) readonly buffer ShoreBuffer {
+    float shoreWeights[];
 };
 
 #include "PLACE.glsl"
@@ -168,6 +172,7 @@ void Grass() {
     v_mat = Field(tuft, 4);
     v_uv = vec4(Field(tuft, 5).xy, 0.0, 0.0);
     v_slice = vec2(sliceNear, sliceSize);
+    v_waterCoast = 0.0;
 }
 
 /* A cube's land: one record a fill of a half-cell, as DrawFeuillePolyZBuf
@@ -258,6 +263,8 @@ void Land() {
     if ((r.x & LAND_WATER) != 0u) {
         flags |= 16 | 64; /* GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_WATER_TERRAIN */
         phase = grid + landInfo.zw;
+    } else {
+        flags |= 2048; /* GPUOBJ_FLAG_TERRAIN */
     }
 
     vec3 n = vec3(0.0, 0.0, 1.0);
@@ -270,6 +277,7 @@ void Land() {
     v_mat = vec4(color, 0.0, 65535.0, 0.0);
     v_uv = vec4(uv, phase);
     v_slice = vec2(sliceNear, sliceSize);
+    v_waterCoast = 0.0;
 }
 
 /* The sea: a record a tile of the classic sea, its four corners as
@@ -277,6 +285,22 @@ void Land() {
    each point raised by the swell as GPUOBJ.vert raises a captured one. */
 const int SEA_SUB = 8;
 const ivec2 kSeaStep[6] = ivec2[6](ivec2(0, 0), ivec2(0, 1), ivec2(1, 1), ivec2(0, 0), ivec2(1, 1), ivec2(1, 0));
+
+float ShoreAt(ivec2 cell) {
+    return shoreWeights[cell.y * 1025 + cell.x];
+}
+
+void ShoreSample(vec2 grid, out float weight, out vec2 gradient) {
+    weight = 1.0;
+    gradient = vec2(0.0);
+    if (waves.w < 0.5 || grid.x < 0.0 || grid.y < 0.0 || grid.x >= 1024.0 || grid.y >= 1024.0) return;
+    ivec2 cell = ivec2(grid);
+    vec2 f = fract(grid);
+    float a = ShoreAt(cell), b = ShoreAt(cell + ivec2(1, 0));
+    float c = ShoreAt(cell + ivec2(0, 1)), d = ShoreAt(cell + ivec2(1, 1));
+    weight = mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    gradient = vec2(mix(b - a, d - c, f.y), mix(c - a, d - b, f.x)) / 512.0;
+}
 
 void Sea() {
     int per = SEA_SUB * SEA_SUB * 6;
@@ -292,12 +316,17 @@ void Sea() {
              w.w * Field(first + 3, 3).xyz;
     vec4 uv = w.x * Field(first, 5) + w.y * Field(first + 1, 5) + w.z * Field(first + 2, 5) + w.w * Field(first + 3, 5);
     vec4 normal = Field(first, 1);
+    float shore;
+    vec2 shoreGradient;
+    ShoreSample(uv.zw, shore, shoreGradient);
     if (waves.z > 0.5) {
         vec3 n;
-        float h = Swell(uv.zw * 512.0, n);
+        float rawHeight = Swell(uv.zw * 512.0, n);
+        vec2 slope = -n.xz / max(n.y, 0.001) * shore + rawHeight * shoreGradient;
+        float h = rawHeight * shore;
         vec3 up = vec3(capRow0.y, capRow1.y, capRow2.y);
         p += h * up;
-        normal = vec4(World(n), h);
+        normal = vec4(World(normalize(vec3(-slope.x, 1.0, -slope.y))), h);
     }
     vec3 n = normal.xyz;
     if (Reframe(p, n)) {
@@ -311,6 +340,7 @@ void Sea() {
     v_mat = Field(first, 4);
     v_uv = uv;
     v_slice = vec2(sliceNear, sliceSize);
+    v_waterCoast = shore;
 }
 
 void main() {
@@ -359,4 +389,5 @@ void main() {
     v_mat = Field(first, 4);
     v_uv = vec4(b.x * uv0.xy + b.y * uv1.xy + b.z * uv2.xy, 0.0, 0.0);
     v_slice = vec2(sliceNear, sliceSize);
+    v_waterCoast = 0.0;
 }
