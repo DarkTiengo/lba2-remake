@@ -66,6 +66,12 @@ void AffGpu_SetFocus(S32 x, S32 y, S32 z);
  *  a decor left to the GPU is asked for later): nothing is captured. */
 extern S32 AffGpuSuspended;
 
+/** A lamp model of the scenery, placed as BodyDisplay(x, y, z, 0, beta, 0, obj)
+ *  would place it, listed as a light (GpuObjSceneryLamps) whether it is on
+ *  screen or not; the caller sets GpuObjLampModel and GpuObjLampPalette first.
+ *  TRUE when listed. */
+S32 AffGpu_LampLight(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta);
+
 /** A decor body of the scenery placed as BodyDisplay(x, y, z, 0, beta, 0, obj)
  *  would place it, drawn by the GPU from the model it keeps (index the body's
  *  number in the island's objects; island names the objects' file, and the

@@ -1103,7 +1103,9 @@ static void KeepCaster(const T_GPUOBJ_DRAW *draw) {
         s_sceneryGroup = group;
         s_nbSceneryLamps = 0;
     }
-    if (draw->HasGlow && group != 0 && s_nbSceneryLamps < MAX_FRAME_LAMPS) {
+    if (draw->GlowListed) {
+        /* Its light is the listed one (GpuObjSceneryLamps). */
+    } else if (draw->HasGlow && group != 0 && s_nbSceneryLamps < MAX_FRAME_LAMPS) {
         T_FRAME_LIGHT *l = &s_sceneryLamps[s_nbSceneryLamps++];
         memcpy(l->Pos, draw->GlowPos, sizeof(l->Pos));
         l->Radius = draw->HasGlow == 2 ? 9000.0f : 2400.0f;
@@ -1260,7 +1262,7 @@ void AffGpu_BuildShadows(void) {
        every body and the terrain, so no silhouettes are needed. */
     GpuObjRayScene = GpuObjRayTrace && TypeProj == TYPE_3D;
     /* Lights that can shadow: the scene's own and the lamps and fires on bodies. */
-    T_FRAME_LIGHT lights[GPUOBJ_MAX_LIGHTS + MAX_FRAME_LAMPS * 2];
+    T_FRAME_LIGHT lights[GPUOBJ_MAX_LIGHTS + MAX_FRAME_LAMPS * 2 + GPUOBJ_MAX_SCENERY_LAMPS];
     U32 nbLights = 0;
     if (GpuObjLightsEnabled) {
         for (U32 i = 0; i < GpuObjNbLights; i++) {
@@ -1277,6 +1279,12 @@ void AffGpu_BuildShadows(void) {
         /* Only the scenery on screen: the last one captured. */
         for (U32 i = 0; i < s_nbSceneryLamps && s_sceneryGroup == GpuObj_LastGroupId(); i++) {
             lights[nbLights++] = s_sceneryLamps[i];
+        }
+        for (U32 i = 0; i < GpuObjNbSceneryLamps && GpuObjSceneryLampGroup == GpuObj_LastGroupId(); i++) {
+            T_FRAME_LIGHT *l = &lights[nbLights++];
+            memcpy(l->Pos, GpuObjSceneryLamps[i].Pos, sizeof(l->Pos));
+            l->Radius = 9000.0f;
+            l->Weight = 0.9f * 0.6f;
         }
     }
 
@@ -1371,6 +1379,7 @@ void AffGpu_End(void) {
     s_glowSum[0] = s_glowSum[1] = s_glowSum[2] = 0.0f;
     s_glowRgb[0] = s_glowRgb[1] = s_glowRgb[2] = 0.0f;
     if (s_draw != NULL) {
+        s_draw->GlowListed = s_draw->HasGlow && GpuObjLampListed;
         KeepCaster(s_draw);
     }
     s_draw = NULL;
@@ -1592,6 +1601,137 @@ static T_DECOR_MESH *DecorMesh(S32 island, S32 index, T_BODY_HEADER *body) {
     mesh->Epoch = GpuObjMeshEpoch;
     mesh->State = 1;
     return mesh;
+}
+
+// --- Lamp lights ---------------------------------------------------------------
+/* A lamp model's glass, as the capture finds it (AffGpu_Entity, EmitSphere),
+   over the whole model rather than the polygons a view shows: the centre of
+   the glowing polygons and spheres in model space, and their colour. */
+typedef struct {
+    S32 Island; ///< -1: unknown
+    S32 Glows;  ///< a glass was found
+    float Centre[3];
+    float Color[3];
+} T_LAMP_GLASS;
+static T_LAMP_GLASS s_lampGlass[MAX_DECOR_MESHES];
+static S32 s_lampGlassReady = FALSE;
+static float s_glassSum[3], s_glassRgb[3];
+static S32 s_glassCount = 0;
+
+static void GlassAdd(U32 color, const float centre[3]) {
+    S32 rgb[3];
+    if (!IsGlowColor(color, rgb)) {
+        return;
+    }
+    for (S32 a = 0; a < 3; a++) {
+        s_glassSum[a] += centre[a];
+        s_glassRgb[a] += (float)rgb[a] / 255.0f;
+    }
+    s_glassCount++;
+}
+
+static void GlassPolygon(U32 type, void *poly) {
+    const U16 *w = (const U16 *)poly;
+    const U32 polyType = type >> 2;
+    U32 color;
+    if (polyType == POLY_SOLID) {
+        color = w[4] & 255;
+    } else if (polyType == POLY_FLAT || polyType == POLY_GOURAUD || polyType == POLY_DITHER) {
+        color = (w[4] & 255) | 15;
+    } else {
+        return;
+    }
+    const S32 nbPoints = (type & 1) ? 4 : 3;
+    const TYPE_VT16 *points = (const TYPE_VT16 *)((U8 *)lBody + lBody->OffPoints);
+    float c[3] = {0.0f, 0.0f, 0.0f};
+    for (S32 i = 0; i < nbPoints; i++) {
+        const U16 p = w[i] < lBody->NbPoints ? w[i] : 0;
+        c[0] += (float)points[p].X / (float)nbPoints;
+        c[1] += (float)points[p].Y / (float)nbPoints;
+        c[2] += (float)points[p].Z / (float)nbPoints;
+    }
+    GlassAdd(color, c);
+}
+
+static const T_LAMP_GLASS *LampGlass(S32 island, S32 index, T_BODY_HEADER *body) {
+    if (!s_lampGlassReady) {
+        for (S32 i = 0; i < MAX_DECOR_MESHES; i++) {
+            s_lampGlass[i].Island = -1;
+        }
+        s_lampGlassReady = TRUE;
+    }
+    if (index < 0 || index >= MAX_DECOR_MESHES) {
+        return NULL;
+    }
+    T_LAMP_GLASS *g = &s_lampGlass[index];
+    if (g->Island != island) {
+        g->Island = island;
+        s_glassCount = 0;
+        for (S32 a = 0; a < 3; a++) {
+            s_glassSum[a] = s_glassRgb[a] = 0.0f;
+        }
+        T_BODY_HEADER *saved = lBody;
+        lBody = body;
+        BodyWalkPolys(body, GlassPolygon);
+        /* Spheres glow unless they are drawn as pass-through (EmitSphere). */
+        typedef struct {
+            U16 Type, Coul, P1, Rayon;
+        } T_GPU_SPHERE;
+        const T_GPU_SPHERE *spheres = (const T_GPU_SPHERE *)((U8 *)body + body->OffSpheres);
+        const TYPE_VT16 *points = (const TYPE_VT16 *)((U8 *)body + body->OffPoints);
+        for (S32 i = 0; i < body->NbSpheres; i++) {
+            const U32 kind = spheres[i].Type & 0xFF;
+            if (kind == 1 || kind == 2 || spheres[i].P1 >= body->NbPoints) {
+                continue;
+            }
+            const TYPE_VT16 *p = &points[spheres[i].P1];
+            const float c[3] = {(float)p->X, (float)p->Y, (float)p->Z};
+            GlassAdd(spheres[i].Coul & 255, c);
+        }
+        lBody = saved;
+        g->Glows = s_glassCount > 0;
+        for (S32 a = 0; a < 3 && g->Glows; a++) {
+            g->Centre[a] = s_glassSum[a] / (float)s_glassCount;
+            g->Color[a] = s_glassRgb[a] / (float)s_glassCount;
+        }
+    }
+    return g->Glows ? g : NULL;
+}
+
+S32 AffGpu_LampLight(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta) {
+    if (!GpuObj_Active() || AffGpuSuspended || TypeProj != TYPE_3D || !GpuObjGlow || !GpuObjLampModel) {
+        return FALSE;
+    }
+    const T_LAMP_GLASS *g = LampGlass(island, index, (T_BODY_HEADER *)obj);
+    if (g == NULL) {
+        return FALSE;
+    }
+    /* Placed as BodyDisplay places the model; the rotation's outputs are
+       globals the caller still reads. */
+    const S32 savedX = X0, savedY = Y0, savedZ = Z0;
+    LongRotatePoint(&MatriceWorld, x, y, z);
+    const float pos[3] = {(float)(X0 - CameraXr), (float)(Y0 - CameraYr), (float)(Z0 - CameraZr)};
+    X0 = savedX;
+    Y0 = savedY;
+    Z0 = savedZ;
+    TYPE_MAT m;
+    RotateMatrix(&m, &MatriceWorld, 0, beta, 0);
+    const float *c = g->Centre;
+    const float glass[3] = {m.F.M11 * c[0] + m.F.M12 * c[1] + m.F.M13 * c[2] + m.F.TX + pos[0],
+                            m.F.M21 * c[0] + m.F.M22 * c[1] + m.F.M23 * c[2] + m.F.TY + pos[1],
+                            m.F.M31 * c[0] + m.F.M32 * c[1] + m.F.M33 * c[2] + m.F.TZ + pos[2]};
+    /* A light whose reach (9000) cannot touch the view is no use. */
+    const float depth = -glass[2];
+    const float reach = 9000.0f;
+    if (depth < -reach) {
+        return FALSE;
+    }
+    const float slack = depth > 1.0f ? depth : 1.0f;
+    const float halfW = (float)ModeDesiredX / FRatioX, halfH = (float)ModeDesiredY / (FRatioX * fabsf(FRatioY));
+    if (fabsf(glass[0]) > halfW * slack + reach || fabsf(glass[1]) > halfH * slack + reach) {
+        return FALSE;
+    }
+    return GpuObj_AddSceneryLamp(glass, g->Color);
 }
 
 S32 AffGpu_DecorDraw(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta, S32 box[4]) {

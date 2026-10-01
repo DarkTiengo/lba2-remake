@@ -439,6 +439,9 @@ static S32 DecorToGpu(T_DECORS *ptrobj) {
     return TRUE;
 }
 
+/* Which of the cube's decor listed its lamp's light (AffGpu_LampLight). */
+static U8 s_lampListed[MAX_OBJ_DECORS];
+
 void AffichageObjetDecorsZBuf(void) {
     S32 i;
     T_LIST_TRI *ptrtri;
@@ -470,6 +473,18 @@ void AffichageObjetDecorsZBuf(void) {
 #endif
                 ptrobj->Body |= DEC_INVISIBLE;
             //			else	ptrobj->Body &= ~(DEC_INVISIBLE) ;
+        }
+
+        /* A lamp lights the scenery whether its post is seen or not: listed
+           before the culling below, which only decides what is drawn. */
+        s_lampListed[i] = FALSE;
+        if (!(ptrobj->Body & DEC_INVISIBLE) && IsLampModel(Island, (S32)(ptrobj->Body & 0xFFFF))) {
+            GpuObjLampModel = TRUE;
+            GpuObjLampPalette = PtrPal;
+            s_lampListed[i] = (U8)AffGpu_LampLight(Island, (S32)(ptrobj->Body & 0xFFFF),
+                                                   HQR_Get(HQR_Isle_Obj, ptrobj->Body & 0xFFFF), ptrobj->Xworld,
+                                                   ptrobj->Yworld, ptrobj->Zworld, (ptrobj->Beta & 0xFFFF));
+            GpuObjLampModel = FALSE;
         }
 
         // SEB le 12/04/96
@@ -547,6 +562,7 @@ void AffichageObjetDecorsZBuf(void) {
         /* Tell the GPU capture when this decor is a lamp: its bright glass glows. */
         GpuObjLampModel = IsLampModel(Island, (S32)(ptrobj->Body & 0xFFFF));
         GpuObjLampPalette = PtrPal;
+        GpuObjLampListed = s_lampListed[ptrtri->Num];
         /* And when it is a tree: its leaves are shaded as foliage, it sways. */
         U32 foliage = 0;
         if (Trees_Find((S32)(ptrobj->Body & 0xFFFF), &foliage)) {
@@ -571,6 +587,7 @@ void AffichageObjetDecorsZBuf(void) {
         }
     }
     GpuObjLampModel = FALSE;
+    GpuObjLampListed = FALSE;
     GpuTree_End();
 
     //	Switch_Fillers( FILL_TEXTURES_ON );

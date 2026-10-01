@@ -1730,9 +1730,26 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         static float lamp[256][4];
         static float lampColour[256][3];
         U32 nbLamps = 0;
+        /* The scenery's lamps first, from the list taken with the scenery
+           (GpuObjSceneryLamps): every lamp whose light can reach the view, its
+           post on screen or not, at the glass's centre over the whole model.
+           Taken from the drawn glass instead, a lamp went dark the moment its
+           post left the frame -- the ground it lit still in view -- and its
+           light moved with the side of the glass the camera saw. Only while
+           the scenery they were listed with is still the one drawn. */
+        bool sceneryLive = false;
+        for (U32 i = 0; i < count && GpuObjNbSceneryLamps > 0 && !sceneryLive; i++) {
+            sceneryLive = draws[i]->Id == GpuObjSceneryLampGroup;
+        }
+        for (U32 l = 0; sceneryLive && l < GpuObjNbSceneryLamps && nbLamps < SDL_arraysize(lamp); l++) {
+            memcpy(lamp[nbLamps], GpuObjSceneryLamps[l].Pos, sizeof(float) * 3);
+            lamp[nbLamps][3] = 9000.0f;
+            memcpy(lampColour[nbLamps], GpuObjSceneryLamps[l].Color, sizeof(lampColour[nbLamps]));
+            nbLamps++;
+        }
         for (U32 i = 0; i < count && nbLamps < SDL_arraysize(lamp); i++) {
             const T_GPUOBJ_DRAW *draw = draws[i];
-            if (!draw->HasGlow) {
+            if (!draw->HasGlow || (draw->GlowListed && sceneryLive)) {
                 continue;
             }
             S32 merged = FALSE;

@@ -66,6 +66,42 @@ T_GPUOBJ_VERTEX *GpuObj_AllocShadow(void) {
 }
 S32 GpuObjLampModel = FALSE;
 const U8 *GpuObjLampPalette = NULL;
+S32 GpuObjLampListed = FALSE;
+T_GPUOBJ_LAMP GpuObjSceneryLamps[GPUOBJ_MAX_SCENERY_LAMPS];
+U32 GpuObjNbSceneryLamps = 0;
+U32 GpuObjSceneryLampGroup = 0;
+
+S32 GpuObj_AddSceneryLamp(const float pos[3], const float color[3]) {
+    const U32 group = GpuObj_GroupId();
+    if (group == 0) {
+        return FALSE;
+    }
+    if (group != GpuObjSceneryLampGroup) {
+        GpuObjSceneryLampGroup = group;
+        GpuObjNbSceneryLamps = 0;
+    }
+    U32 slot = GpuObjNbSceneryLamps;
+    if (slot == GPUOBJ_MAX_SCENERY_LAMPS) {
+        /* Full: the farthest from the camera gives way to a nearer one. */
+        float farthest = pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2];
+        for (U32 i = 0; i < GPUOBJ_MAX_SCENERY_LAMPS; i++) {
+            const float *p = GpuObjSceneryLamps[i].Pos;
+            const float d = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
+            if (d > farthest) {
+                farthest = d;
+                slot = i;
+            }
+        }
+        if (slot == GPUOBJ_MAX_SCENERY_LAMPS) {
+            return FALSE;
+        }
+    } else {
+        GpuObjNbSceneryLamps++;
+    }
+    memcpy(GpuObjSceneryLamps[slot].Pos, pos, sizeof(GpuObjSceneryLamps[slot].Pos));
+    memcpy(GpuObjSceneryLamps[slot].Color, color, sizeof(GpuObjSceneryLamps[slot].Color));
+    return TRUE;
+}
 
 const U8 *GpuObjFirePage = NULL;
 T_GPUOBJ_RECT GpuObjFireRects[GPUOBJ_MAX_FIRES];
@@ -392,6 +428,7 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     draw->LandSlot = 0;
     draw->LandSmooth = FALSE;
     draw->Mesh = FALSE;
+    draw->GlowListed = FALSE;
     draw->Tree = FALSE;
     if (GpuObjCapValid) {
         for (S32 k = 0; k < 9; k++) {

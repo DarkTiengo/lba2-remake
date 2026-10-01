@@ -158,6 +158,7 @@ typedef struct {
     S32 HasGlow;      ///< a lamp's bright globe: 1 in an isometric room, 2 in a perspective scene
     float GlowPos[3]; ///< where they are, in the draw's scene space
     float GlowColor[3]; ///< their colour, 0..1
+    S32 GlowListed;     ///< its light is in GpuObjSceneryLamps: the glass glows, the light is not taken from it
     U8 Logical[256];
     /* The camera the draw's vertices were placed with: the rotation's rows and
        where the eye stood, both as the capture had them (a vertex is
@@ -259,6 +260,26 @@ T_GPUOBJ_VERTEX *GpuObj_AllocShadowVerts(U32 n);
 extern S32 GpuObjGlow;        ///< lamp globes on 3D models cast light (gfx_lamps)
 extern S32 GpuObjLampModel;   ///< set by the caller while it draws a lamp model
 extern const U8 *GpuObjLampPalette; ///< the scene's 768-byte RGB palette, for the lamp glass
+extern S32 GpuObjLampListed;        ///< the lamp being drawn already lights the scenery from GpuObjSceneryLamps
+
+/* The scenery's lamps as lights, whether their models are on screen or not:
+   the glass's centre and colour taken from the whole model, placed in the
+   view space of the scenery group they were listed in. A lamp's light reaches
+   well past its post, so one just off screen, or behind the camera, still
+   lights what is seen; and the glass seen from one side or the other does not
+   move the light. */
+#define GPUOBJ_MAX_SCENERY_LAMPS 64
+typedef struct {
+    float Pos[3];
+    float Color[3]; ///< the glass's colour, 0..1
+} T_GPUOBJ_LAMP;
+extern T_GPUOBJ_LAMP GpuObjSceneryLamps[GPUOBJ_MAX_SCENERY_LAMPS];
+extern U32 GpuObjNbSceneryLamps;
+extern U32 GpuObjSceneryLampGroup; ///< the group they belong to: they are the scenery's while it lives
+
+/** A lamp of the scenery in the open group, the nearest to the camera kept
+ *  when there are more than the list holds. FALSE outside a group. */
+S32 GpuObj_AddSceneryLamp(const float pos[3], const float color[3]);
 extern S32 GpuObjFire;        ///< procedural flames and firelight on fire textures (gfx_fire)
 extern S32 GpuObjLava;        ///< authored lava shading (gfx_lava)
 
