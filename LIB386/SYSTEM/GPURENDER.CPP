@@ -109,7 +109,9 @@ static SDL_GPUBuffer *s_bvhNodes = NULL;  ///< ray-tracing hierarchy (GPUBVH.H)
 static SDL_GPUBuffer *s_bvhTris = NULL;
 static bool s_rayScene = false; ///< this present's hierarchy is built: the composite traces shadow rays
 /* The lights the composite traces shadow rays toward: the nearest to the camera. */
-#define RT_MAX_LIGHTS 8
+/* Every light the scene draws is traced: choosing some of them made a lamp's
+   shadows come and go as the choice changed with the one walking among them. */
+#define RT_MAX_LIGHTS GPUOBJ_MAX_LIGHTS
 /* The object vertex shaders' draw uniform (PLACE.glsl), in floats. Every push
    sends all of it: a shorter one leaves the rest of the block holding whatever
    the ring had there, a tree's sway or a model's light included. */
@@ -458,7 +460,7 @@ static float Daylight(void) {
 
 static void PushCompositeParams(void) {
     static const char *debug = SDL_getenv("LBA2_GPU_DEBUG");
-    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 4 + 8 +
+    float params[12 + GPUWATER_MAX_IMPACTS * 4 + MAX_FLAME_SPRITES * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 5 +
                  GPUSTORM_UNIFORM_FLOATS + 32 + 16];
     SDL_zeroa(params);
     params[8] = (float)SDL_fmod((double)SDL_GetTicks() / 1000.0, 1000.0);
@@ -534,14 +536,14 @@ static void PushCompositeParams(void) {
         rt[9] = (float)s_targetH / (float)ModeDesiredY;
     }
     GpuStorm_GetUniforms(params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12 + 12 + 4 +
-                             RT_MAX_LIGHTS * 4 + 8,
+                             RT_MAX_LIGHTS * 5,
                          (float)ModeDesiredX, (float)ModeDesiredY);
     /* The sky: the fog colour at the horizon (w on), up (w daylight), the
        world's X (w cloud cover) and Z (w storm) axes, toward the sun (w
        seconds). */
     {
         float *sky = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12 + 12 + 4 +
-                     RT_MAX_LIGHTS * 4 + 8 + GPUSTORM_UNIFORM_FLOATS;
+                     RT_MAX_LIGHTS * 5 + GPUSTORM_UNIFORM_FLOATS;
         const S32 fog = GpuSky_FogIndex();
         /* Up is the rays' too (a grass blade takes the ground's normal). */
         memcpy(sky + 4, GpuObjUpDir, sizeof(float) * 3);
@@ -570,8 +572,8 @@ static void PushCompositeParams(void) {
        one's (a scene point is M * world - camera, M the capture's rotation),
        and whether the last one's result is there to be reused. */
     {
-        float *acc = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 4 +
-                     8 + GPUSTORM_UNIFORM_FLOATS + 32;
+        float *acc = params + 12 + MAX_FLAME_SPRITES * 4 + GPUWATER_MAX_IMPACTS * 4 + 12 + 12 + 4 + RT_MAX_LIGHTS * 5 +
+                     GPUSTORM_UNIFORM_FLOATS + 32;
         const float *a = s_prevCapMat, *b = GpuObjCapMat;
         float r[9];
         for (S32 i = 0; i < 3; i++) {
@@ -1251,6 +1253,22 @@ static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
             n = LandRayTris(draws[d], tris, n);
             continue;
         }
+        if (draws[d]->OccCount > 0 && GpuObjOccTris != NULL) {
+            /* A decor body: its whole model, not the faces its capture kept. */
+            const float *m = draws[d]->OccRows;
+            const float *src = GpuObjOccTris + (size_t)draws[d]->OccFirst * 9;
+            for (U32 i = 0; i < draws[d]->OccCount && n < GPUBVH_MAX_TRIS; i++, src += 9) {
+                float *o = tris + n * 9;
+                for (int k = 0; k < 3; k++) {
+                    const float *p = src + k * 3;
+                    for (int r = 0; r < 3; r++) {
+                        o[k * 3 + r] = m[r * 4] * p[0] + m[r * 4 + 1] * p[1] + m[r * 4 + 2] * p[2] + m[r * 4 + 3];
+                    }
+                }
+                n++;
+            }
+            continue;
+        }
         if (draws[d]->Mesh) {
             /* A kept model: its triangles placed by the draw's rows. */
             const T_GPUOBJ_VERTEX *mv = GpuObjMeshVerts + draws[d]->First;
@@ -1802,9 +1820,9 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         }
     }
     lights[GPUOBJ_MAX_LIGHTS * 8] = (float)nbLights;
-    /* The composite's shadow rays aim at the lights nearest to the scene's
-       focus (to the camera when there is none): nearest the camera, the eight
-       changed as it orbited, and their shadows came and went with them. */
+    /* The composite's shadow rays aim at every light (RT_MAX_LIGHTS is the
+       lights' own limit); the nearest to the scene's focus would be kept were
+       there ever more. */
     s_nbRtLights = 0;
     const float *focus = GpuObjFocusValid ? GpuObjFocus : NULL;
     for (U32 l = 0; l < nbLights; l++) {

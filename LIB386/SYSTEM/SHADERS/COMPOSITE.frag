@@ -65,8 +65,8 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 rtProj;   // XCentre, YCentre, FRatioX, FRatioY: pixel and distance back to a scene point
     vec4 rtInfo;   // target pixels per frame pixel (x, y), ray start, ray length
     vec4 rtLightCfg;       // x lights to trace toward, y clearance kept around each
-    vec4 rtLightPos[8];    // scene position, radius
-    vec4 rtLightWeight[2]; // intensity times luma, four a vec4
+    vec4 rtLightPos[16];   // scene position, radius (RT_MAX_LIGHTS)
+    vec4 rtLightWeight[4]; // intensity times luma, four a vec4
     vec4 stormRain;  // x rain falls in view, y seconds, z density, w flash brightness
     vec4 stormBolt;  // x bolt and y horizon in frame uv, z seed, w bolt visibility
     vec4 stormLight; // xyz toward the flash in scene space, w exterior
@@ -390,16 +390,18 @@ float LightShadowRT(vec3 pos, vec3 n) {
         float dist2 = dot(toLight, toLight);
         float range = rtLightPos[k].w;
         float f = clamp(1.0 - dist2 / (range * range), 0.0, 1.0);
-        float w = f * f * rtLightWeight[k / 4][k % 4];
+        float dist = sqrt(dist2);
+        vec3 dir = toLight / max(dist, 1.0);
+        /* Weighed by how much it lights the surface: a light grazing a wall
+           barely lights it, and its rays, leaving at that angle from a point
+           whose depth is known to a couple of units, struck the wall itself
+           in bands that crawled with the camera. One behind the surface does
+           not light it at all. */
+        float w = f * f * rtLightWeight[k / 4][k % 4] * clamp(dot(n, dir) * 4.0, 0.0, 1.0);
         if (w <= 0.0) {
             continue;
         }
         total += w;
-        float dist = sqrt(dist2);
-        vec3 dir = toLight / max(dist, 1.0);
-        if (dot(n, dir) <= 0.0) {
-            continue;
-        }
         if (dist > rtLightCfg.y + rtInfo.z && RayBlocked(o, dir, rtInfo.z, dist - rtLightCfg.y)) {
             blocked += w;
         }

@@ -154,6 +154,8 @@ S32 GpuObjHeightMapsDirtyTo = -1;
 U32 GpuObjLandRecords[GPUOBJ_MAX_HEIGHTMAPS * GPUOBJ_LAND_MAX * GPUOBJ_LAND_WORDS];
 S32 GpuObjLandCount[GPUOBJ_MAX_HEIGHTMAPS];
 T_GPUOBJ_VERTEX *GpuObjMeshVerts = NULL;
+float *GpuObjOccTris = NULL;
+U32 GpuObjOccCount = 0;
 U32 GpuObjMeshCount = 0;
 U32 GpuObjMeshEpoch = 0;
 
@@ -428,6 +430,7 @@ T_GPUOBJ_DRAW *GpuObj_BeginDraw(void) {
     draw->LandSlot = 0;
     draw->LandSmooth = FALSE;
     draw->Mesh = FALSE;
+    draw->OccCount = 0;
     draw->GlowListed = FALSE;
     draw->Tree = FALSE;
     if (GpuObjCapValid) {
@@ -478,6 +481,28 @@ T_GPUOBJ_VERTEX *GpuObj_MeshAlloc(U32 n, U32 *first) {
     *first = GpuObjMeshCount;
     GpuObjMeshCount += n;
     return GpuObjMeshVerts + *first;
+}
+
+float *GpuObj_OccAlloc(U32 n, U32 *first) {
+    if (GpuObjOccTris == NULL) {
+        GpuObjOccTris = (float *)malloc((size_t)GPUOBJ_OCC_MAX_TRIS * 9 * sizeof(float));
+        if (GpuObjOccTris == NULL) {
+            return NULL;
+        }
+    }
+    if (GpuObjOccCount + n > GPUOBJ_OCC_MAX_TRIS) {
+        return NULL;
+    }
+    *first = GpuObjOccCount;
+    GpuObjOccCount += n;
+    return GpuObjOccTris + (size_t)*first * 9;
+}
+
+void GpuObj_OccReset(void) {
+    for (U32 i = 0; i < s_nbDraws; i++) {
+        s_draws[i].OccCount = 0;
+    }
+    GpuObjOccCount = 0;
 }
 
 void GpuObj_MeshReset(void) {

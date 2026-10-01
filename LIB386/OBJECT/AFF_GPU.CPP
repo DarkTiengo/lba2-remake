@@ -111,6 +111,11 @@ static U32 s_nbSceneryLamps = 0;
 static U32 s_sceneryGroup = 0;
 static T_GPUOBJ_DRAW *s_draw = NULL;
 
+/* The occluder the body being displayed stops light with (AffGpu_DecorOccluder). */
+static S32 s_occPending = FALSE;
+static U32 s_occFirst = 0, s_occCount = 0;
+static float s_occRows[12];
+
 /* Fire-textured polygons of the body being captured: their centres summed. */
 static float s_fireSum[3];
 static float s_fireRect[4];
@@ -1380,6 +1385,11 @@ void AffGpu_End(void) {
     s_glowRgb[0] = s_glowRgb[1] = s_glowRgb[2] = 0.0f;
     if (s_draw != NULL) {
         s_draw->GlowListed = s_draw->HasGlow && GpuObjLampListed;
+        if (s_occPending) {
+            s_draw->OccFirst = s_occFirst;
+            s_draw->OccCount = s_occCount;
+            memcpy(s_draw->OccRows, s_occRows, sizeof(s_occRows));
+        }
         KeepCaster(s_draw);
     }
     s_draw = NULL;
@@ -1612,11 +1622,14 @@ typedef struct {
     S32 Glows;  ///< a glass was found
     float Centre[3];
     float Color[3];
+    float Reach; ///< the farthest glass from the centre, and some: the lamp's head
 } T_LAMP_GLASS;
 static T_LAMP_GLASS s_lampGlass[MAX_DECOR_MESHES];
 static S32 s_lampGlassReady = FALSE;
 static float s_glassSum[3], s_glassRgb[3];
 static S32 s_glassCount = 0;
+#define MAX_GLASS_PARTS 256
+static float s_glassPart[MAX_GLASS_PARTS][3];
 
 static void GlassAdd(U32 color, const float centre[3]) {
     S32 rgb[3];
@@ -1626,6 +1639,9 @@ static void GlassAdd(U32 color, const float centre[3]) {
     for (S32 a = 0; a < 3; a++) {
         s_glassSum[a] += centre[a];
         s_glassRgb[a] += (float)rgb[a] / 255.0f;
+    }
+    if (s_glassCount < MAX_GLASS_PARTS) {
+        memcpy(s_glassPart[s_glassCount], centre, sizeof(s_glassPart[0]));
     }
     s_glassCount++;
 }
@@ -1694,6 +1710,15 @@ static const T_LAMP_GLASS *LampGlass(S32 island, S32 index, T_BODY_HEADER *body)
             g->Centre[a] = s_glassSum[a] / (float)s_glassCount;
             g->Color[a] = s_glassRgb[a] / (float)s_glassCount;
         }
+        g->Reach = 0.0f;
+        for (S32 i = 0; i < s_glassCount && i < MAX_GLASS_PARTS; i++) {
+            const float dx = s_glassPart[i][0] - g->Centre[0], dy = s_glassPart[i][1] - g->Centre[1],
+                        dz = s_glassPart[i][2] - g->Centre[2];
+            const float d = (float)sqrt((double)(dx * dx + dy * dy + dz * dz));
+            g->Reach = d > g->Reach ? d : g->Reach;
+        }
+        /* The arms and the cap around the globes. */
+        g->Reach += 250.0f;
     }
     return g->Glows ? g : NULL;
 }
@@ -1732,6 +1757,140 @@ S32 AffGpu_LampLight(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 
         return FALSE;
     }
     return GpuObj_AddSceneryLamp(glass, g->Color);
+}
+
+// --- Decor occluders ------------------------------------------------------------
+typedef struct {
+    S32 Island;       ///< -1: unknown
+    U32 First, Count; ///< in GpuObjOccTris; Count 0: none
+} T_DECOR_OCC;
+static T_DECOR_OCC s_occ[MAX_DECOR_MESHES];
+static S32 s_occReady = FALSE;
+static S32 s_occIsland = -1;
+static float s_occBuild[MAX_MESH_BUILD * 3];
+static U32 s_nbOccBuild = 0;
+
+/* A polygon of the model as an occluder: what the shadow rays would take from
+   its capture (not pass polygons, not lamp glass), its back faces too. */
+static void OccPolygon(U32 type, void *poly) {
+    const U16 *w = (const U16 *)poly;
+    const U32 polyType = type >> 2;
+    if (polyType <= POLY_DITHER_TABLE) {
+        U32 glass;
+        if (polyType == POLY_SOLID) {
+            glass = w[4] & 255;
+        } else if (polyType == POLY_FLAT || polyType == POLY_GOURAUD || polyType == POLY_DITHER) {
+            glass = (w[4] & 255) | 15;
+        } else {
+            return;
+        }
+        S32 rgb[3];
+        if (IsGlowColor(glass, rgb)) {
+            return;
+        }
+    } else if (polyType >= POLY_TEXTURE_Z_FOG) {
+        return;
+    }
+    const S32 nbPoints = (type & 1) ? 4 : 3;
+    if (s_nbOccBuild + (U32)(nbPoints - 2) > MAX_MESH_BUILD / 3) {
+        return;
+    }
+    const TYPE_VT16 *points = (const TYPE_VT16 *)((U8 *)lBody + lBody->OffPoints);
+    for (S32 t = 0; t + 2 < nbPoints; t++) {
+        const S32 corners[3] = {0, t + 1, t + 2};
+        float *o = s_occBuild + (size_t)s_nbOccBuild * 9;
+        for (S32 c = 0; c < 3; c++) {
+            const U16 p = w[corners[c]] < lBody->NbPoints ? w[corners[c]] : 0;
+            o[c * 3 + 0] = (float)points[p].X;
+            o[c * 3 + 1] = (float)points[p].Y;
+            o[c * 3 + 2] = (float)points[p].Z;
+        }
+        s_nbOccBuild++;
+    }
+}
+
+static const T_DECOR_OCC *DecorOcc(S32 island, S32 index, T_BODY_HEADER *body) {
+    if (!s_occReady || island != s_occIsland) {
+        for (S32 i = 0; i < MAX_DECOR_MESHES; i++) {
+            s_occ[i].Island = -1;
+        }
+        if (s_occReady) {
+            GpuObj_OccReset();
+        }
+        s_occReady = TRUE;
+        s_occIsland = island;
+    }
+    if (index < 0 || index >= MAX_DECOR_MESHES) {
+        return NULL;
+    }
+    T_DECOR_OCC *occ = &s_occ[index];
+    if (occ->Island != island) {
+        occ->Island = island;
+        occ->Count = 0;
+        T_BODY_HEADER *saved = lBody;
+        lBody = body;
+        s_nbOccBuild = 0;
+        BodyWalkPolys(body, OccPolygon);
+        lBody = saved;
+        /* A lamp's light is placed amid its globes, inside its head: the head
+           would put the ground around the post in its own shade. The post
+           stays. */
+        const T_LAMP_GLASS *glass = GpuObjLampModel ? LampGlass(island, index, body) : NULL;
+        if (glass != NULL) {
+            U32 kept = 0;
+            for (U32 t = 0; t < s_nbOccBuild; t++) {
+                const float *v = s_occBuild + (size_t)t * 9;
+                float c[3];
+                for (S32 a = 0; a < 3; a++) {
+                    c[a] = (v[a] + v[3 + a] + v[6 + a]) / 3.0f - glass->Centre[a];
+                }
+                if (c[0] * c[0] + c[1] * c[1] + c[2] * c[2] <= glass->Reach * glass->Reach) {
+                    continue;
+                }
+                memmove(s_occBuild + (size_t)kept * 9, v, 9 * sizeof(float));
+                kept++;
+            }
+            s_nbOccBuild = kept;
+        }
+        U32 first = 0;
+        float *dst = s_nbOccBuild > 0 ? GpuObj_OccAlloc(s_nbOccBuild, &first) : NULL;
+        if (dst != NULL) {
+            memcpy(dst, s_occBuild, (size_t)s_nbOccBuild * 9 * sizeof(float));
+            occ->First = first;
+            occ->Count = s_nbOccBuild;
+        }
+    }
+    return occ->Count > 0 ? occ : NULL;
+}
+
+void AffGpu_DecorOccluder(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta) {
+    s_occPending = FALSE;
+    if (!GpuObj_Active() || AffGpuSuspended || TypeProj != TYPE_3D) {
+        return;
+    }
+    const T_DECOR_OCC *occ = DecorOcc(island, index, (T_BODY_HEADER *)obj);
+    if (occ == NULL) {
+        return;
+    }
+    /* BodyDisplay's placement, as AffGpu_DecorDraw takes it. */
+    const S32 savedX = X0, savedY = Y0, savedZ = Z0;
+    LongRotatePoint(&MatriceWorld, x, y, z);
+    const float pos[3] = {(float)(X0 - CameraXr), (float)(Y0 - CameraYr), (float)(Z0 - CameraZr)};
+    X0 = savedX;
+    Y0 = savedY;
+    Z0 = savedZ;
+    TYPE_MAT m;
+    RotateMatrix(&m, &MatriceWorld, 0, beta, 0);
+    const float rows[12] = {m.F.M11, m.F.M12, m.F.M13, m.F.TX + pos[0], m.F.M21, m.F.M22, m.F.M23, m.F.TY + pos[1],
+                            m.F.M31, m.F.M32, m.F.M33, m.F.TZ + pos[2]};
+    memcpy(s_occRows, rows, sizeof(rows));
+    s_occFirst = occ->First;
+    s_occCount = occ->Count;
+    s_occPending = TRUE;
+}
+
+void AffGpu_DecorOccluderEnd(void) {
+    s_occPending = FALSE;
 }
 
 S32 AffGpu_DecorDraw(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta, S32 box[4]) {

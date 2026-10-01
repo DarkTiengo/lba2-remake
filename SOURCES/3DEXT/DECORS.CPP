@@ -573,6 +573,9 @@ void AffichageObjetDecorsZBuf(void) {
         if (DecorToGpu(ptrobj)) {
             continue;
         }
+        /* Its shadows from the whole model, not the faces this view keeps. */
+        AffGpu_DecorOccluder(Island, (S32)(ptrobj->Body & 0xFFFF), HQR_Get(HQR_Isle_Obj, ptrobj->Body & 0xFFFF),
+                             ptrobj->Xworld, ptrobj->Yworld, ptrobj->Zworld, (ptrobj->Beta & 0xFFFF));
         if (BodyDisplay(ptrobj->Xworld,
                         ptrobj->Yworld,
                         ptrobj->Zworld,
@@ -585,6 +588,7 @@ void AffichageObjetDecorsZBuf(void) {
                 ptrobj->Body |= DEC_DRAWN;
             }
         }
+        AffGpu_DecorOccluderEnd();
     }
     GpuObjLampModel = FALSE;
     GpuObjLampListed = FALSE;

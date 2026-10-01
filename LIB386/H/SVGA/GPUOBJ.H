@@ -113,6 +113,19 @@ struct T_GPUOBJ_VERTEX_S *GpuObj_MeshAlloc(U32 n, U32 *first);
 /** Drops every mesh (a new island's models). */
 void GpuObj_MeshReset(void);
 
+/* What a decor body stops light with: every triangle of its model but the
+   glass, in model space, nine floats each, kept once a model for the shadow
+   rays. The capture keeps only the faces turned to the camera, which change as
+   it moves -- a thin post's sides turning edge-on came and went from frame to
+   frame, and its shadow with them. CPU only: the hierarchy is built there. */
+#define GPUOBJ_OCC_MAX_TRIS (1u << 18)
+extern float *GpuObjOccTris;
+extern U32 GpuObjOccCount;
+/** Room for n more occluder triangles, NULL when full; *first their index. */
+float *GpuObj_OccAlloc(U32 n, U32 *first);
+/** Drops every occluder (a new island's models). */
+void GpuObj_OccReset(void);
+
 #define GPUOBJ_FLAG_CHROMAKEY 1 ///< texel 0 is transparent
 #define GPUOBJ_FLAG_ISO 2       ///< isometric projection (constant view vector)
 #define GPUOBJ_FLAG_BAKED 4     ///< shade comes from normal.w as authored, not from lighting
@@ -184,6 +197,11 @@ typedef struct {
     S32 Mesh;
     float MeshRows[12]; ///< model to the draw's view space: rotation rows, translation in the fourth
     float MeshLight[4]; ///< the view-space light, and the scale the normals' shade takes (w)
+    /* What the shadow rays take for this draw when OccCount is set:
+       GpuObjOccTris through these rows, instead of its captured triangles. */
+    U32 OccFirst;
+    U32 OccCount;
+    float OccRows[12];
     /* A tree in the wind (GPUTREE.H): the draw uniform's four vec4, in the
        space the draw's vertices are written in. */
     S32 Tree;
