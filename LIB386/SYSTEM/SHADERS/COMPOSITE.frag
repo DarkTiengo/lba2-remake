@@ -618,8 +618,12 @@ bool WaterMarker(float alpha) {
     return alpha > 0.002 && alpha < 0.006;
 }
 
+bool SandMarker(float alpha) {
+    return alpha > 0.021 && alpha < 0.026;
+}
+
 bool TerrainMarker(float alpha) {
-    return alpha > 0.018 && alpha < 0.020;
+    return (alpha > 0.018 && alpha < 0.020) || SandMarker(alpha);
 }
 
 bool SkyMarker(float alpha) {
@@ -671,6 +675,10 @@ vec4 ShoreFoam(ivec2 p, out vec3 bankColor) {
     float current = texelFetch(u_objLight, p, 0).a;
     bool onWater = WaterMarker(current);
     if (SkyMarker(current)) {
+        return vec4(0.0);
+    }
+    /* Beach sand keeps its dry material; breakers remain on the water side. */
+    if (SandMarker(current)) {
         return vec4(0.0);
     }
     float surfaceHeight = texelFetch(u_objHeight, p, 0).r;

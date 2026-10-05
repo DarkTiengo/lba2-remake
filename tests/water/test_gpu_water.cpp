@@ -382,6 +382,8 @@ int main() {
     /* Material checks on flat triangles: smooth terrain is checked below. */
     TerrainGpuSmooth = FALSE;
     S16 heights[65 * 65] = {};
+    heights[65] = 125;
+    heights[66] = 250;
     const U8 corners[3] = {0, 1, 2};
     const S32 lights[3] = {0, 0, 0};
     const U16 terrainUv[6] = {0, 0, 256, 0, 256, 256};
@@ -392,7 +394,9 @@ int main() {
     TerrainGpu_End();
     Check(allocated == 3 && ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_WATER_TERRAIN) != 0 &&
               ((S32)vertices[0].vpos[3] & GPUOBJ_FLAG_TERRAIN) == 0 &&
-              vertices[0].vpos[1] == 0.0f && vertices[0].uv[2] != 0.0f,
+              vertices[0].vpos[1] == 0.0f && vertices[0].uv[2] != 0.0f &&
+              vertices[0].mat[3] == 0.0f && vertices[1].mat[3] == 125.0f &&
+              vertices[2].mat[3] == 250.0f,
           "authored CodeJeu water keeps its animated shoreline geometry and texture");
     TerrainGpu_BeginCube(heights, terrainPage, NULL, 0, 0, 0);
     allocated = 0;

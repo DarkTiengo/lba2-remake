@@ -92,6 +92,7 @@ lba2.cfg stores user preferences and last-save info. Read at startup, written at
 | GpuFire | int | 0–1 | 1 | GPU renderer: procedural flames and flickering firelight on fire textures. Console `gfx_fire` |
 | GpuPixelFilter | int | 0–1 | 1 | GPU renderer xBR pixel-art filter on upscaled 2D art. Console `gfx_pixelfilter` |
 | GpuDeband | int | 0–1 | 1 | GPU renderer colour smoothing on upscaled 2D art. Console `gfx_deband` |
+| GpuTextureDetail | int | 0–2 | 0 | GPU 3D texture treatment: 0=current filtered pages, 1=enhanced sampling, 2=user 4x RGBA pack with enhanced fallback. Console `gfx_texturedetail` |
 | GpuSpecular | int | 0–1 | 1 | GPU renderer specular highlights on 3D models. Console `gfx_specular` |
 | FixedTimestep | int | 0–100 (ms) | 16 | Sim throttle, so movement is frame-rate independent above 60 fps; 0 restores the historical per-frame simulation. Set by the `fixedtimestep` console verb; `--fixed-timestep` overrides for one run without persisting. See [MOVEMENT_FRAMERATE.md](MOVEMENT_FRAMERATE.md) |
 | VSync | int | 0, 1 | 1 | Cap the frame rate to the display refresh. Invalid values → 1. Set by the Display submenu's toggle and the `vsync` console verb; `--vsync <on\|off>` overrides for one run without persisting. The Display submenu prints it, so a UI capture has to pin it; see [CONTROL.md](CONTROL.md#environmental-hygiene) |

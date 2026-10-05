@@ -25,6 +25,10 @@ layout(set = 2, binding = 1) uniform sampler2D u_lut;        // 256xN R8: logica
 layout(set = 2, binding = 2) uniform sampler2DArray u_pages; // 256x256xN R8 texture pages
 layout(set = 2, binding = 3) uniform sampler2D u_atlas;       // interior bricks: index, coverage
 layout(set = 2, binding = 4) uniform sampler2D u_lava;        // project-authored lava albedo
+layout(set = 2, binding = 5) uniform sampler2DArray u_replacements; // 1024x1024 RGBA, alpha = strength
+layout(set = 2, binding = 6) uniform sampler2DArray u_replacementMasks; // 256x256 R8, 1 = original
+layout(set = 2, binding = 7) uniform sampler2D u_replacementPalette; // palette the RGBA was exported with
+layout(set = 2, binding = 8) uniform sampler2DArray u_vehicleMetal; // project-authored Citadel object albedos
 
 layout(set = 3, binding = 0) uniform Draw {
     float drawId;
@@ -35,10 +39,10 @@ layout(set = 3, binding = 0) uniform Draw {
     float fogEnd;   // and where it is total; <= fogStart disables it
     float fogColor; // palette index fog fades to
     float specular; // specular strength, 0 turns highlights off
-    float glassPass; // 1: the blended pass drawing only lamp glass; 0: everything else
-    float drawPad0;
-    float drawPad1;
-    float drawPad2;
+    float glassPass;  // 1: the blended pass drawing only lamp glass; 0: everything else
+    float replacement; // replacement layer + 1, or 0
+    float textureDetail; // 0 current, 1 enhanced, 2 replacement with enhanced fallback
+    float terrainMaterial; // replacement layer + 1 for world-projected earth/sand, or 0
 };
 
 layout(set = 3, binding = 1) uniform Lights {
@@ -116,6 +120,7 @@ const int MODE_DISC = 5;
 const int MODE_CLUT = 6;
 const int MODE_BRICK = 7;
 const int MODE_ORB = 8;
+const int MODE_RGB = 12;
 const int MODE_SHADOW = 9;
 const int MODE_SILHOUETTE = 10;
 const int MODE_SPRITE = 11;
@@ -134,9 +139,25 @@ const int FLAG_GRASS = 512;
 const int FLAG_TERRAIN = 2048;
 const int FLAG_LAVA = 4096;
 const int FLAG_FOLIAGE = 8192;
+const int FLAG_CITADEL_VEHICLE = 16384;
+const int FLAG_CITADEL_OBJECT = 32768;
+const int FLAG_CITADEL_BOAT_GLASS = 65536;
+const int FLAG_CITADEL_BOAT_INTERIOR = 131072;
 
 vec3 Pal(int i) {
     return texelFetch(u_palette, ivec2(i & 255, 0), 0).rgb;
+}
+
+/* The Citadel's brown and ochre land has palette colour but no authored UVs.
+   Mirror tiling keeps the material continuous across every cube boundary. */
+vec3 TerrainAlbedo(vec3 original, int base) {
+    vec2 tile = 1.0 - abs(fract(v_uv.zw / 8.0) * 2.0 - 1.0);
+    float y = base == 107 ? 512.0 : 0.0;
+    vec2 atlasUv = (vec2(0.5, y + 0.5) + tile * 511.0) / 1024.0;
+    vec3 material = texture(u_replacements, vec3(atlasUv, terrainMaterial - 1.0)).rgb;
+    vec3 mean = base == 107 ? vec3(217.0, 167.0, 103.0) / 255.0
+                            : vec3(127.0, 89.0, 58.0) / 255.0;
+    return original * mix(vec3(1.0), clamp(material / mean, vec3(0.55), vec3(1.5)), 0.88);
 }
 
 /* Flags ride in an interpolated attribute, so a constant 4 can arrive as
@@ -154,11 +175,19 @@ int Logical(int i) {
     return row >= 0 ? Lut(row, i) : (i & 255);
 }
 
-int Texel(int u, int v) {
+int TexelAddress(int u, int v) {
     int offset = int(v_mat.y);
     int mask = int(v_mat.z);
-    int index = (offset + ((((v & 255) << 8) | (u & 255)) & mask)) & 65535;
+    return (offset + ((((v & 255) << 8) | (u & 255)) & mask)) & 65535;
+}
+
+int Texel(int u, int v) {
+    int index = TexelAddress(u, v);
     return int(texelFetch(u_pages, ivec3(index & 255, index >> 8, int(page)), 0).r * 255.0 + 0.5);
+}
+
+vec3 ReplacementBasePal(int i) {
+    return texelFetch(u_replacementPalette, ivec2(i & 255, 0), 0).rgb;
 }
 
 // --- Procedural fire -----------------------------------------------------------
@@ -291,7 +320,48 @@ vec4 TexColor(int texel, float shade, bool shaded, int clut) {
     return vec4(mix(Pal(Lut(rowA, texel)), Pal(Lut(rowB, texel)), fract(shade)), 1.0);
 }
 
-vec4 Textured(float shade, bool shaded, vec2 uvOffset) {
+vec4 OriginalTexturedAt(float shade, bool shaded, vec2 uvOffset, bool enhanced) {
+    int clut = int(clutRow);
+    vec2 t = v_uv.xy + uvOffset - 0.5;
+    vec2 f = fract(t);
+    if (enhanced) {
+        /* Hold either texel a little longer across the interpolation. This
+           removes the permanently soft look without ringing across palette
+           edges as a cubic reconstruction would. */
+        f = f * f * (3.0 - 2.0 * f);
+    }
+    ivec2 i = ivec2(floor(t));
+    vec4 c00 = TexColor(Texel(i.x, i.y), shade, shaded, clut);
+    vec4 c10 = TexColor(Texel(i.x + 1, i.y), shade, shaded, clut);
+    vec4 c01 = TexColor(Texel(i.x, i.y + 1), shade, shaded, clut);
+    vec4 c11 = TexColor(Texel(i.x + 1, i.y + 1), shade, shaded, clut);
+    vec4 c = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    if (c.a < 0.5) {
+        discard;
+    }
+    return vec4(c.rgb / c.a, 1.0);
+}
+
+vec4 OriginalTextured(float shade, bool shaded, vec2 uvOffset) {
+    bool enhanced = textureDetail > 0.5;
+    vec2 footprint = fwidth(v_uv.xy);
+    float span = max(footprint.x, footprint.y);
+    if (enhanced && span > 1.5 && (Flags() & FLAG_CHROMAKEY) == 0) {
+        /* Four seam-safe samples suppress distant shimmer. Texel() applies the
+           page's offset and repeat mask independently to every tap. */
+        vec2 d = min(footprint * 0.22, vec2(1.5));
+        return (OriginalTexturedAt(shade, shaded, uvOffset + vec2(-d.x, -d.y), true) +
+                OriginalTexturedAt(shade, shaded, uvOffset + vec2( d.x, -d.y), true) +
+                OriginalTexturedAt(shade, shaded, uvOffset + vec2(-d.x,  d.y), true) +
+                OriginalTexturedAt(shade, shaded, uvOffset + vec2( d.x,  d.y), true)) * 0.25;
+    }
+    return OriginalTexturedAt(shade, shaded, uvOffset, enhanced);
+}
+
+/* Keep mode 0 on the exact sampling path shipped before texture packs. Apart
+   from being the compatibility promise, this avoids making retained terrain
+   depend on derivatives that only the enhanced modes need. */
+vec4 LegacyTextured(float shade, bool shaded, vec2 uvOffset) {
     int clut = int(clutRow);
     vec2 t = v_uv.xy + uvOffset - 0.5;
     vec2 f = fract(t);
@@ -305,6 +375,83 @@ vec4 Textured(float shade, bool shaded, vec2 uvOffset) {
         discard;
     }
     return vec4(c.rgb / c.a, 1.0);
+}
+
+ivec2 ReplacementAddress(int highU, int highV) {
+    int u = int(floor(float(highU) * 0.25));
+    int v = int(floor(float(highV) * 0.25));
+    int subU = highU - u * 4;
+    int subV = highV - v * 4;
+    int index = TexelAddress(u, v);
+    return ivec2((index & 255) * 4 + subU, (index >> 8) * 4 + subV);
+}
+
+vec4 ReplacementTexel(int highU, int highV) {
+    int layer = int(replacement) - 1;
+    ivec2 at = ReplacementAddress(highU, highV);
+    int source = TexelAddress(int(floor(float(highU) * 0.25)),
+                              int(floor(float(highV) * 0.25)));
+    if (texelFetch(u_replacementMasks, ivec3(source & 255, source >> 8, layer), 0).r > 0.5) {
+        return vec4(0.0);
+    }
+    return texelFetch(u_replacements, ivec3(at, layer), 0);
+}
+
+vec4 ReplacementTexturedAt(vec2 uvOffset) {
+    vec2 t = (v_uv.xy + uvOffset) * 4.0 - 0.5;
+    vec2 f = fract(t);
+    ivec2 i = ivec2(floor(t));
+    vec4 c00 = ReplacementTexel(i.x, i.y);
+    vec4 c10 = ReplacementTexel(i.x + 1, i.y);
+    vec4 c01 = ReplacementTexel(i.x, i.y + 1);
+    vec4 c11 = ReplacementTexel(i.x + 1, i.y + 1);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+vec4 ReplacementTextured(vec2 uvOffset) {
+    vec2 footprint = fwidth(v_uv.xy);
+    if (max(footprint.x, footprint.y) * 4.0 > 1.5 && (Flags() & FLAG_CHROMAKEY) == 0) {
+        vec2 d = min(footprint * 0.22, vec2(1.5));
+        return (ReplacementTexturedAt(uvOffset + vec2(-d.x, -d.y)) +
+                ReplacementTexturedAt(uvOffset + vec2( d.x, -d.y)) +
+                ReplacementTexturedAt(uvOffset + vec2(-d.x,  d.y)) +
+                ReplacementTexturedAt(uvOffset + vec2( d.x,  d.y))) * 0.25;
+    }
+    return ReplacementTexturedAt(uvOffset);
+}
+
+vec4 Textured(float shade, bool shaded, vec2 uvOffset) {
+    if (textureDetail < 0.5) {
+        return LegacyTextured(shade, shaded, uvOffset);
+    }
+    vec4 original = OriginalTextured(shade, shaded, uvOffset);
+    if (replacement < 0.5) {
+        return original;
+    }
+
+    vec4 authored = ReplacementTextured(uvOffset);
+    if (authored.a <= 0.0) {
+        return original;
+    }
+
+    ivec2 centre = ivec2(floor(v_uv.xy + uvOffset));
+    int index = Texel(centre.x, centre.y);
+    int logical = Logical(index);
+    vec3 currentBase = Pal(logical);
+    vec3 sourceBase = ReplacementBasePal(index);
+    vec3 referenceBase = ReplacementBasePal(logical);
+    float currentLuma = dot(currentBase, vec3(0.299, 0.587, 0.114));
+    float referenceLuma = dot(referenceBase, vec3(0.299, 0.587, 0.114));
+    vec3 colour = (authored.rgb + referenceBase - sourceBase) *
+                  (currentLuma / max(referenceLuma, 1.0 / 255.0));
+    float paletteEffect = clamp(length(currentBase - referenceBase) * 1.5, 0.0, 1.0);
+    colour = mix(colour, currentBase, paletteEffect * 0.65);
+
+    if (shaded) {
+        vec3 shadeRatio = original.rgb / max(currentBase, vec3(0.06));
+        colour *= clamp(shadeRatio, vec3(0.0), vec3(2.5));
+    }
+    return vec4(mix(original.rgb, colour, authored.a), 1.0);
 }
 
 /* Brick coverage from the nearest texel, so neighbouring bricks meet exactly
@@ -467,10 +614,26 @@ void main() {
         return;
     }
 
-    /* Lamp glass is drawn in its own blended pass, over what lies behind it. */
-    bool glass = (Flags() & FLAG_EMISSIVE) != 0 && (mode == MODE_SOLID || mode == MODE_SHADED || mode == MODE_DISC);
+    /* Cabin panes and lamp glass are blended over their backgrounds. */
+    bool boatGlass = (Flags() & FLAG_CITADEL_BOAT_GLASS) != 0;
+    bool lampGlass = (Flags() & FLAG_EMISSIVE) != 0 && (mode == MODE_SOLID || mode == MODE_SHADED || mode == MODE_DISC);
+    bool glass = boatGlass || lampGlass;
     if (glass != (glassPass > 0.5)) {
         discard;
+    }
+    if (boatGlass) {
+        vec3 n = normalize(v_normal.xyz);
+        vec3 view = normalize(-v_vpos.xyz);
+        float rim = pow(1.0 - abs(dot(n, view)), 3.0);
+        vec2 pane = clamp(v_uv.xy, vec2(0.0), vec2(1.0));
+        float glint = exp(-pow((pane.x - 0.24 - pane.y * 0.12) / 0.045, 2.0));
+        vec3 tint = vec3(0.32, 0.54, 0.60) + vec3(0.24, 0.26, 0.25) * glint + vec3(0.14) * rim;
+        o_color = vec4(min(tint, vec3(0.85)), clamp(0.16 + 0.34 * rim + 0.10 * glint, 0.14, 0.60));
+        o_id = vec4(id, 0.0, 0.0, 1.0);
+        o_light = vec4(0.0);
+        o_shadow = vec4(0.0);
+        o_height = 0.0;
+        return;
     }
     if (glass) {
         if (mode == MODE_DISC && dot(v_uv.zw, v_uv.zw) > 1.0) {
@@ -509,6 +672,10 @@ void main() {
     float spec = 0.0;
     int base = int(v_mat.x);
     bool water = (Flags() & FLAG_WATER) != 0 && waterInfo.y > 0.5;
+    bool shoreTerrain = (Flags() & FLAG_WATER_TERRAIN) != 0;
+    /* Authored coastal polygons climb onto beaches and rocks. Their height is
+       carried separately from the broad sea's swell attenuation. */
+    float shoreWater = shoreTerrain ? 1.0 - smoothstep(32.0, 160.0, v_waterCoast) : 1.0;
     bool sky = (Flags() & FLAG_SKY) != 0;
     bool lava = (Flags() & FLAG_LAVA) != 0 && fireInfo.w > 0.5;
     float lavaHeight = 0.0;
@@ -531,13 +698,61 @@ void main() {
         surfaceNormal = normalize(mix(normalize(surfaceNormal), movingNormal, 0.56));
     }
 
-    if (water && waterInfo.w >= 0.0) {
-        color = WaterColor(surfaceNormal, v_waterCoast);
+    if ((Flags() & FLAG_CITADEL_BOAT_INTERIOR) != 0) {
+        vec2 pane = clamp(v_uv.xy, vec2(0.0), vec2(1.0));
+        vec3 cabin = mix(vec3(0.035, 0.049, 0.056), vec3(0.13, 0.10, 0.075), 1.0 - pane.y);
+        float seat = (1.0 - smoothstep(0.32, 0.35, pane.y)) * smoothstep(0.08, 0.16, pane.x) *
+                     (1.0 - smoothstep(0.84, 0.92, pane.x));
+        cabin = mix(cabin, vec3(0.34, 0.21, 0.12), seat);
+        float seatBack = (smoothstep(0.31, 0.35, pane.y) - smoothstep(0.67, 0.71, pane.y)) *
+                         smoothstep(0.18, 0.24, pane.x) * (1.0 - smoothstep(0.55, 0.61, pane.x));
+        cabin = mix(cabin, vec3(0.25, 0.16, 0.10), seatBack);
+        float rail = (1.0 - smoothstep(0.014, 0.032, abs(pane.x - 0.72))) * smoothstep(0.22, 0.34, pane.y);
+        cabin = mix(cabin, vec3(0.50, 0.36, 0.18), rail * 0.78);
+        color = cabin;
+    } else if ((Flags() & FLAG_CITADEL_VEHICLE) != 0) {
+        float shade = (mode == MODE_SHADED || v_normal.w > 0.01) ? ShadeValue(spec) : 15.0;
+        vec3 authored = mode == MODE_SHADED ? Ramp(base, shade) : Pal(Logical(base));
+        vec3 paint = texture(u_vehicleMetal, vec3(v_uv.xy, v_mat.w)).rgb;
+        if (int(v_mat.w + 0.5) == 6) {
+            /* Clean satin-metal grain; the palette still owns paint colour. */
+            float value = dot(paint, vec3(0.2126, 0.7152, 0.0722));
+            float grain = clamp(1.0 + (value / 0.748 - 1.0) * 1.6, 0.86, 1.14);
+            color = authored * grain;
+            color += spec * specular * 0.17 * authored;
+        } else {
+            color = mix(authored, paint * (0.78 + 0.22 * shade / 15.0), 0.76);
+            color += spec * specular * 0.10 * paint;
+        }
+    } else if (water && waterInfo.w >= 0.0) {
+        color = WaterColor(surfaceNormal, shoreTerrain ? 0.0 : v_waterCoast);
+        if (shoreTerrain && shoreWater < 1.0) {
+            bool shaded = mode == MODE_TEXSHADED;
+            float shade = shaded ? ShadeValue(spec) : 0.0;
+            vec3 bank = Textured(shade, shaded, vec2(0.0)).rgb;
+            if (terrainMaterial > 0.5 && textureDetail > 1.5) {
+                vec3 sand = TerrainAlbedo(Pal(Logical(107)), 107);
+                bank = mix(bank, sand, 1.0 - smoothstep(280.0, 480.0, v_waterCoast));
+            }
+            color = mix(bank, color, shoreWater);
+        }
     } else if (water) {
         /* CodeJeu 12/15 is the retail shoreline animation. Its page receives
            250 ms updates in the software path, unlike SkySeaTexture's layout. */
         surfaceNormal = normalize(v_normal.xyz);
         color = Textured(0.0, false, vec2(0.0)).rgb;
+    } else if (mode == MODE_RGB) {
+        vec3 n = normalize(v_normal.xyz);
+        if (!gl_FrontFacing) n = -n;
+        surfaceNormal = n;
+        vec3 view = normalize(-v_vpos.xyz);
+        vec3 light = normalize(v_light.xyz);
+        float diffuse = max(dot(n, light), 0.0);
+        float rough = clamp(v_uv.z, 0.08, 1.0);
+        float metal = clamp(v_uv.w, 0.0, 1.0);
+        float highlight = pow(max(dot(n, normalize(light + view)), 0.0), mix(100.0, 8.0, rough));
+        color = v_mat.xyz * (0.48 + 0.52 * diffuse);
+        color += mix(vec3(0.15), v_mat.xyz, metal) * highlight * (1.0 - rough * 0.65) * specular;
     } else if (mode == MODE_SOLID) {
         color = Pal(Logical(base));
         if ((Flags() & FLAG_EMISSIVE) != 0) {
@@ -574,6 +789,10 @@ void main() {
         int rowA = int(clutRow) + min(row, 15);
         int rowB = int(clutRow) + min(row + 1, 15);
         color = mix(Pal(Lut(rowA, base)), Pal(Lut(rowB, base)), fract(shade));
+        if (terrainMaterial > 0.5 && textureDetail > 1.5 &&
+            (Flags() & FLAG_TERRAIN) != 0 && (base == 27 || base == 107)) {
+            color = TerrainAlbedo(color, base);
+        }
     } else if (mode == MODE_ORB) {
         /* A glowing glass ball: lit from the upper left, a hot core, a coloured
            rim, and a sharp highlight. */
@@ -608,6 +827,25 @@ void main() {
         }
     }
 
+    if ((Flags() & FLAG_CITADEL_OBJECT) != 0 && textureDetail > 1.5) {
+        int layer = int(v_mat.w + 0.5);
+        vec3 albedo = texture(u_vehicleMetal, vec3(v_uv.xy, (layer == 2 || layer == 5) ? 6.0 : v_mat.w)).rgb;
+        if (layer == 2 || layer == 5) {
+            /* Clean satin metal on bins, railings and lamp frames; palette owns the hue. */
+            float value = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+            float grain = clamp(1.0 + (value / 0.748 - 1.0) * 1.6, 0.86, 1.14);
+            color *= grain;
+            color += spec * specular * 0.17 * color;
+        } else {
+            float mean = layer == 4 ? 0.36 : (layer == 3 ? 0.48 : 0.54);
+            float authoredLight = dot(color, vec3(0.2126, 0.7152, 0.0722));
+            vec3 shadedMaterial = albedo * clamp(authoredLight / mean, 0.32, 1.48);
+            /* The palms already have painted frond detail: add grain lightly. */
+            bool authoredFoliage = layer == 4 && (mode == MODE_TEX || mode == MODE_TEXSHADED);
+            color = mix(color, shadedMaterial, authoredFoliage ? 0.28 : (layer == 4 ? 0.58 : 0.70));
+        }
+    }
+
     if (emissive > 0.0 && (Flags() & FLAG_EMISSIVE) != 0) {
         /* A lit globe: a warm yellow glass with a paler core, kept below white. */
         float centre = mode == MODE_DISC ? 1.0 - dot(v_uv.zw, v_uv.zw) : 0.5;
@@ -638,7 +876,7 @@ void main() {
         emissive = max(emissive, max(vein * 0.15, molten * 0.30));
     }
 
-    bool litBody = (mode == MODE_SHADED || mode == MODE_TEXSHADED || mode == MODE_CLUT) &&
+    bool litBody = (mode == MODE_SHADED || mode == MODE_TEXSHADED || mode == MODE_CLUT || mode == MODE_RGB) &&
                    (Flags() & FLAG_BAKED) == 0 && emissive <= 0.0;
     if (litBody && sunDir.w > 0.0) {
         color = GlobalLight(color, surfaceNormal);
@@ -650,17 +888,20 @@ void main() {
     }
 
     o_color = vec4(clamp(color, 0.0, 1.0), 1.0);
-    bool baked = (Flags() & FLAG_BAKED) != 0 && !water;
+    bool visibleWater = water && shoreWater >= 0.5;
+    bool baked = (Flags() & FLAG_BAKED) != 0 && !visibleWater;
     /* R8 alpha markers let the composite find water and ground contacts
        without mistaking an actor standing beside the sea for a seabed. */
     float material = clamp(emissive, 0.0, lava ? 0.5 : 1.0);
-    if (water)
+    if (visibleWater)
         material = 1.0 / 255.0;
     else if (sky)
         material = 2.0 / 255.0;
     else if ((Flags() & FLAG_GRASS) != 0)
         material = 4.0 / 255.0;
-    else if (!lava && (Flags() & FLAG_TERRAIN) != 0)
+    else if (!lava && (Flags() & FLAG_TERRAIN) != 0 && terrainMaterial > 0.5 && base == 107)
+        material = 6.0 / 255.0;
+    else if (!lava && ((Flags() & FLAG_TERRAIN) != 0 || (water && shoreTerrain)))
         material = 5.0 / 255.0;
     o_light = vec4(min(DynamicLight(v_vpos.xyz, surfaceNormal, !baked), vec3(2.0)) * 0.5, material);
     if (!sky) {

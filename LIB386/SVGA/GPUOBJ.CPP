@@ -27,6 +27,7 @@ S32 GpuObjPixelFilter = TRUE;
 S32 GpuObjDeband = TRUE;
 S32 GpuObjSpecular = TRUE;
 S32 GpuObjUiScale = TRUE;
+S32 GpuObjTextureDetail = GPUOBJ_TEXTURE_DETAIL_ORIGINAL;
 S32 GpuObjFire = TRUE;
 S32 GpuObjLava = TRUE;
 S32 GpuObjGlow = TRUE;
@@ -65,6 +66,10 @@ T_GPUOBJ_VERTEX *GpuObj_AllocShadow(void) {
     return GpuObj_AllocShadowVerts(GPUOBJ_SHADOW_VERTS);
 }
 S32 GpuObjLampModel = FALSE;
+S32 GpuObjCitadelVehicle = FALSE;
+S32 GpuObjCitadelBoat = FALSE;
+S32 GpuObjCitadelSmooth = FALSE;
+S32 GpuObjCitadelMaterial = 0;
 const U8 *GpuObjLampPalette = NULL;
 S32 GpuObjLampListed = FALSE;
 T_GPUOBJ_LAMP GpuObjSceneryLamps[GPUOBJ_MAX_SCENERY_LAMPS];

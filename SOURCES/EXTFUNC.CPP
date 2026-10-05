@@ -25,6 +25,7 @@
 #include "3DEXT/TERRAIN_GPU.H"
 #include "BOOT_EXIT.H"
 #include "WATER.H"
+#include "TEXTURE_PACK.H"
 
 extern S32 Nxw, Nyw, Nzw;
 extern S32 SaveNxw, SaveNzw;
@@ -227,11 +228,13 @@ void InitGrilleExt(char *defpathname) {
             GetResPath(tmpFilePath, ADELINE_MAX_PATH, RESS_HQR_NAME);
             Load_HQR(tmpFilePath, SkySeaTexture, numskysea);
             LoadIsland();
+            TexturePack_SetIsland(IslandName, GroundTexture, ObjTexture, SkySeaTexture);
 
             LastIsland = Island;
         }
 
         LoadCube(CurrentCubeX, CurrentCubeY);
+        TexturePack_UpdateGroundAnimationMask();
         FixeObjetsDecorsInvisibles();
     } else {
         CurrentCubeX += PhantomX;
@@ -322,12 +325,14 @@ void InitGrilleExt(U32 numcube) {
             Load_HQR(tmpFilePath, SkySeaTexture, numskysea);
 
             LoadIsland();
+            TexturePack_SetIsland(IslandName, GroundTexture, ObjTexture, SkySeaTexture);
             LastIsland = Island;
         }
 
         ManageSystem(); // for streaming
 
         LoadCube(CurrentCubeX, CurrentCubeY);
+        TexturePack_UpdateGroundAnimationMask();
 
         ManageSystem(); // for streaming
 

@@ -9,6 +9,7 @@
 #include "PERSO.H" /* WriteConfigFile (persist on resolution change) */
 #include "RES_MENU.H"
 #include "RES_SWITCH.H" /* Res_Switch (apply on cycle) */
+#include "TEXTURE_PACK.H"
 #include "MENU_KEYNAV.H"
 #include "SAVENAME_VALIDATION.H"
 #include "CONSOLE/CONSOLE.H"
@@ -131,6 +132,7 @@ S32 FlagShowEndDemo = FALSE;
 #define MENU_ID_CAM_INVERT 2145
 #define MENU_ID_CAM_HOLD 2146
 #define MENU_ID_GPU_TREES 2147
+#define MENU_ID_GPU_TEXTURE_DETAIL 2148
 // Returned by DoGameMenu when a selector changed which rows its page has
 // (the Renderer row shows or hides GPU effects): the caller rebuilds the page.
 #define MENU_ID_MENU_REBUILD 2123
@@ -204,7 +206,7 @@ S32 MenuStyle = MENU_STYLE_AUTO;
 // on: the image, and the scenery and lighting pages.
 U16 GpuEffectsMenu[] = {
     0,   // selected
-    7,   // nb entries
+    8,   // nb entries
     260, // y center
     0,   // .dia num
 
@@ -216,6 +218,8 @@ U16 GpuEffectsMenu[] = {
     MENU_ID_GPU_PIXEL_FILTER,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_DEBAND,
+    MENU_TYPE_DISPLAY_SELECTOR,
+    MENU_ID_GPU_TEXTURE_DETAIL,
     MENU_TYPE_DISPLAY_SELECTOR,
     MENU_ID_GPU_FIRE,
     0,
@@ -600,6 +604,10 @@ static void Display_CycleOption(S32 id, S32 dir) {
         GpuObjDeband ^= 1;
         break;
 
+    case MENU_ID_GPU_TEXTURE_DETAIL:
+        TexturePack_ApplyMode((GpuObjTextureDetail + (dir < 0 ? 2 : 1)) % 3);
+        break;
+
     case MENU_ID_GPU_SPECULAR:
         GpuObjSpecular ^= 1;
         break;
@@ -852,6 +860,15 @@ static void BuildCustomMenuText(S32 num, char *string) {
     case MENU_ID_GPU_DEBAND:
         FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_DEBAND),
                        GetLocalizedMenuLabel(GpuObjDeband ? MENU_LABEL_VAL_ON : MENU_LABEL_VAL_OFF));
+        break;
+
+    case MENU_ID_GPU_TEXTURE_DETAIL:
+        FormatSelector(string, GetLocalizedMenuLabel(MENU_LABEL_OPT_TEXTURE_DETAIL),
+                       GetLocalizedMenuLabel(GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_ORIGINAL
+                                                 ? MENU_LABEL_VAL_CURRENT
+                                             : GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_ENHANCED
+                                                 ? MENU_LABEL_VAL_ENHANCED
+                                                 : MENU_LABEL_VAL_PACK_4X));
         break;
 
     case MENU_ID_GPU_SPECULAR:
@@ -4425,6 +4442,7 @@ static S32 GereGpuEffectsMenu(void) {
         case MENU_ID_GPU_FIRE:
         case MENU_ID_GPU_PIXEL_FILTER:
         case MENU_ID_GPU_DEBAND:
+        case MENU_ID_GPU_TEXTURE_DETAIL:
             Display_CycleOption(select, 1);
             break;
         }

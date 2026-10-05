@@ -43,6 +43,23 @@ bool GpuRender_TakeFrame(void) {
 void GpuRender_SetFrameFiltered(bool /*filtered*/) {
 }
 
+void GpuRender_ClearTextureReplacements(void) {
+}
+
+bool GpuRender_SetTextureReplacement(const U8 * /*page*/, const U8 * /*rgba*/, U32 /*width*/, U32 /*height*/) {
+    return false;
+}
+
+bool GpuRender_SetTerrainMaterials(const U8 * /*rgba*/, U32 /*width*/, U32 /*height*/) {
+    return false;
+}
+
+void GpuRender_SetTextureReplacementMask(const U8 * /*page*/, const U8 * /*originalMask*/, U32 /*size*/) {
+}
+
+void GpuRender_SetTextureReferencePalette(const U8 * /*palette*/) {
+}
+
 bool GpuRender_BeginComposite(void * /*sdlRenderer*/) {
     return false;
 }
@@ -59,6 +76,7 @@ void GpuRender_EndComposite(void * /*sdlRenderer*/) {
 #include "SHADERS/GPUOBJ.vert.spv.h"
 #include "SHADERS/GPUTERRAIN.vert.spv.h"
 #include "lava_png_embedded.h"
+#include "vehicle_png_embedded.h"
 
 // --- Private state -----------------------------------------------------------
 static SDL_Renderer *s_renderer = NULL;
@@ -143,6 +161,9 @@ static bool s_frameFiltered = false;
 static SDL_GPUTexture *s_lut = NULL;
 static SDL_GPUTexture *s_pages = NULL;
 static SDL_GPUTexture *s_atlas = NULL;
+static SDL_GPUTexture *s_replacementPages = NULL;
+static SDL_GPUTexture *s_replacementMasks = NULL;
+static SDL_GPUTexture *s_replacementPalette = NULL;
 static SDL_GPUTexture *s_lavaAlbedo = NULL;
 static SDL_GPUSampler *s_lavaSampler = NULL;
 static U8 *s_lavaPixels = NULL;
@@ -150,6 +171,28 @@ static U32 s_lavaWidth = 0;
 static U32 s_lavaHeight = 0;
 static bool s_lavaUploaded = false;
 static bool s_lavaReady = false;
+static SDL_GPUTexture *s_vehicleMetal = NULL;
+static SDL_GPUSampler *s_vehicleSampler = NULL;
+static U8 *s_vehiclePixels = NULL;
+static bool s_vehicleUploaded = false;
+
+#define VEHICLE_METAL_SIDE 512
+#define VEHICLE_METAL_LAYERS 7
+
+#define GPURENDER_MAX_REPLACEMENTS 4
+typedef struct {
+    const U8 *Page;
+    U8 *Rgba;
+    U8 Mask[256 * 256];
+    bool PixelsDirty;
+    bool MaskDirty;
+} T_TEXTURE_REPLACEMENT;
+
+static T_TEXTURE_REPLACEMENT s_replacements[GPURENDER_MAX_REPLACEMENTS];
+static U8 s_terrainMaterialKey;
+static U8 s_replacementPalettePixels[256 * 4];
+static bool s_replacementPaletteDirty = true;
+static bool s_replacementPaletteValid = false;
 
 static SDL_GPUBuffer *s_vertexBuffer = NULL;
 static U32 s_vertexCapacity = 0;
@@ -180,6 +223,8 @@ static SDL_GPUBuffer *s_shadowBuffer = NULL;
 static U32 s_shadowCapacity = 0;
 static SDL_GPUTransferBuffer *s_transfer = NULL;
 static U32 s_transferCapacity = 0;
+static SDL_GPUTransferBuffer *s_replacementTransfer = NULL;
+static U32 s_replacementTransferCapacity = 0;
 
 /* The tags go straight from the scan into the buffer they are uploaded from,
    laid out as the frame is (GpuObj_BuildPresent writes each pixel of its box). */
@@ -207,6 +252,15 @@ static U32 s_lutRows = 0;
 static U8 *s_pagePtrs[8];
 static U32 s_nbPages = 0;
 static SDL_GPUTextureFormat s_depthFormat = SDL_GPU_TEXTUREFORMAT_INVALID;
+
+static S32 ReplacementSlot(const U8 *page) {
+    for (S32 i = 0; i < GPURENDER_MAX_REPLACEMENTS; i++) {
+        if (s_replacements[i].Page == page && page != NULL) {
+            return i;
+        }
+    }
+    return -1;
+}
 
 // --- Private functions -------------------------------------------------------
 static void ReleaseTexture(SDL_GPUTexture **texture) {
@@ -314,6 +368,75 @@ static bool LoadLavaTexture(void) {
         ReleaseTexture(&s_lavaAlbedo);
         free(s_lavaPixels);
         s_lavaPixels = NULL;
+        return false;
+    }
+    return true;
+}
+
+static bool LoadVehicleTexture(void) {
+    SDL_IOStream *io = SDL_IOFromConstMem(kVehiclePng, kVehiclePngSize);
+    if (io == NULL)
+        return false;
+    SDL_Surface *loaded = SDL_LoadPNG_IO(io, true);
+    if (loaded == NULL)
+        return false;
+    SDL_Surface *rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(loaded);
+    if (rgba == NULL || rgba->w != VEHICLE_METAL_SIDE || rgba->h != VEHICLE_METAL_SIDE * VEHICLE_METAL_LAYERS ||
+        rgba->pitch < VEHICLE_METAL_SIDE * 4) {
+        Log_Warn("[GPU] Invalid embedded Citadel vehicle material");
+        if (rgba != NULL)
+            SDL_DestroySurface(rgba);
+        return false;
+    }
+    const U32 rowBytes = VEHICLE_METAL_SIDE * 4;
+    const U32 totalBytes = rowBytes * VEHICLE_METAL_SIDE * VEHICLE_METAL_LAYERS;
+    s_vehiclePixels = (U8 *)malloc(totalBytes);
+    if (s_vehiclePixels == NULL || !SDL_LockSurface(rgba)) {
+        free(s_vehiclePixels);
+        s_vehiclePixels = NULL;
+        SDL_DestroySurface(rgba);
+        return false;
+    }
+    for (S32 y = 0; y < VEHICLE_METAL_SIDE * VEHICLE_METAL_LAYERS; y++) {
+        memcpy(s_vehiclePixels + (size_t)y * rowBytes, (const U8 *)rgba->pixels + (size_t)y * rgba->pitch,
+               rowBytes);
+    }
+    SDL_UnlockSurface(rgba);
+    SDL_DestroySurface(rgba);
+
+    SDL_GPUTextureCreateInfo info;
+    SDL_zero(info);
+    info.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
+    info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    info.width = VEHICLE_METAL_SIDE;
+    info.height = VEHICLE_METAL_SIDE;
+    info.layer_count_or_depth = VEHICLE_METAL_LAYERS;
+    info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    for (U32 side = VEHICLE_METAL_SIDE; side > 0; side >>= 1)
+        info.num_levels++;
+    s_vehicleMetal = SDL_CreateGPUTexture(s_device, &info);
+    if (s_vehicleMetal == NULL) {
+        Log_Warn("[GPU] Unable to create Citadel vehicle material: %s", SDL_GetError());
+        free(s_vehiclePixels);
+        s_vehiclePixels = NULL;
+        return false;
+    }
+    SDL_GPUSamplerCreateInfo samplerInfo;
+    SDL_zero(samplerInfo);
+    samplerInfo.min_filter = SDL_GPU_FILTER_LINEAR;
+    samplerInfo.mag_filter = SDL_GPU_FILTER_LINEAR;
+    samplerInfo.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+    samplerInfo.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT;
+    samplerInfo.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT;
+    samplerInfo.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    s_vehicleSampler = SDL_CreateGPUSampler(s_device, &samplerInfo);
+    if (s_vehicleSampler == NULL) {
+        Log_Warn("[GPU] Unable to create Citadel vehicle sampler: %s", SDL_GetError());
+        ReleaseTexture(&s_vehicleMetal);
+        free(s_vehiclePixels);
+        s_vehiclePixels = NULL;
         return false;
     }
     return true;
@@ -704,6 +827,27 @@ static bool EnsureTransfer(U32 size) {
     return s_transfer != NULL;
 }
 
+static bool EnsureReplacementTransfer(U32 size) {
+    if (size <= s_replacementTransferCapacity) {
+        return true;
+    }
+    if (s_replacementTransfer) {
+        SDL_ReleaseGPUTransferBuffer(s_device, s_replacementTransfer);
+        s_replacementTransfer = NULL;
+    }
+    U32 capacity = s_replacementTransferCapacity ? s_replacementTransferCapacity : (1u << 20);
+    while (capacity < size) {
+        capacity *= 2;
+    }
+    SDL_GPUTransferBufferCreateInfo info;
+    SDL_zero(info);
+    info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    info.size = capacity;
+    s_replacementTransfer = SDL_CreateGPUTransferBuffer(s_device, &info);
+    s_replacementTransferCapacity = s_replacementTransfer ? capacity : 0;
+    return s_replacementTransfer != NULL;
+}
+
 static bool EnsureVertexBuffer(U32 size) {
     if (size <= s_vertexCapacity) {
         return true;
@@ -796,7 +940,7 @@ static bool EnsureShadowBuffer(U32 size) {
 static bool CreatePipeline(void) {
     s_objVert = CreateShader(GPUOBJ_vert_spv, GPUOBJ_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
     s_terrainVert = CreateShader(GPUTERRAIN_vert_spv, GPUTERRAIN_vert_spv_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 4);
-    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 5, 4);
+    s_objFrag = CreateShader(GPUOBJ_frag_spv, GPUOBJ_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 9, 4);
     /* The renderer binds the frame texture at slot 0, the state's three after it. */
     s_compositeFrag = CreateShader(COMPOSITE_frag_spv, COMPOSITE_frag_spv_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 10, 1, 2);
     /* The half-resolution pass: the composite's source built with HALF_PASS,
@@ -1016,12 +1160,30 @@ static bool CreatePipeline(void) {
 
     s_atlas = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, sampled, GPUOBJ_ATLAS_SIZE,
                             GPUOBJ_ATLAS_SIZE, 1);
+    s_replacementPages = CreateTexture(SDL_GPU_TEXTURETYPE_2D_ARRAY, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                                       sampled, GPURENDER_REPLACEMENT_SIDE, GPURENDER_REPLACEMENT_SIDE,
+                                       GPURENDER_MAX_REPLACEMENTS);
+    s_replacementMasks = CreateTexture(SDL_GPU_TEXTURETYPE_2D_ARRAY, SDL_GPU_TEXTUREFORMAT_R8_UNORM, sampled,
+                                       256, 256, GPURENDER_MAX_REPLACEMENTS);
+    s_replacementPalette =
+        CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, sampled, 256, 1, 1);
     GpuObjAtlasDirty = TRUE;
+    for (S32 i = 0; i < GPURENDER_MAX_REPLACEMENTS; i++) {
+        if (s_replacements[i].Page != NULL) {
+            s_replacements[i].PixelsDirty = true;
+            s_replacements[i].MaskDirty = true;
+        }
+    }
+    s_replacementPaletteDirty = true;
 
-    if (s_nearest && s_linear && s_palette && s_lut && s_pages && s_atlas)
+    if (s_nearest && s_linear && s_palette && s_lut && s_pages && s_atlas && s_replacementPages &&
+        s_replacementMasks && s_replacementPalette) {
         LoadLavaTexture();
+        LoadVehicleTexture();
+    }
 
-    return s_nearest && s_linear && s_palette && s_lut && s_pages && s_atlas;
+    return s_nearest && s_linear && s_palette && s_lut && s_pages && s_atlas && s_replacementPages &&
+           s_replacementMasks && s_replacementPalette && s_vehicleMetal && s_vehicleSampler;
 }
 
 static void ReleasePipeline(void) {
@@ -1033,6 +1195,9 @@ static void ReleasePipeline(void) {
     ReleaseTexture(&s_lut);
     ReleaseTexture(&s_pages);
     ReleaseTexture(&s_atlas);
+    ReleaseTexture(&s_replacementPages);
+    ReleaseTexture(&s_replacementMasks);
+    ReleaseTexture(&s_replacementPalette);
     ReleaseTexture(&s_lavaAlbedo);
     if (s_lavaSampler) {
         SDL_ReleaseGPUSampler(s_device, s_lavaSampler);
@@ -1043,6 +1208,14 @@ static void ReleasePipeline(void) {
     s_lavaWidth = s_lavaHeight = 0;
     s_lavaUploaded = false;
     s_lavaReady = false;
+    ReleaseTexture(&s_vehicleMetal);
+    if (s_vehicleSampler) {
+        SDL_ReleaseGPUSampler(s_device, s_vehicleSampler);
+        s_vehicleSampler = NULL;
+    }
+    free(s_vehiclePixels);
+    s_vehiclePixels = NULL;
+    s_vehicleUploaded = false;
     if (s_vertexBuffer) {
         SDL_ReleaseGPUBuffer(s_device, s_vertexBuffer);
         s_vertexBuffer = NULL;
@@ -1096,6 +1269,11 @@ static void ReleasePipeline(void) {
         s_transfer = NULL;
     }
     s_transferCapacity = 0;
+    if (s_replacementTransfer) {
+        SDL_ReleaseGPUTransferBuffer(s_device, s_replacementTransfer);
+        s_replacementTransfer = NULL;
+    }
+    s_replacementTransferCapacity = 0;
     if (s_nearest) {
         SDL_ReleaseGPUSampler(s_device, s_nearest);
         s_nearest = NULL;
@@ -1243,7 +1421,8 @@ static bool BuildRayScene(const T_GPUOBJ_DRAW *const *draws, U32 count) {
     static float tris[GPUBVH_MAX_TRIS * 9];
     U32 n = 0;
     /* Grass blades are too many and too thin to cast a traced shadow. */
-    const S32 skipFlags = GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_SKY | GPUOBJ_FLAG_EMISSIVE | GPUOBJ_FLAG_GRASS;
+    const S32 skipFlags = GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_SKY | GPUOBJ_FLAG_EMISSIVE | GPUOBJ_FLAG_GRASS |
+                          GPUOBJ_FLAG_CITADEL_BOAT_GLASS;
     for (U32 d = 0; d < count && n < GPUBVH_MAX_TRIS; d++) {
         /* Only the scene: a menu's bodies live in their own projection. */
         if (!draws[d]->Scene) {
@@ -1439,6 +1618,110 @@ static bool UploadTexture(SDL_GPUCopyPass *pass, SDL_GPUTexture *texture, U32 la
     return true;
 }
 
+static U32 ReplacementUploadBytes(void) {
+    U32 size = 0;
+    bool any = false;
+    for (S32 i = 0; i < GPURENDER_MAX_REPLACEMENTS; i++) {
+        any = any || s_replacements[i].Page != NULL;
+        if (s_replacements[i].PixelsDirty) {
+            size += GPURENDER_REPLACEMENT_SIDE * GPURENDER_REPLACEMENT_SIDE * 4;
+        }
+        if (s_replacements[i].MaskDirty) {
+            size += sizeof(s_replacements[i].Mask);
+        }
+    }
+    if (any && s_replacementPaletteDirty) {
+        size += sizeof(s_replacementPalettePixels);
+    }
+    return size;
+}
+
+/* The replacement pages are much larger than the normal indexed pages. Keep
+   all of their first-frame copies in one dedicated transfer-buffer mapping:
+   reusing the normal transfer at offset zero could overwrite a retained
+   terrain page before the command buffer was submitted. */
+static bool UploadReplacementTextures(SDL_GPUCopyPass *pass, U32 bytes) {
+    if (bytes == 0 || s_replacementTransfer == NULL) {
+        return bytes == 0;
+    }
+
+    const U32 missing = 0xFFFFFFFFu;
+    U32 pixelOffsets[GPURENDER_MAX_REPLACEMENTS];
+    U32 maskOffsets[GPURENDER_MAX_REPLACEMENTS];
+    for (S32 i = 0; i < GPURENDER_MAX_REPLACEMENTS; i++) {
+        pixelOffsets[i] = maskOffsets[i] = missing;
+    }
+    U32 paletteOffset = missing;
+    U32 at = 0;
+    U8 *mapped = (U8 *)SDL_MapGPUTransferBuffer(s_device, s_replacementTransfer, true);
+    if (mapped == NULL) {
+        return false;
+    }
+    const U32 pixelBytes = GPURENDER_REPLACEMENT_SIDE * GPURENDER_REPLACEMENT_SIDE * 4;
+    for (S32 i = 0; i < GPURENDER_MAX_REPLACEMENTS; i++) {
+        if (s_replacements[i].PixelsDirty) {
+            pixelOffsets[i] = at;
+            memcpy(mapped + at, s_replacements[i].Rgba, pixelBytes);
+            at += pixelBytes;
+        }
+        if (s_replacements[i].MaskDirty) {
+            maskOffsets[i] = at;
+            memcpy(mapped + at, s_replacements[i].Mask, sizeof(s_replacements[i].Mask));
+            at += sizeof(s_replacements[i].Mask);
+        }
+    }
+    if (s_replacementPaletteDirty) {
+        paletteOffset = at;
+        memcpy(mapped + at, s_replacementPalettePixels, sizeof(s_replacementPalettePixels));
+        at += sizeof(s_replacementPalettePixels);
+    }
+    SDL_UnmapGPUTransferBuffer(s_device, s_replacementTransfer);
+    if (at != bytes) {
+        return false;
+    }
+
+    SDL_GPUTextureTransferInfo source;
+    SDL_GPUTextureRegion region;
+    for (S32 i = 0; i < GPURENDER_MAX_REPLACEMENTS; i++) {
+        if (pixelOffsets[i] != missing) {
+            SDL_zero(source);
+            source.transfer_buffer = s_replacementTransfer;
+            source.offset = pixelOffsets[i];
+            SDL_zero(region);
+            region.texture = s_replacementPages;
+            region.layer = (U32)i;
+            region.w = GPURENDER_REPLACEMENT_SIDE;
+            region.h = GPURENDER_REPLACEMENT_SIDE;
+            region.d = 1;
+            SDL_UploadToGPUTexture(pass, &source, &region, false);
+        }
+        if (maskOffsets[i] != missing) {
+            SDL_zero(source);
+            source.transfer_buffer = s_replacementTransfer;
+            source.offset = maskOffsets[i];
+            SDL_zero(region);
+            region.texture = s_replacementMasks;
+            region.layer = (U32)i;
+            region.w = 256;
+            region.h = 256;
+            region.d = 1;
+            SDL_UploadToGPUTexture(pass, &source, &region, false);
+        }
+    }
+    if (paletteOffset != missing) {
+        SDL_zero(source);
+        source.transfer_buffer = s_replacementTransfer;
+        source.offset = paletteOffset;
+        SDL_zero(region);
+        region.texture = s_replacementPalette;
+        region.w = 256;
+        region.h = 1;
+        region.d = 1;
+        SDL_UploadToGPUTexture(pass, &source, &region, false);
+    }
+    return true;
+}
+
 /* Row of rows*256 bytes of lookup data for this present, deduplicated; -1 when full. */
 static S32 LutRows(const U8 *data, U32 rows) {
     for (U32 r = 0; r + rows <= s_lutRows; r++) {
@@ -1491,7 +1774,11 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
         u.FogColor = (float)(draw->FogColor & 0xFF);
         u.Pad = GpuObjSpecular ? 1.0f : 0.0f; /* specular strength */
         u.GlassPass = 0.0f;
-        u.Pad1 = u.Pad2 = u.Pad3 = 0.0f;
+        u.Pad1 = 0.0f;
+        u.Pad2 = (float)GpuObjTextureDetail;
+        u.Pad3 = GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_PACK
+                     ? (float)(ReplacementSlot(&s_terrainMaterialKey) + 1)
+                     : 0.0f;
         if (draw->HasLogical) {
             S32 row = LutRows(draw->Logical, 1);
             if (row < 0) {
@@ -1512,6 +1799,10 @@ static U32 ResolveDraws(const T_GPUOBJ_DRAW *const *draws, U32 count, const T_GP
                 continue;
             }
             u.Page = (float)slot;
+            const S32 replacement = ReplacementSlot(draw->Page);
+            if (GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_PACK && replacement >= 0) {
+                u.Pad1 = (float)(replacement + 1);
+            }
         }
         kept[n] = draw;
         uniforms[n] = u;
@@ -1677,7 +1968,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     vbind.offset = 0;
     SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
 
-    SDL_GPUTextureSamplerBinding samplers[5];
+    SDL_GPUTextureSamplerBinding samplers[9];
     samplers[0].texture = s_palette;
     samplers[0].sampler = s_nearest;
     samplers[1].texture = s_lut;
@@ -1688,7 +1979,15 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     samplers[3].sampler = s_nearest;
     samplers[4].texture = s_lavaAlbedo != NULL ? s_lavaAlbedo : s_palette;
     samplers[4].sampler = s_lavaSampler != NULL ? s_lavaSampler : s_nearest;
-    SDL_BindGPUFragmentSamplers(pass, 0, samplers, 5);
+    samplers[5].texture = s_replacementPages;
+    samplers[5].sampler = s_linear; /* texelFetch replacements are unchanged; terrain uses filtered sampling */
+    samplers[6].texture = s_replacementMasks;
+    samplers[6].sampler = s_nearest;
+    samplers[7].texture = s_replacementPalette;
+    samplers[7].sampler = s_nearest;
+    samplers[8].texture = s_vehicleMetal;
+    samplers[8].sampler = s_vehicleSampler;
+    SDL_BindGPUFragmentSamplers(pass, 0, samplers, 9);
 
     const double seconds = (double)SDL_GetTicks() / 1000.0;
 
@@ -1895,7 +2194,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     S32 slice = -1;
     U32 glassDraw[64];
     U32 glassFirst[64];
-    float glassSlice[256];
+    float glassSlice[64 * DRAW_VERTEX_UNIFORM_FLOATS];
     /* Grass sways in the wind, harder in a storm. */
     const float windTime = (float)fmod(seconds, 3600.0);
     const float wind = GpuStorm_Active() ? 1.8f : 1.0f;
@@ -2036,7 +2335,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
                 } else {
                     SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
                 }
-                SDL_BindGPUFragmentSamplers(pass, 0, samplers, 5);
+                SDL_BindGPUFragmentSamplers(pass, 0, samplers, 9);
             }
             SDL_SetGPUScissor(pass, &scissor);
             SDL_PushGPUVertexUniformData(cmd, 0, sliceUniform, sizeof(sliceUniform));
@@ -2064,13 +2363,12 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
             } else {
                 SDL_DrawGPUPrimitives(pass, draw->Count, 1, draw->First, 0);
             }
-            if (draw->HasGlow && nbGlass < SDL_arraysize(glassDraw)) {
+            if ((draw->HasGlow || draw->HasGlass) && nbGlass < SDL_arraysize(glassDraw)) {
                 glassDraw[nbGlass] = i;
                 glassFirst[nbGlass] = draw->First;
-                glassSlice[nbGlass * 4] = sliceUniform[0];
-                glassSlice[nbGlass * 4 + 1] = sliceUniform[1];
-                glassSlice[nbGlass * 4 + 2] = windTime;
-                glassSlice[nbGlass * 4 + 3] = wind;
+                /* The blended pass must reproject retained or offset panes
+                   with exactly the same camera as the opaque pass. */
+                memcpy(glassSlice + nbGlass * DRAW_VERTEX_UNIFORM_FLOATS, sliceUniform, sizeof(sliceUniform));
                 glassScissor[nbGlass] = scissor;
                 nbGlass++;
             }
@@ -2085,7 +2383,7 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
         sbind.buffer = s_shadowBuffer;
         sbind.offset = 0;
         SDL_BindGPUVertexBuffers(pass, 0, &sbind, 1);
-        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 5);
+        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 9);
         SDL_Rect full;
         full.x = 0;
         full.y = 0;
@@ -2105,15 +2403,14 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
     if (nbGlass > 0) {
         SDL_BindGPUGraphicsPipeline(pass, s_pipelineGlass);
         SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
-        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 5);
+        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 9);
         for (U32 k = 0; k < nbGlass; k++) {
             const U32 i = glassDraw[k];
             T_DRAW_UNIFORMS u = uniforms[i];
             u.GlassPass = 1.0f;
             SDL_SetGPUScissor(pass, &glassScissor[k]);
-            float glassUniform[DRAW_VERTEX_UNIFORM_FLOATS] = {glassSlice[k * 4], glassSlice[k * 4 + 1],
-                                                              glassSlice[k * 4 + 2], glassSlice[k * 4 + 3]};
-            SDL_PushGPUVertexUniformData(cmd, 0, glassUniform, sizeof(glassUniform));
+            SDL_PushGPUVertexUniformData(cmd, 0, glassSlice + k * DRAW_VERTEX_UNIFORM_FLOATS,
+                                        DRAW_VERTEX_UNIFORM_FLOATS * sizeof(float));
             SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(T_DRAW_UNIFORMS));
             SDL_DrawGPUPrimitives(pass, draws[i]->Count, 1, glassFirst[k], 0);
         }
@@ -2123,6 +2420,84 @@ static void RenderDraws(SDL_GPUCommandBuffer *cmd, const T_GPUOBJ_DRAW *const *d
 }
 
 // --- Interface ---------------------------------------------------------------
+void GpuRender_ClearTextureReplacements(void) {
+    for (S32 i = 0; i < GPURENDER_MAX_REPLACEMENTS; i++) {
+        free(s_replacements[i].Rgba);
+        memset(&s_replacements[i], 0, sizeof(s_replacements[i]));
+    }
+}
+
+bool GpuRender_SetTextureReplacement(const U8 *page, const U8 *rgba, U32 width, U32 height) {
+    if (page == NULL || rgba == NULL || width != GPURENDER_REPLACEMENT_SIDE ||
+        height != GPURENDER_REPLACEMENT_SIDE) {
+        return false;
+    }
+    S32 slot = ReplacementSlot(page);
+    if (slot < 0) {
+        for (S32 i = 0; i < GPURENDER_MAX_REPLACEMENTS; i++) {
+            if (s_replacements[i].Page == NULL) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    if (slot < 0) {
+        return false;
+    }
+    const U32 bytes = GPURENDER_REPLACEMENT_SIDE * GPURENDER_REPLACEMENT_SIDE * 4;
+    if (s_replacements[slot].Rgba == NULL) {
+        s_replacements[slot].Rgba = (U8 *)malloc(bytes);
+        if (s_replacements[slot].Rgba == NULL) {
+            return false;
+        }
+    }
+    memcpy(s_replacements[slot].Rgba, rgba, bytes);
+    s_replacements[slot].Page = page;
+    memset(s_replacements[slot].Mask, 0, sizeof(s_replacements[slot].Mask));
+    s_replacements[slot].PixelsDirty = true;
+    s_replacements[slot].MaskDirty = true;
+    return true;
+}
+
+bool GpuRender_SetTerrainMaterials(const U8 *rgba, U32 width, U32 height) {
+    return GpuRender_SetTextureReplacement(&s_terrainMaterialKey, rgba, width, height);
+}
+
+void GpuRender_SetTextureReplacementMask(const U8 *page, const U8 *originalMask, U32 size) {
+    const S32 slot = ReplacementSlot(page);
+    if (slot < 0 || originalMask == NULL || size != sizeof(s_replacements[slot].Mask)) {
+        return;
+    }
+    if (memcmp(s_replacements[slot].Mask, originalMask, size) != 0) {
+        memcpy(s_replacements[slot].Mask, originalMask, size);
+        s_replacements[slot].MaskDirty = true;
+    }
+}
+
+void GpuRender_SetTextureReferencePalette(const U8 *palette) {
+    if (palette == NULL) {
+        s_replacementPaletteValid = false;
+        s_replacementPaletteDirty = true;
+        return;
+    }
+    U8 maxValue = 0;
+    for (S32 i = 0; i < 256 * 3; i++) {
+        if (palette[i] > maxValue) {
+            maxValue = palette[i];
+        }
+    }
+    const bool sixBit = maxValue <= 0x3F;
+    for (S32 i = 0; i < 256; i++) {
+        for (S32 c = 0; c < 3; c++) {
+            const U8 v = palette[i * 3 + c];
+            s_replacementPalettePixels[i * 4 + c] = sixBit ? (U8)((v << 2) | (v >> 4)) : v;
+        }
+        s_replacementPalettePixels[i * 4 + 3] = 0xFF;
+    }
+    s_replacementPaletteValid = true;
+    s_replacementPaletteDirty = true;
+}
+
 bool GpuRender_Requested(void) {
     const char *env = SDL_getenv("LBA2_GPU");
     return env != NULL && SDL_atoi(env) != 0;
@@ -2276,6 +2651,21 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     }
     SDL_UnmapGPUTransferBuffer(s_device, s_tagTransfer);
     memcpy(s_tagBox, box, sizeof(s_tagBox));
+
+    U8 palette[256 * 4];
+    const U32 *lut = GetVideoPaletteLUT();
+    for (S32 i = 0; i < 256; i++) {
+        palette[i * 4 + 0] = (U8)(lut[i] >> 16);
+        palette[i * 4 + 1] = (U8)(lut[i] >> 8);
+        palette[i * 4 + 2] = (U8)lut[i];
+        palette[i * 4 + 3] = 0xFF;
+    }
+    if (!s_replacementPaletteValid) {
+        memcpy(s_replacementPalettePixels, palette, sizeof(palette));
+        s_replacementPaletteDirty = true;
+    }
+    const U32 replacementBytes = ReplacementUploadBytes();
+
     U32 need = (U32)SDL_arraysize(s_pagePtrs) * 65536;
     if (s_frameIndexed && w * h > need) {
         need = w * h;
@@ -2287,6 +2677,9 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     const U32 lavaBytes = s_lavaWidth * s_lavaHeight * 4;
     if (s_lavaPixels != NULL && lavaBytes > need)
         need = lavaBytes;
+    const U32 vehicleLayerBytes = VEHICLE_METAL_SIDE * VEHICLE_METAL_SIDE * 4;
+    if (s_vehiclePixels != NULL && vehicleLayerBytes > need)
+        need = vehicleLayerBytes;
     const U32 shadowBytes = shadowVerts * (U32)sizeof(T_GPUOBJ_VERTEX);
     /* The hierarchy's size is known only once it is built: room for the largest. */
     if (s_rayScene) {
@@ -2319,6 +2712,7 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
 
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_device);
     if (cmd == NULL || !EnsureTransfer(need) ||
+        (replacementBytes > 0 && !EnsureReplacementTransfer(replacementBytes)) ||
         (count > 0 && !EnsureVertexBuffer(nbVerts * (U32)sizeof(T_GPUOBJ_VERTEX))) ||
         (count > 0 && nbIndices > 0 && !EnsureIndexBuffer(nbIndices * (U32)sizeof(U32))) ||
         (count > 0 && !EnsureVertexTransfer(shadowBytes > GPURENDER_VERTEX_SLICE ? shadowBytes
@@ -2334,14 +2728,6 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     }
 
     SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
-    U8 palette[256 * 4];
-    const U32 *lut = GetVideoPaletteLUT();
-    for (int i = 0; i < 256; i++) {
-        palette[i * 4 + 0] = (U8)(lut[i] >> 16);
-        palette[i * 4 + 1] = (U8)(lut[i] >> 8);
-        palette[i * 4 + 2] = (U8)lut[i];
-        palette[i * 4 + 3] = 0xFF;
-    }
     UploadTexture(copy, s_palette, 0, 0, 0, 256, 1, palette, sizeof(palette));
     if (s_frameIndexed) {
         UploadTexture(copy, s_frameIndex, 0, 0, 0, w, h, Log, w * h);
@@ -2352,6 +2738,7 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     for (U32 p = 0; p < s_nbPages; p++) {
         UploadTexture(copy, s_pages, p, 0, 0, 256, 256, s_pagePtrs[p], 65536);
     }
+    const bool replacementUploaded = UploadReplacementTextures(copy, replacementBytes);
     if (atlasUpload) {
         UploadTexture(copy, s_atlas, 0, 0, 0, GPUOBJ_ATLAS_SIZE, GPUOBJ_ATLAS_SIZE, GpuObjAtlas, atlasBytes);
         GpuObjAtlasDirty = FALSE;
@@ -2359,6 +2746,14 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     if (s_lavaPixels != NULL && s_lavaAlbedo != NULL) {
         s_lavaUploaded = UploadTexture(copy, s_lavaAlbedo, 0, 0, 0, s_lavaWidth, s_lavaHeight, s_lavaPixels,
                                        lavaBytes);
+    }
+    if (s_vehiclePixels != NULL && s_vehicleMetal != NULL) {
+        s_vehicleUploaded = true;
+        for (U32 layer = 0; layer < VEHICLE_METAL_LAYERS; layer++) {
+            s_vehicleUploaded &= UploadTexture(copy, s_vehicleMetal, layer, 0, 0, VEHICLE_METAL_SIDE,
+                                               VEHICLE_METAL_SIDE, s_vehiclePixels + layer * vehicleLayerBytes,
+                                               vehicleLayerBytes);
+        }
     }
     if (count > 0) {
         /* A new buffer holds nothing yet. */
@@ -2446,6 +2841,8 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     SDL_EndGPUCopyPass(copy);
     if (s_lavaUploaded)
         SDL_GenerateMipmapsForGPUTexture(cmd, s_lavaAlbedo);
+    if (s_vehicleUploaded)
+        SDL_GenerateMipmapsForGPUTexture(cmd, s_vehicleMetal);
 
     Uint64 t2 = SDL_GetPerformanceCounter();
     if (count > 0) {
@@ -2461,13 +2858,26 @@ bool GpuRender_BeginComposite(void *sdlRenderer) {
     if (!SDL_SubmitGPUCommandBuffer(cmd)) {
         s_shoreSentRevision = ~0u;
         s_lavaUploaded = false;
+        s_vehicleUploaded = false;
         return false;
+    }
+    if (replacementUploaded) {
+        for (S32 i = 0; i < GPURENDER_MAX_REPLACEMENTS; i++) {
+            s_replacements[i].PixelsDirty = false;
+            s_replacements[i].MaskDirty = false;
+        }
+        s_replacementPaletteDirty = false;
     }
     if (s_lavaUploaded) {
         s_lavaReady = true;
         s_lavaUploaded = false;
         free(s_lavaPixels);
         s_lavaPixels = NULL;
+    }
+    if (s_vehicleUploaded) {
+        s_vehicleUploaded = false;
+        free(s_vehiclePixels);
+        s_vehiclePixels = NULL;
     }
     Uint64 t3 = SDL_GetPerformanceCounter();
 

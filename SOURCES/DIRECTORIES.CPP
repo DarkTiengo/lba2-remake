@@ -49,6 +49,7 @@ extern "C" {
    line would cost a settings-only player their key bindings, not their saves. */
 #define FILE_NAME_CFG "lba2.cfg"
 #define DIR_NAME_RECORDINGS "recordings" ADELINE_PATH_SEP
+#define DIR_NAME_TEXTURE_PACK "texture-pack" ADELINE_PATH_SEP
 #define DIR_NAME_SHOOT "shoot" ADELINE_PATH_SEP
 #define DIR_NAME_BUGS "bugs" ADELINE_PATH_SEP
 #define DIR_NAME_JINGLE "music" ADELINE_PATH_SEP
@@ -1265,6 +1266,22 @@ void GetRecordingsPath(char *outPath, U16 pathMaxSize, const char *recFilename) 
 
     DiscoverEndingAndAppend(outPath, pathMaxSize, recordingsPath, recFilename);
 }
+
+void GetTexturePackPath(char *outPath, U16 pathMaxSize, const char *relativePath) {
+    assert(directoriesInitialized);
+    assert((outPath != NULL) && (pathMaxSize > 0));
+
+    static bool initialized = false;
+    static char texturePackPath[ADELINE_MAX_PATH] = "";
+    if (!initialized) {
+        DiscoverEndingAndAppend(texturePackPath, ADELINE_MAX_PATH, directoriesUserDir,
+                                DIR_NAME_TEXTURE_PACK);
+        initialized = true;
+    }
+
+    DiscoverEndingAndAppend(outPath, pathMaxSize, texturePackPath, relativePath);
+}
+
 void GetShootPath(char *outPath, U16 pathMaxSize, const char *shootFilename) {
     assert(directoriesInitialized);
     assert((outPath != NULL) && (pathMaxSize > 0));

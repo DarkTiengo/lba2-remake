@@ -21,6 +21,8 @@
 #endif
 
 #include <OBJECT/AFF_GPU.H>
+#include <OBJECT/CITADEL_VEHICLE.H>
+#include <OBJECT/CITADEL_BOAT.H>
 #include <SYSTEM/WINDOW.H> /* Window_DeferPresent */
 #include "3DEXT/TERRAIN.H" /* Sky_Y */
 #include "SPRITE_GPU.H"  /* extras with a real depth */
@@ -34,6 +36,7 @@
 #include <SYSTEM/HQFILE.H>
 #include <SYSTEM/KEYBOARD_KEYS.H>
 #include <stdint.h>
+#include <string.h>
 #include "AMBIANCE.H"
 
 extern S32 FlagAnimWhoSpeak; // MESSAGE.CPP
@@ -5001,7 +5004,24 @@ S32 AffOneObject(T_SORT *pt) {
             SetClip(0, 0, ModeDesiredX - 1, FlagWater);
         }
 
+        /* The quest buggy is an actor, not island decor. Give its original
+           parked and driven bodies the same paint only while on Citadel. */
+        GpuObjCitadelVehicle = CubeMode == CUBE_EXTERIEUR && Island == 0 &&
+                               GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_PACK &&
+                               (strcmp(IslandName, "citadel") == 0 || strcmp(IslandName, "citabau") == 0) &&
+                               ((IsBuggyPresent() && numobj == NUM_BUGGY) ||
+                                (numobj == NUM_PERSO &&
+                                 (ptrobj->Move == MOVE_BUGGY || ptrobj->Move == MOVE_BUGGY_MANUAL)));
+        /* In the harbour scene the visible boat is actor 10, body 165. The
+           similarly shaped decor 56 is hidden by a story flag in this save. */
+        GpuObjCitadelBoat = CubeMode == CUBE_EXTERIEUR &&
+                            CitadelBoat_IsVisibleActor(Island, NumCube, numobj, ptrobj->Obj.Body.Num) &&
+                            GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_PACK && strcmp(IslandName, "citadel") == 0;
+        if (GpuObjCitadelBoat)
+            CitadelBoat_SetPose(&ptrobj->Obj);
         aff = ObjectDisplay(&ptrobj->Obj);
+        GpuObjCitadelVehicle = FALSE;
+        GpuObjCitadelBoat = FALSE;
 
         if (aff) /* objet pas tout clippé */
         {

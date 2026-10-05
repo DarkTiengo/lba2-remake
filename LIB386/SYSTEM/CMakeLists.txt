@@ -25,6 +25,20 @@ add_custom_target(embed_lava_png DEPENDS "${LAVA_PNG_EMBEDDED_HEADER}")
 add_dependencies(sys embed_lava_png)
 target_include_directories(sys PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
+set(VEHICLE_PNG_EMBEDDED_HEADER "${CMAKE_CURRENT_BINARY_DIR}/vehicle_png_embedded.h")
+add_custom_command(
+    OUTPUT "${VEHICLE_PNG_EMBEDDED_HEADER}"
+    COMMAND "${CMAKE_COMMAND}"
+            "-DINPUT=${PROJECT_SOURCE_DIR}/assets/modern/citadel/vehicle-materials.png"
+            "-DOUTPUT=${VEHICLE_PNG_EMBEDDED_HEADER}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_vehicle_png.cmake"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/assets/modern/citadel/vehicle-materials.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/embed_vehicle_png.cmake"
+    VERBATIM)
+add_custom_target(embed_vehicle_png DEPENDS "${VEHICLE_PNG_EMBEDDED_HEADER}")
+add_dependencies(sys embed_vehicle_png)
+
 # Configure all ASM files to be recognized as such (workaround for bug where .ASM uppercase extension is not recognized)
 # foreach (FILE_ASM IN LISTS SOURCES_FILES_ASM)
 #     set_source_files_properties(${FILE_ASM} PROPERTIES LANGUAGE ASM_MASM)

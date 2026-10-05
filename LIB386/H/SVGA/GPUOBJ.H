@@ -46,6 +46,7 @@ extern "C" {
 #define GPUOBJ_MODE_SHADOW 9    ///< soft ground shadow: ellipse coords in uv.zw, strength and softness in mat.yz
 #define GPUOBJ_MODE_SILHOUETTE 10 ///< a body's shadow projected on the ground from the sun or a light
 #define GPUOBJ_MODE_SPRITE 11
+#define GPUOBJ_MODE_RGB 12 ///< project-authored RGB material, roughness/metallic in uv.zw
 
 /* The depth range a perspective scene's vertices are placed in (AFF_GPU.CPP's
    SCENERY_DEPTH_RANGE / PERSPECTIVE_DEPTH_RANGE). The presenter needs it to
@@ -139,6 +140,11 @@ void GpuObj_OccReset(void);
 #define GPUOBJ_FLAG_TERRAIN 2048     ///< exterior ground, distinct from actors/decor at the waterline
 #define GPUOBJ_FLAG_LAVA 4096        ///< authored lava surface, with palette-preserving procedural detail
 #define GPUOBJ_FLAG_FOLIAGE 8192     ///< a tree's leaf (GPUTREE.H): shaded as foliage and fluttering while its draw is a tree
+#define GPUOBJ_FLAG_CITADEL_VEHICLE 16384 ///< original Citadel buggy with new painted materials
+#define GPUOBJ_FLAG_CITADEL_OBJECT 32768 ///< Citadel tree or street object with a project-authored albedo
+#define GPUOBJ_FLAG_CITADEL_BOAT_GLASS 65536 ///< translucent harbour boat cabin pane
+#define GPUOBJ_FLAG_CITADEL_BOAT_INTERIOR 131072 ///< shallow cabin backing behind a boat pane
+#define GPUOBJ_FLAG_AUTHORED_MODEL 262144 ///< real geometry; no coplanar retail glass depth bias
 
 /* One vertex; every attribute is a vec4 so the layout is trivial on all backends. */
 typedef struct T_GPUOBJ_VERTEX_S {
@@ -169,6 +175,7 @@ typedef struct {
     float FireRect[4]; ///< their screen box in frame pixels (x0, y0, x1, y1), for the flame sprite
     S32 FireRises;     ///< they stand up in the world (a flame), not lie flat (a laser bar)
     S32 HasGlow;      ///< a lamp's bright globe: 1 in an isometric room, 2 in a perspective scene
+    S32 HasGlass;     ///< non-emissive boat panes need the blended glass pass
     float GlowPos[3]; ///< where they are, in the draw's scene space
     float GlowColor[3]; ///< their colour, 0..1
     S32 GlowListed;     ///< its light is in GpuObjSceneryLamps: the glass glows, the light is not taken from it
@@ -244,6 +251,11 @@ extern S32 GpuObjUiScale;     ///< 2D drawn at its classic size and upscaled (gf
 extern S32 GpuObjShadows;     ///< soft shadows on the real ground (gfx_shadows)
 extern S32 GpuObjSunlight;    ///< global light: sun shadows, sky fill, rim light (gfx_sunlight)
 
+#define GPUOBJ_TEXTURE_DETAIL_ORIGINAL 0
+#define GPUOBJ_TEXTURE_DETAIL_ENHANCED 1
+#define GPUOBJ_TEXTURE_DETAIL_PACK 2
+extern S32 GpuObjTextureDetail; ///< 3D texture sampling: current, enhanced, or external 4x pack
+
 /* The scene's global light, in the scene space lights use: the direction toward
    the sun (the light that shades bodies), the world's up, and whether the scene
    is an exterior (a real sky) or a room. Set while the frame is captured. */
@@ -277,6 +289,10 @@ T_GPUOBJ_VERTEX *GpuObj_AllocShadowVerts(U32 n);
 
 extern S32 GpuObjGlow;        ///< lamp globes on 3D models cast light (gfx_lamps)
 extern S32 GpuObjLampModel;   ///< set by the caller while it draws a lamp model
+extern S32 GpuObjCitadelVehicle; ///< set while an identified Citadel buggy is drawn
+extern S32 GpuObjCitadelBoat; ///< set while the harbour boat decor is drawn
+extern S32 GpuObjCitadelSmooth; ///< curved Citadel decor, only with the optional modern pack
+extern S32 GpuObjCitadelMaterial; ///< 0 other, 1 woody tree, 2 fixture, 3 shrub, 4 metal framework
 extern const U8 *GpuObjLampPalette; ///< the scene's 768-byte RGB palette, for the lamp glass
 extern S32 GpuObjLampListed;        ///< the lamp being drawn already lights the scenery from GpuObjSceneryLamps
 

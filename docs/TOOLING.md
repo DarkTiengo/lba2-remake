@@ -171,6 +171,15 @@ all three, and `check-tooling.sh` expects most hosts to lack the last two.
 `make test` sets `LBA2_BUILD_ASM_EQUIV_TESTS=OFF`, so none of this is needed for
 the host-only pass.
 
+### Vehicle art
+
+| Tool | Needed for | Version owner | Install |
+|------|-----------|---------------|---------|
+| Blender | Execute the optional [concept-B boat scene builder](../scripts/dev/build_citadel_boat_concept_b.py) and edit its Blender source; not needed to build or play the game | `BLENDER_MIN_VERSION` in the scene builder | local Blender or the remote Blender scene worker |
+| Python 3 | Bake the optional authored boat GLB with [export_citadel_boat.py](../scripts/dev/export_citadel_boat.py) during compilation; standard library only | `find_package(Python3)` in [OBJECT/CMakeLists.txt](../LIB386/OBJECT/CMakeLists.txt) | distro package; covered by the Python probe |
+
+The scene builder runs in Blender's bundled Python interpreter. Its `bpy` and `bmesh` imports are Blender APIs, not packages to install into the project's Python environment.
+
 ### Releasing
 
 Maintainer lane; see [RELEASING.md](RELEASING.md).
@@ -310,8 +319,8 @@ Named here so nobody adds them by accident:
 - **Node, Rust, or Go toolchains.** `git-cliff` ships prebuilt binaries; nothing
   else needs them.
 - **Third-party Python packages**, with one exception. Pillow is the only one,
-  and it is needed by exactly three asset scripts — `art_catalog_screen.py`,
-  `art_treatment_preview.py`, `acf_decode.py` — plus the automation suite's
+  and it is needed by the asset scripts `art_catalog_screen.py`,
+  `art_treatment_preview.py`, `acf_decode.py` and `texture_pack.py`, plus the automation suite's
   optional image asserts. Everything else, including the save probes and the
   corpus harness, runs on a bare `python3`. Keep it that way: a new script that
   needs numpy needs a conversation first.

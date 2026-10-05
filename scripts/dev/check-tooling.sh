@@ -320,7 +320,7 @@ else
 fi
 
 if have python3; then
-    row ok "python3" "$(python3 --version 2>/dev/null | sed -n 's/Python //p') — filter-format-files.py, save probes, corpus harness"
+    row ok "python3" "$(python3 --version 2>/dev/null | sed -n 's/Python //p') — format filter, save probes, corpus harness, optional boat bake"
 else
     row gap "python3" "scripts/ci/filter-format-files.py gates the format check"
 fi
@@ -488,6 +488,20 @@ if [ "$HOST" = linux ]; then
     else
         row gap "folder picker" "zenity or an xdg-desktop-portal backend (docs/GAME_DATA.md)"
     fi
+fi
+
+# Optional authoring lane; Blender supplies its own Python modules.
+BLENDER_MIN="$(sed -n 's/^BLENDER_MIN_VERSION = (\([0-9]*\), \([0-9]*\), \([0-9]*\)).*/\1.\2.\3/p' \
+    "$REPO_ROOT/scripts/dev/build_citadel_boat_concept_b.py")"
+if have blender; then
+    blender_version="$(blender --version 2>/dev/null | sed -n 's/^Blender \([0-9.]*\).*/\1/p' | head -1)"
+    if [ -n "$BLENDER_MIN" ] && ver_ge "$blender_version" "$BLENDER_MIN"; then
+        row ok "Blender" "$blender_version — optional vehicle scene authoring"
+    else
+        row gap "Blender" "needs the floor in build_citadel_boat_concept_b.py"
+    fi
+else
+    row info "Blender" "vehicle art only; use a local install or the remote Blender scene worker"
 fi
 
 # ---------------------------------------------------------------------------

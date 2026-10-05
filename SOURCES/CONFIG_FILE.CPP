@@ -17,6 +17,7 @@
 #include "FOLLOWCAM_CFG.H"   /* and their defaults */
 #include "INPUT.H"           /* Read/WriteInputConfig, Read/WriteGamepadConfig */
 #include "RES_SWITCH.H"
+#include "TEXTURE_PACK.H"
 #include <POLYGON/POLYFILT.H> /* PolyTexFilter / EnvTexFilter */
 #include <SVGA/GPUOBJ.H>      /* GpuObjEnabled, the GPU renderer choice */
 #include <SVGA/SCREEN.H>
@@ -135,6 +136,9 @@ static const T_SETTING BootSettings[] = {
      NULL, "GPU renderer: xBR pixel-art filter on upscaled 2D art"},
     {"GpuDeband", NULL, "gfx_deband", &GpuObjDeband, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,
      "GPU renderer: smooth the palette's colour steps on upscaled 2D art"},
+    {"GpuTextureDetail", NULL, "gfx_texturedetail", &GpuObjTextureDetail, SETTING_OR_DEFAULT,
+     GPUOBJ_TEXTURE_DETAIL_ORIGINAL, GPUOBJ_TEXTURE_DETAIL_ORIGINAL, GPUOBJ_TEXTURE_DETAIL_PACK, NULL, NULL,
+     TexturePack_ApplyMode, NULL, "GPU renderer: 3D textures: 0 current, 1 enhanced, 2 external 4x pack"},
     {"MenuStyle", NULL, "gfx_menustyle", &MenuStyle, SETTING_OR_DEFAULT, MENU_STYLE_AUTO, MENU_STYLE_CLASSIC,
      MENU_STYLE_AUTO, NULL, NULL, NULL, NULL, "Menu look: 0 classic, 1 modern cards, 2 modern with the GPU renderer"},
     {"GpuUiScale", NULL, "gfx_uiscale", &GpuObjUiScale, SETTING_OR_DEFAULT, TRUE, 0, 1, NULL, NULL, NULL, NULL,

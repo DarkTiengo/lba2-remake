@@ -561,14 +561,33 @@ void AffichageObjetDecorsZBuf(void) {
 
         /* Tell the GPU capture when this decor is a lamp: its bright glass glows. */
         GpuObjLampModel = IsLampModel(Island, (S32)(ptrobj->Body & 0xFFFF));
+        GpuObjCitadelVehicle = Island == 0 && (ptrobj->Body & 0xFFFF) == 85 && strcmp(IslandName, "citadel") == 0 &&
+                               GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_PACK;
+        GpuObjCitadelBoat = Island == 0 && (ptrobj->Body & 0xFFFF) == 56 && strcmp(IslandName, "citadel") == 0 &&
+                            GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_PACK;
+        GpuObjCitadelSmooth = GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_PACK &&
+                              (strcmp(IslandName, "citadel") == 0 || strcmp(IslandName, "citabau") == 0);
+        GpuObjCitadelMaterial = 0;
         GpuObjLampPalette = PtrPal;
         GpuObjLampListed = s_lampListed[ptrtri->Num];
         /* And when it is a tree: its leaves are shaded as foliage, it sways. */
         U32 foliage = 0;
         if (Trees_Find((S32)(ptrobj->Body & 0xFFFF), &foliage)) {
+            if (strcmp(IslandName, "citadel") == 0 || strcmp(IslandName, "citabau") == 0) {
+                const S32 body = (S32)(ptrobj->Body & 0xFFFF);
+                GpuObjCitadelMaterial = (body == 6 || body == 12) ? 3 : 1;
+            }
             GpuTree_Begin(foliage, ptrobj->Xworld, ptrobj->Zworld);
         } else {
             GpuTree_End();
+            const S32 body = (S32)(ptrobj->Body & 0xFFFF);
+            if (Island == 0 && (body == 26 || body == 28) && strcmp(IslandName, "citadel") == 0) {
+                GpuObjCitadelMaterial = 2;
+            } else if (Island == 0 && strcmp(IslandName, "citadel") == 0 &&
+                       (body == 27 || body == 51 || body == 52 || body == 53 || body == 54)) {
+                /* Identified railing and bench frames, not whole buildings. */
+                GpuObjCitadelMaterial = 4;
+            }
         }
         if (DecorToGpu(ptrobj)) {
             continue;
@@ -591,6 +610,10 @@ void AffichageObjetDecorsZBuf(void) {
         AffGpu_DecorOccluderEnd();
     }
     GpuObjLampModel = FALSE;
+    GpuObjCitadelVehicle = FALSE;
+    GpuObjCitadelBoat = FALSE;
+    GpuObjCitadelSmooth = FALSE;
+    GpuObjCitadelMaterial = 0;
     GpuObjLampListed = FALSE;
     GpuTree_End();
 

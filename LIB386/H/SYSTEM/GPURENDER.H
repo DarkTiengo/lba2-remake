@@ -37,6 +37,20 @@ bool GpuRender_TakeFrame(void);
 /** The frame is shown smaller than its pixels: read it filtered. */
 void GpuRender_SetFrameFiltered(bool filtered);
 
+/* Optional 4x RGBA replacements for indexed 256x256 texture pages. The
+ * renderer copies the pixels; the caller may release them after this returns.
+ * Alpha is replacement strength, not polygon coverage. */
+#define GPURENDER_REPLACEMENT_SIDE 1024
+void GpuRender_ClearTextureReplacements(void);
+bool GpuRender_SetTextureReplacement(const U8 *page, const U8 *rgba, U32 width, U32 height);
+void GpuRender_SetTextureReplacementMask(const U8 *page, const U8 *originalMask, U32 size);
+/* Optional world-projected terrain materials, packed into one 1024x1024 RGBA page. */
+bool GpuRender_SetTerrainMaterials(const U8 *rgba, U32 width, U32 height);
+
+/* Palette the replacement was authored against. Active palette effects are
+ * still read from the normal video palette and carried onto the RGBA albedo. */
+void GpuRender_SetTextureReferencePalette(const U8 *palette);
+
 bool GpuRender_BeginComposite(void *sdlRenderer);
 void GpuRender_EndComposite(void *sdlRenderer);
 

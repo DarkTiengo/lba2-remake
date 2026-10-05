@@ -233,6 +233,8 @@ void Directories_SeedSavesFromGameData(void);
 /// form of this sits one letter from GetResPath below, with the same signature, and the
 /// two name a folder the player writes to and the folder the game was installed into.
 void GetRecordingsPath(char *outPath, U16 pathMaxSize, const char *recFilename);
+/// Optional GPU texture pack under the active user's profile.
+void GetTexturePackPath(char *outPath, U16 pathMaxSize, const char *relativePath);
 void GetShootPath(char *outPath, U16 pathMaxSize, const char *shootFilename);
 void GetBugPath(char *outPath, U16 pathMaxSize, const char *bugFilename);
 void GetJinglePath(char *outPath, U16 pathMaxSize, const char *jingleFilename);

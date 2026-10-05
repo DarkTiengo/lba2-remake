@@ -116,6 +116,10 @@ for reproducibility; cited from the format and effects docs.
 | [dev/fingerprint_distro.py](dev/fingerprint_distro.py) | Identify which release a game directory or disc image holds, from the payload rather than the config: `RESS.HQR` names the master, `SCENE`/`TEXT` the pressing. | [VERSIONS.md](../docs/VERSIONS.md) |
 | [dev/art_catalog_screen.py](dev/art_catalog_screen.py) | Dump every `SCREEN.HQR` bitmap to PNG (widescreen art inventory; output local-only). | manual (widescreen) |
 | [dev/art_treatment_preview.py](dev/art_treatment_preview.py) | Preview widescreen art treatments (letterbox / palette-fill / edge-clone / mirror-tile) as PNGs. | manual (widescreen) |
+| [dev/texture_pack.py](dev/texture_pack.py) | Export retail 3D texture pages as local 4x RGBA pack sources and validate a finished optional pack. | manual (GPU textures) |
+| [dev/build_citadel_metal_tiles.py](dev/build_citadel_metal_tiles.py) | Export original Citadel metal, bark and foliage artworks as repeatable tiles and stack the five in-game object layers. | manual (Citadel object materials) |
+| [dev/build_citadel_boat_concept_b.py](dev/build_citadel_boat_concept_b.py) | Build the original concept-B boat geometry in Blender, including twin hulls, cabin glazing and lifting gear; replaces the active draft scene. | manual (vehicle art; outside the game build) |
+| [dev/export_citadel_boat.py](dev/export_citadel_boat.py) | Bake the authored boat GLB into C++98 geometry, with a separate door/handle binding and transmissive panes. No retail data or third-party Python packages. | CMake when the optional boat GLB is present |
 
 ## LBA1 feasibility spikes (`dev/`)
 

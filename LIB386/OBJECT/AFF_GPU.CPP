@@ -1,4 +1,7 @@
 #include <OBJECT/AFF_GPU.H>
+#include <OBJECT/CITADEL_VEHICLE.H>
+#include <OBJECT/CITADEL_BOAT.H>
+#include <OBJECT/CITADEL_SMOOTH.H>
 
 #include <OBJECT/AFF_OBJ.H>
 #include <3D/LROT3D.H>
@@ -58,6 +61,7 @@ extern S32 PosXWr, PosYWr, PosZWr;
 // --- Private state -----------------------------------------------------------
 static S32 s_pending = FALSE;
 static S32 s_capturing = FALSE;
+static S32 s_replacement = FALSE;
 static S32 s_perGroup = FALSE;
 static S32 s_nbPoints = 0;
 static T_OBJ_POINT s_rot[MAX_NB_POINTS];
@@ -196,7 +200,112 @@ typedef struct {
     float TexOffset;
     float TexMask;
     float Flags;
+    float VehicleMaterial;
 } T_GPU_MATERIAL;
+
+/* The Citadel's decor materials are confined to identified models. The
+   original textured palm fronds retain their page/transparent texels. */
+static S32 CitadelObjectLayer(S32 mode, S32 flags, U32 color) {
+    if (GpuObjCitadelMaterial == 0 || mode == GPUOBJ_MODE_PASS) {
+        return -1;
+    }
+    const S32 leaf = (flags & GPUOBJ_FLAG_FOLIAGE) != 0;
+    if (GpuObjCitadelMaterial == 1 && leaf) {
+        return 4;
+    }
+    if (GpuObjCitadelMaterial == 3 && leaf) {
+        return 4;
+    }
+    if (mode == GPUOBJ_MODE_TEX || mode == GPUOBJ_MODE_TEXSHADED) {
+        return -1;
+    }
+    if (GpuObjCitadelMaterial == 1) {
+        return 3;
+    }
+    if (GpuObjCitadelMaterial == 4) {
+        /* Gray steel legs and rails; the red bench slats keep their paint. */
+        return (color >> 4) == 3 ? CITADEL_VEHICLE_NEUTRAL : -1;
+    }
+    if (GpuObjCitadelMaterial == 2 && (flags & GPUOBJ_FLAG_EMISSIVE) == 0) {
+        /* Keep the lamp's warm glass even if gfx_lamps has disabled its glow. */
+        if (GpuObjLampModel && GpuObjLampPalette != NULL) {
+            const U8 *c = GpuObjLampPalette + ((mode == GPUOBJ_MODE_SHADED ? color | 15 : color) & 255) * 3;
+            const S32 mx = c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]);
+            const S32 mn = c[0] < c[1] ? (c[0] < c[2] ? c[0] : c[2]) : (c[1] < c[2] ? c[1] : c[2]);
+            const S32 luma = (c[0] * 77 + c[1] * 150 + c[2] * 29) >> 8;
+            if (luma >= 150 && mx - mn >= 40 && c[0] >= c[2]) {
+                return -1;
+            }
+        }
+        /* A gold lamp frame stays gold instead of becoming gray zinc. */
+        return (color >> 4) == 6 ? CITADEL_VEHICLE_NEUTRAL : 2;
+    }
+    return -1;
+}
+
+/* Project model points onto their dominant polygon plane. This is stable
+   under the camera and works for both captured and kept decor draws. */
+static void CitadelObjectUv(const U16 *indices, S32 count, float uvs[4][2]) {
+    if (lBody == NULL || count < 3) {
+        return;
+    }
+    const TYPE_VT16 *p = (const TYPE_VT16 *)((const U8 *)lBody + lBody->OffPoints);
+    if (indices[0] >= lBody->NbPoints || indices[1] >= lBody->NbPoints || indices[2] >= lBody->NbPoints) {
+        return;
+    }
+    const TYPE_VT16 *a = &p[indices[0]], *b = &p[indices[1]], *c = &p[indices[2]];
+    const float ab[3] = {(float)(b->X - a->X), (float)(b->Y - a->Y), (float)(b->Z - a->Z)};
+    const float ac[3] = {(float)(c->X - a->X), (float)(c->Y - a->Y), (float)(c->Z - a->Z)};
+    const float nx = fabsf(ab[1] * ac[2] - ab[2] * ac[1]);
+    const float ny = fabsf(ab[2] * ac[0] - ab[0] * ac[2]);
+    const float nz = fabsf(ab[0] * ac[1] - ab[1] * ac[0]);
+    const S32 axis = nx >= ny && nx >= nz ? 0 : ny >= nz ? 1 : 2;
+    for (S32 i = 0; i < count; i++) {
+        if (indices[i] >= lBody->NbPoints) {
+            continue;
+        }
+        const TYPE_VT16 *point = &p[indices[i]];
+        uvs[i][0] = (float)(axis == 0 ? point->Z : point->X) / 500.0f;
+        uvs[i][1] = (float)(axis == 1 ? point->Z : point->Y) / 500.0f;
+    }
+}
+
+static S32 BoatGlassPolygon(const T_BODY_HEADER *body, const U16 *indices, S32 count, U8 color) {
+    if (!GpuObjCitadelBoat || body == NULL || (color >> 4) != 10 || count < 3) {
+        return FALSE;
+    }
+    const TYPE_VT16 *p = (const TYPE_VT16 *)((const U8 *)body + body->OffPoints);
+    S32 height = 0;
+    for (S32 i = 0; i < count; i++) {
+        if (indices[i] >= body->NbPoints)
+            return FALSE;
+        height += p[indices[i]].Y;
+    }
+    return CitadelBoat_IsGlass(color, height / count);
+}
+
+/* Each pane gets a stable local view into a small shaded cabin. */
+static void BoatGlassUv(const T_BODY_HEADER *body, const U16 *indices, S32 count, float uvs[4][2]) {
+    const TYPE_VT16 *p = (const TYPE_VT16 *)((const U8 *)body + body->OffPoints);
+    S32 minX = 32767, maxX = -32768, minY = 32767, maxY = -32768, minZ = 32767, maxZ = -32768;
+    for (S32 i = 0; i < count; i++) {
+        const TYPE_VT16 *v = &p[indices[i]];
+        if (v->X < minX) minX = v->X;
+        if (v->X > maxX) maxX = v->X;
+        if (v->Y < minY) minY = v->Y;
+        if (v->Y > maxY) maxY = v->Y;
+        if (v->Z < minZ) minZ = v->Z;
+        if (v->Z > maxZ) maxZ = v->Z;
+    }
+    const S32 side = maxX - minX >= maxZ - minZ;
+    const float width = (float)(side ? maxX - minX : maxZ - minZ);
+    const float height = (float)(maxY - minY);
+    for (S32 i = 0; i < count; i++) {
+        const TYPE_VT16 *v = &p[indices[i]];
+        uvs[i][0] = (float)((side ? v->X - minX : v->Z - minZ)) / (width > 1.0f ? width : 1.0f);
+        uvs[i][1] = (float)(v->Y - minY) / (height > 1.0f ? height : 1.0f);
+    }
+}
 
 static void FillVertex(T_GPUOBJ_VERTEX *v, const T_GPU_PROJ *p, const float *normal, const T_GPU_MATERIAL *m,
                        float u, float t) {
@@ -216,7 +325,7 @@ static void FillVertex(T_GPUOBJ_VERTEX *v, const T_GPU_PROJ *p, const float *nor
     v->mat[0] = m->Color;
     v->mat[1] = m->TexOffset;
     v->mat[2] = m->TexMask;
-    v->mat[3] = 0.0f;
+    v->mat[3] = m->VehicleMaterial;
     v->uv[0] = u;
     v->uv[1] = t;
     v->uv[2] = 0.0f;
@@ -245,6 +354,105 @@ static void EmitPolygon(const U16 *points, S32 nbPoints, const float *faceNormal
                 normal = points[k] < MAX_LIGHTS ? s_normal[points[k]] : NULL;
             }
             FillVertex(v++, &proj[k], normal, m, uvs[k][0], uvs[k][1]);
+        }
+    }
+}
+
+/* Render-only tessellation. Original corners and software collision stay put. */
+static void ProjectSmoothPoint(const float point[3], T_GPU_PROJ *out) {
+    out->Vx = point[0];
+    out->Vy = point[1];
+    out->Vz = point[2];
+    float depth = -point[2];
+    if (depth < 1.0f) {
+        depth = 1.0f;
+    }
+    out->Sx = (float)XCentre + point[0] * FRatioX / depth;
+    out->Sy = (float)YCentre + point[1] * FRatioX * FRatioY / depth;
+    out->W = depth;
+    out->Depth = (depth - (float)NearClip) / PERSPECTIVE_DEPTH_RANGE;
+    if (out->Depth < 0.0f)
+        out->Depth = 0.0f;
+    if (out->Depth > 1.0f)
+        out->Depth = 1.0f;
+}
+
+static void EmitCitadelSmoothPolygon(const U16 *points, S32 nbPoints, const float *faceNormal, S32 smooth,
+                                     S32 buggy, const T_GPU_MATERIAL *m, const float uvs[4][2]) {
+    for (S32 tri = 0; tri < nbPoints - 2; tri++) {
+        const S32 corners[3] = {0, tri + 1, tri + 2};
+        float positions[3][3];
+        float unitNormals[3][3];
+        float shadingNormals[3][4];
+        T_GPU_PROJ projectedCorners[3];
+        S32 validNormals = TRUE;
+        for (S32 c = 0; c < 3; c++) {
+            Project(points[corners[c]], &projectedCorners[c]);
+            positions[c][0] = projectedCorners[c].Vx;
+            positions[c][1] = projectedCorners[c].Vy;
+            positions[c][2] = projectedCorners[c].Vz;
+            if (points[corners[c]] >= lBody->NbNormales)
+                validNormals = FALSE;
+            const float *normal = points[corners[c]] < lBody->NbNormales ? s_normal[points[corners[c]]] : faceNormal;
+            for (S32 axis = 0; axis < 4; axis++) {
+                shadingNormals[c][axis] = normal != NULL ? normal[axis] : (axis == 2 ? 1.0f : 0.0f);
+            }
+            float len = (float)sqrt((double)(shadingNormals[c][0] * shadingNormals[c][0] +
+                                             shadingNormals[c][1] * shadingNormals[c][1] +
+                                             shadingNormals[c][2] * shadingNormals[c][2]));
+            if (len < 1e-6f)
+                len = 1.0f;
+            for (S32 axis = 0; axis < 3; axis++) {
+                unitNormals[c][axis] = shadingNormals[c][axis] / len;
+            }
+        }
+        const S32 curved = buggy || (validNormals && CitadelSmooth_Curved(unitNormals));
+        if (!curved) {
+            T_GPUOBJ_VERTEX *out = GpuObj_AllocVerts(3);
+            if (out == NULL)
+                return;
+            for (S32 c = 0; c < 3; c++) {
+                const float *normal = smooth ? shadingNormals[c] : faceNormal;
+                FillVertex(out++, &projectedCorners[c], normal, m, uvs[corners[c]][0], uvs[corners[c]][1]);
+            }
+            continue;
+        }
+        const S32 subdivisions = buggy ? 3 : 2;
+        T_GPUOBJ_VERTEX *out = GpuObj_AllocVerts((U32)(subdivisions * subdivisions * 3));
+        if (out == NULL)
+            return;
+        T_GPUOBJ_VERTEX grid[4][4];
+        for (S32 i = 0; i <= subdivisions; i++) {
+            for (S32 j = 0; i + j <= subdivisions; j++) {
+                const float weights[3] = {(float)(subdivisions - i - j) / (float)subdivisions,
+                                          (float)i / (float)subdivisions, (float)j / (float)subdivisions};
+                float point[3];
+                CitadelSmooth_PatchPoint(positions, unitNormals, weights, buggy ? 0.45f : 0.3f, point);
+                T_GPU_PROJ projected;
+                ProjectSmoothPoint(point, &projected);
+                float normal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                float uv[2] = {0.0f, 0.0f};
+                for (S32 c = 0; c < 3; c++) {
+                    for (S32 axis = 0; axis < 4; axis++) {
+                        normal[axis] += weights[c] * shadingNormals[c][axis];
+                    }
+                    uv[0] += weights[c] * uvs[corners[c]][0];
+                    uv[1] += weights[c] * uvs[corners[c]][1];
+                }
+                FillVertex(&grid[i][j], &projected, normal, m, uv[0], uv[1]);
+            }
+        }
+        for (S32 i = 0; i < subdivisions; i++) {
+            for (S32 j = 0; i + j < subdivisions; j++) {
+                *out++ = grid[i][j];
+                *out++ = grid[i + 1][j];
+                *out++ = grid[i][j + 1];
+                if (i + j + 1 < subdivisions) {
+                    *out++ = grid[i + 1][j];
+                    *out++ = grid[i + 1][j + 1];
+                    *out++ = grid[i][j + 1];
+                }
+            }
         }
     }
 }
@@ -548,6 +756,7 @@ void AffGpu_SaveRotated(S32 nbPoints, S32 perGroup) {
 
 S32 AffGpu_Begin(void) {
     s_capturing = FALSE;
+    s_replacement = FALSE;
     if (!s_pending || lBody == NULL) {
         return FALSE;
     }
@@ -609,6 +818,9 @@ S32 AffGpu_Begin(void) {
         }
     }
 
+    if (GpuObjCitadelBoat && s_draw != NULL) {
+        s_replacement = CitadelBoat_Emit(s_draw, TabMat, s_perGroup && lBody->NbGroupes == 14, s_origin);
+    }
     GpuObj_SnapshotBegin(ScreenXMin - SNAPSHOT_MARGIN, ScreenYMin - SNAPSHOT_MARGIN,
                          ScreenXMax + SNAPSHOT_MARGIN + 1, ScreenYMax + SNAPSHOT_MARGIN + 1);
     s_capturing = TRUE;
@@ -616,7 +828,7 @@ S32 AffGpu_Begin(void) {
 }
 
 void AffGpu_Entity(U32 type, void *poly) {
-    if (!s_capturing || s_draw == NULL) {
+    if (!s_capturing || s_draw == NULL || s_replacement) {
         return;
     }
     const U16 *w = (const U16 *)poly;
@@ -705,6 +917,29 @@ void AffGpu_Entity(U32 type, void *poly) {
         m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_FOLIAGE);
     }
 
+    const S32 objectLayer = CitadelObjectLayer((S32)m.Mode, (S32)m.Flags, color & 255);
+    if (objectLayer >= 0) {
+        m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_CITADEL_OBJECT);
+        m.VehicleMaterial = (float)objectLayer;
+    }
+
+    const S32 boatGlass = (m.Mode == (float)GPUOBJ_MODE_SOLID || m.Mode == (float)GPUOBJ_MODE_SHADED) &&
+                          BoatGlassPolygon(lBody, points, nbPoints, (U8)color);
+    if (boatGlass) {
+        m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_CITADEL_BOAT_GLASS);
+        if (s_draw != NULL)
+            s_draw->HasGlass = TRUE;
+    }
+    S32 vehicleMaterial = CITADEL_VEHICLE_ORIGINAL;
+    if ((GpuObjCitadelVehicle || GpuObjCitadelBoat) && m.Mode != (float)GPUOBJ_MODE_PASS &&
+        m.Mode != (float)GPUOBJ_MODE_TEX && m.Mode != (float)GPUOBJ_MODE_TEXSHADED) {
+        vehicleMaterial = GpuObjCitadelBoat ? CitadelBoat_Material((U8)color) : CitadelVehicle_Material((U8)color);
+        if (vehicleMaterial != CITADEL_VEHICLE_ORIGINAL) {
+            m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_CITADEL_VEHICLE);
+            m.VehicleMaterial = (float)vehicleMaterial;
+        }
+    }
+
     /* UVs come from the body data: Fill_Poly reuses the point list it is given. */
     float uvs[4][2];
     memset(uvs, 0, sizeof(uvs));
@@ -721,7 +956,48 @@ void AffGpu_Entity(U32 type, void *poly) {
             }
         }
     }
-    EmitPolygon(points, nbPoints, faceNormal, smooth, &m, uvs);
+    if (vehicleMaterial != CITADEL_VEHICLE_ORIGINAL && lBody != NULL) {
+        const TYPE_VT16 *bodyPoints = (const TYPE_VT16 *)((const U8 *)lBody + lBody->OffPoints);
+        if (points[0] < lBody->NbPoints && points[1] < lBody->NbPoints && points[2] < lBody->NbPoints) {
+            const TYPE_VT16 *a = &bodyPoints[points[0]], *b = &bodyPoints[points[1]], *c = &bodyPoints[points[2]];
+            const float ab[3] = {(float)(b->X - a->X), (float)(b->Y - a->Y), (float)(b->Z - a->Z)};
+            const float ac[3] = {(float)(c->X - a->X), (float)(c->Y - a->Y), (float)(c->Z - a->Z)};
+            const float nx = fabsf(ab[1] * ac[2] - ab[2] * ac[1]);
+            const float ny = fabsf(ab[2] * ac[0] - ab[0] * ac[2]);
+            const float nz = fabsf(ab[0] * ac[1] - ab[1] * ac[0]);
+            const S32 axis = nx >= ny && nx >= nz ? 0 : ny >= nz ? 1
+                                                                 : 2;
+            /* One broad material swatch per vehicle panel, not several tiny
+               repetitions that disappear in the sampler's mip levels. */
+            const float tileScale = GpuObjCitadelBoat ? 4200.0f : 1700.0f;
+            for (S32 i = 0; i < nbPoints; i++) {
+                if (points[i] >= lBody->NbPoints)
+                    continue;
+                const TYPE_VT16 *p = &bodyPoints[points[i]];
+                uvs[i][0] = (float)(axis == 0 ? p->Z : p->X) / tileScale;
+                uvs[i][1] = (float)(axis == 1 ? p->Z : p->Y) / tileScale;
+            }
+        }
+    }
+    if (objectLayer >= 0 && m.Mode != (float)GPUOBJ_MODE_TEX && m.Mode != (float)GPUOBJ_MODE_TEXSHADED) {
+        CitadelObjectUv(points, nbPoints, uvs);
+    }
+    if (boatGlass)
+        BoatGlassUv(lBody, points, nbPoints, uvs);
+    const S32 buggySmooth = GpuObjCitadelVehicle && GpuObjCitadelSmooth &&
+                            (m.Mode == (float)GPUOBJ_MODE_SOLID || m.Mode == (float)GPUOBJ_MODE_SHADED);
+    if (boatGlass) {
+        T_GPU_MATERIAL interior = m;
+        interior.Flags = (float)(((S32)m.Flags & ~GPUOBJ_FLAG_CITADEL_BOAT_GLASS) |
+                                 GPUOBJ_FLAG_CITADEL_BOAT_INTERIOR);
+        interior.Mode = (float)GPUOBJ_MODE_SOLID;
+        EmitPolygon(points, nbPoints, faceNormal, FALSE, &interior, uvs);
+        EmitPolygon(points, nbPoints, faceNormal, smooth, &m, uvs);
+    } else if (TypeProj == TYPE_3D && (buggySmooth || (GpuObjCitadelSmooth && smooth && m.Mode != (float)GPUOBJ_MODE_PASS))) {
+        EmitCitadelSmoothPolygon(points, nbPoints, faceNormal, smooth, buggySmooth, &m, uvs);
+    } else {
+        EmitPolygon(points, nbPoints, faceNormal, smooth, &m, uvs);
+    }
 
     /* A lamp model's glowing glass: its centre and colour make the light. */
     if (((S32)m.Flags & GPUOBJ_FLAG_EMISSIVE) != 0) {
@@ -1415,11 +1691,72 @@ typedef struct {
 static T_DECOR_MESH s_meshes[MAX_DECOR_MESHES];
 static S32 s_meshesReady = FALSE;
 static S32 s_meshIsland = -1;
+static S32 s_meshDetail = -1;
 
 static T_GPUOBJ_VERTEX s_build[MAX_MESH_BUILD];
 static U32 s_nbBuild = 0;
 static S32 s_buildFail = FALSE;
 static T_DECOR_MESH *s_buildMesh = NULL;
+static S32 s_buildPolysRemaining = 0;
+
+/* Retained decor uses model-space vertices, unlike the near-body capture.
+   Reserve room for every remaining original face before adding triangles. */
+static S32 MeshSmoothTriangle(const T_GPUOBJ_VERTEX base[3], S32 buggy) {
+    const S32 subdivisions = 2;
+    const U32 extra = (U32)(subdivisions * subdivisions * 3);
+    if (s_nbBuild + extra + (U32)s_buildPolysRemaining * 6 + 6 > MAX_MESH_BUILD)
+        return FALSE;
+    float positions[3][3], normals[3][3];
+    for (S32 c = 0; c < 3; c++) {
+        const float x = base[c].normal[0], y = base[c].normal[1], z = base[c].normal[2];
+        const float length = (float)sqrt((double)(x * x + y * y + z * z));
+        if (length < 1e-6f)
+            return FALSE;
+        for (S32 a = 0; a < 3; a++) {
+            positions[c][a] = base[c].vpos[a];
+            normals[c][a] = base[c].normal[a] / length;
+        }
+    }
+    if (!buggy && !CitadelSmooth_Curved(normals))
+        return FALSE;
+
+    T_GPUOBJ_VERTEX grid[3][3];
+    for (S32 i = 0; i <= subdivisions; i++) {
+        for (S32 j = 0; i + j <= subdivisions; j++) {
+            const float weights[3] = {(float)(subdivisions - i - j) / (float)subdivisions,
+                                      (float)i / (float)subdivisions, (float)j / (float)subdivisions};
+            T_GPUOBJ_VERTEX *v = &grid[i][j];
+            *v = base[0];
+            CitadelSmooth_PatchPoint(positions, normals, weights, buggy ? 0.45f : 0.3f, v->vpos);
+            for (S32 a = 0; a < 4; a++) {
+                v->normal[a] = weights[0] * base[0].normal[a] + weights[1] * base[1].normal[a] +
+                               weights[2] * base[2].normal[a];
+            }
+            for (S32 a = 0; a < 2; a++) {
+                v->uv[a] = weights[0] * base[0].uv[a] + weights[1] * base[1].uv[a] + weights[2] * base[2].uv[a];
+            }
+            for (S32 a = 0; a < 3; a++) {
+                if (v->vpos[a] < s_buildMesh->Min[a])
+                    s_buildMesh->Min[a] = v->vpos[a];
+                if (v->vpos[a] > s_buildMesh->Max[a])
+                    s_buildMesh->Max[a] = v->vpos[a];
+            }
+        }
+    }
+    for (S32 i = 0; i < subdivisions; i++) {
+        for (S32 j = 0; i + j < subdivisions; j++) {
+            s_build[s_nbBuild++] = grid[i][j];
+            s_build[s_nbBuild++] = grid[i + 1][j];
+            s_build[s_nbBuild++] = grid[i][j + 1];
+            if (i + j + 1 < subdivisions) {
+                s_build[s_nbBuild++] = grid[i + 1][j];
+                s_build[s_nbBuild++] = grid[i + 1][j + 1];
+                s_build[s_nbBuild++] = grid[i][j + 1];
+            }
+        }
+    }
+    return TRUE;
+}
 
 /* A polygon of the body being kept, as AffGpu_Entity would take it, with the
    points and normals in model space. What the capture leaves to the software
@@ -1429,6 +1766,8 @@ static void MeshPolygon(U32 type, void *poly) {
     if (s_buildFail) {
         return;
     }
+    if (s_buildPolysRemaining > 0)
+        s_buildPolysRemaining--;
     const U16 *w = (const U16 *)poly;
     if (type >= 96 || (type & 2) != 0) {
         s_buildFail = TRUE;
@@ -1479,7 +1818,20 @@ static void MeshPolygon(U32 type, void *poly) {
     if (GpuObjTreeModel && GpuTree_IsFoliage(GpuObjTreeFoliage, polyType > POLY_DITHER_TABLE, color)) {
         m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_FOLIAGE);
     }
-
+    const S32 objectLayer = CitadelObjectLayer((S32)m.Mode, (S32)m.Flags, color & 255);
+    if (objectLayer >= 0) {
+        m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_CITADEL_OBJECT);
+        m.VehicleMaterial = (float)objectLayer;
+    }
+    S32 vehicleMaterial = CITADEL_VEHICLE_ORIGINAL;
+    if ((GpuObjCitadelVehicle || GpuObjCitadelBoat) &&
+        (m.Mode == (float)GPUOBJ_MODE_SOLID || m.Mode == (float)GPUOBJ_MODE_SHADED)) {
+        vehicleMaterial = GpuObjCitadelBoat ? CitadelBoat_Material((U8)color) : CitadelVehicle_Material((U8)color);
+        if (vehicleMaterial != CITADEL_VEHICLE_ORIGINAL) {
+            m.Flags = (float)((S32)m.Flags | GPUOBJ_FLAG_CITADEL_VEHICLE);
+            m.VehicleMaterial = (float)vehicleMaterial;
+        }
+    }
     float uvs[4][2];
     memset(uvs, 0, sizeof(uvs));
     if (m.Mode == (float)GPUOBJ_MODE_TEX || m.Mode == (float)GPUOBJ_MODE_TEXSHADED) {
@@ -1503,13 +1855,35 @@ static void MeshPolygon(U32 type, void *poly) {
             }
         }
     }
+    if (objectLayer >= 0 && m.Mode != (float)GPUOBJ_MODE_TEX && m.Mode != (float)GPUOBJ_MODE_TEXSHADED) {
+        CitadelObjectUv(w, nbPoints, uvs);
+    }
+
+    const TYPE_VT16 *points = (const TYPE_VT16 *)((U8 *)lBody + lBody->OffPoints);
+    if (vehicleMaterial != CITADEL_VEHICLE_ORIGINAL && w[0] < lBody->NbPoints && w[1] < lBody->NbPoints &&
+        w[2] < lBody->NbPoints) {
+        const TYPE_VT16 *a = &points[w[0]], *b = &points[w[1]], *c = &points[w[2]];
+        const float ab[3] = {(float)(b->X - a->X), (float)(b->Y - a->Y), (float)(b->Z - a->Z)};
+        const float ac[3] = {(float)(c->X - a->X), (float)(c->Y - a->Y), (float)(c->Z - a->Z)};
+        const float nx = fabsf(ab[1] * ac[2] - ab[2] * ac[1]);
+        const float ny = fabsf(ab[2] * ac[0] - ab[0] * ac[2]);
+        const float nz = fabsf(ab[0] * ac[1] - ab[1] * ac[0]);
+        const S32 axis = nx >= ny && nx >= nz ? 0 : ny >= nz ? 1 : 2;
+        const float tileScale = GpuObjCitadelBoat ? 4200.0f : 1700.0f;
+        for (S32 i = 0; i < nbPoints; i++) {
+            if (w[i] >= lBody->NbPoints)
+                continue;
+            const TYPE_VT16 *p = &points[w[i]];
+            uvs[i][0] = (float)(axis == 0 ? p->Z : p->X) / tileScale;
+            uvs[i][1] = (float)(axis == 1 ? p->Z : p->Y) / tileScale;
+        }
+    }
 
     const U32 nbVerts = (U32)(nbPoints - 2) * 3;
     if (s_nbBuild + nbVerts > MAX_MESH_BUILD) {
         s_buildFail = TRUE;
         return;
     }
-    const TYPE_VT16 *points = (const TYPE_VT16 *)((U8 *)lBody + lBody->OffPoints);
     const TYPE_VT16 *normals = (const TYPE_VT16 *)((U8 *)lBody + lBody->OffNormales);
     const TYPE_VT16 *faces = (const TYPE_VT16 *)((U8 *)lBody + lBody->OffNormFaces);
     const TYPE_VT16 *faceNormal = NULL;
@@ -1553,14 +1927,25 @@ static void MeshPolygon(U32 type, void *poly) {
             v->mat[0] = m.Color;
             v->mat[1] = m.TexOffset;
             v->mat[2] = m.TexMask;
+            v->mat[3] = m.VehicleMaterial;
             v->uv[0] = uvs[k][0];
             v->uv[1] = uvs[k][1];
+        }
+        const S32 buggySmooth = GpuObjCitadelVehicle &&
+                                (m.Mode == (float)GPUOBJ_MODE_SOLID || m.Mode == (float)GPUOBJ_MODE_SHADED);
+        if (GpuObjCitadelSmooth && (smooth || buggySmooth)) {
+            T_GPUOBJ_VERTEX base[3] = {s_build[s_nbBuild - 3], s_build[s_nbBuild - 2], s_build[s_nbBuild - 1]};
+            s_nbBuild -= 3;
+            if (!MeshSmoothTriangle(base, buggySmooth)) {
+                for (S32 c = 0; c < 3; c++)
+                    s_build[s_nbBuild++] = base[c];
+            }
         }
     }
 }
 
 static T_DECOR_MESH *DecorMesh(S32 island, S32 index, T_BODY_HEADER *body) {
-    if (!s_meshesReady || island != s_meshIsland) {
+    if (!s_meshesReady || island != s_meshIsland || s_meshDetail != GpuObjTextureDetail) {
         for (S32 i = 0; i < MAX_DECOR_MESHES; i++) {
             s_meshes[i].Island = -1;
         }
@@ -1569,6 +1954,7 @@ static T_DECOR_MESH *DecorMesh(S32 island, S32 index, T_BODY_HEADER *body) {
         }
         s_meshesReady = TRUE;
         s_meshIsland = island;
+        s_meshDetail = GpuObjTextureDetail;
     }
     if (index < 0 || index >= MAX_DECOR_MESHES) {
         return NULL;
@@ -1589,11 +1975,12 @@ static T_DECOR_MESH *DecorMesh(S32 island, S32 index, T_BODY_HEADER *body) {
     if (body->NbLines != 0 || body->NbSpheres != 0 || body->NbPoints > MAX_NB_POINTS) {
         return NULL;
     }
-    T_BODY_HEADER *saved = lBody;
-    lBody = body;
     s_nbBuild = 0;
     s_buildFail = FALSE;
     s_buildMesh = mesh;
+    s_buildPolysRemaining = body->NbPolys;
+    T_BODY_HEADER *saved = lBody;
+    lBody = body;
     BodyWalkPolys(body, MeshPolygon);
     lBody = saved;
     if (s_buildFail || s_nbBuild == 0) {
@@ -1894,6 +2281,9 @@ void AffGpu_DecorOccluderEnd(void) {
 }
 
 S32 AffGpu_DecorDraw(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta, S32 box[4]) {
+    if (GpuObjCitadelBoat && CitadelBoat_Available()) {
+        return -1; /* Replacement capture needs the body's placement matrices. */
+    }
     if (!GpuObj_Active() || AffGpuSuspended || TypeProj != TYPE_3D) {
         return -1;
     }

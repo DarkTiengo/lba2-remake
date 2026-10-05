@@ -60,16 +60,21 @@ static void test_clamp_moves_to_the_nearer_bound(void) {
 }
 
 /* Out of range means the cfg did not say anything usable, so the default stands. This is the rule
- * that FullScreen, DisplayFullScreen, DitherShading, FollowCamera and TextureFilter use, and the
- * one that clamping silently replaced: TextureFilter 99 must come back off, not bilinear. */
+ * that FullScreen, DisplayFullScreen, DitherShading, FollowCamera, TextureFilter and
+ * GpuTextureDetail use, and the one that clamping silently replaced: TextureFilter 99 must come
+ * back off, not bilinear. */
 static void test_or_default_falls_back_rather_than_clamping(void) {
     const T_SETTING boolish = row(SETTING_OR_DEFAULT, 0, 0, 1);
     const T_SETTING texfilter = row(SETTING_OR_DEFAULT, 0, 0, 2);
+    const T_SETTING texture_detail = row(SETTING_OR_DEFAULT, 0, 0, 2);
 
     ASSERT_EQ_INT(0, Settings_Coerce(&boolish, 5));
     ASSERT_EQ_INT(0, Settings_Coerce(&boolish, -1));
     ASSERT_EQ_INT(0, Settings_Coerce(&texfilter, 99));
     ASSERT_EQ_INT(2, Settings_Coerce(&texfilter, 2)); /* the top of the range is still in it */
+    ASSERT_EQ_INT(0, Settings_Coerce(&texture_detail, -1));
+    ASSERT_EQ_INT(0, Settings_Coerce(&texture_detail, 3));
+    ASSERT_EQ_INT(2, Settings_Coerce(&texture_detail, 2));
 
     /* A default of TRUE falls back to TRUE, not to the low bound. */
     const T_SETTING fullscreen = row(SETTING_OR_DEFAULT, 1, 0, 1);

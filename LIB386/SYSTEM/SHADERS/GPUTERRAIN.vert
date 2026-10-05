@@ -260,15 +260,13 @@ void Land() {
     if ((r.x & LAND_CHROMAKEY) != 0u) {
         flags |= 1;
     }
-    vec2 phase = vec2(0.0);
+    vec2 phase = grid + landInfo.zw;
     if ((r.x & LAND_WATER) != 0u) {
         flags |= 16 | 64; /* GPUOBJ_FLAG_WATER | GPUOBJ_FLAG_WATER_TERRAIN */
-        phase = grid + landInfo.zw;
     } else {
         flags |= 2048; /* GPUOBJ_FLAG_TERRAIN */
         if ((r.x & LAND_LAVA) != 0u) {
             flags |= 4096; /* GPUOBJ_FLAG_LAVA */
-            phase = grid + landInfo.zw;
         }
     }
 
@@ -282,7 +280,7 @@ void Land() {
     v_mat = vec4(color, 0.0, 65535.0, 0.0);
     v_uv = vec4(uv, phase);
     v_slice = vec2(sliceNear, sliceSize);
-    v_waterCoast = 0.0;
+    v_waterCoast = (r.x & LAND_WATER) != 0u ? dot(b, vec3(ch[0], ch[1], ch[2])) : 0.0;
 }
 
 /* The sea: a record a tile of the classic sea, its four corners as
@@ -402,7 +400,13 @@ void main() {
     v_light = Field(first, 2);
     v_vpos = vec4(p, vpos0.w);
     v_mat = Field(first, 4);
-    v_uv = vec4(b.x * uv0.xy + b.y * uv1.xy + b.z * uv2.xy, 0.0, 0.0);
+    vec2 materialGrid = vec2(0.0);
+    int base = int(Field(first, 4).x + 0.5);
+    if ((int(vpos0.w + 0.5) & 2048) != 0 && int(Field(first, 2).w + 0.5) == 6 &&
+        (base == 27 || base == 107)) {
+        materialGrid = grid + landInfo.zw;
+    }
+    v_uv = vec4(b.x * uv0.xy + b.y * uv1.xy + b.z * uv2.xy, materialGrid);
     v_slice = vec2(sliceNear, sliceSize);
     v_waterCoast = 0.0;
 }

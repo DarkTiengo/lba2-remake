@@ -9,6 +9,7 @@
 #include <SVGA/SCREEN.H>
 #include <SVGA/VIDEO.H>
 #include <SYSTEM/WINDOW.H>
+#include <SYSTEM/GPURENDER.H>
 #include "AMBIANCE.H"
 #include "BOOT_EXIT.H"
 
@@ -476,6 +477,7 @@ void ChoicePalette(void) {
     PtrXplHeader = (XPL_HEADER *)PtrXplPalette;
 
     PtrPalCurrent = PtrXplPalette + PtrXplHeader->OffsetPalette;
+    GpuRender_SetTextureReferencePalette(PtrPalCurrent);
     Poly_BuildBlendLUT(PtrPalCurrent); /* texture-filter tables follow the palette */
     PtrNuances = PtrXplPalette + PtrXplHeader->OffsetFog;
     PtrTransPal = PtrXplPalette + PtrXplHeader->OffsetTransp;

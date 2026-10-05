@@ -98,7 +98,7 @@ void TerrainGpu_FinishShore(void) {
                 if (!(cell & (1 << (half + fluidShift))))
                     continue;
                 const U8 *c = corners[(cell >> 2) & 1][half];
-                for (S32 vz = z - SHORE_RADIUS; vz <= z + SHORE_RADIUS + 1; vz++) {
+            for (S32 vz = z - SHORE_RADIUS; vz <= z + SHORE_RADIUS + 1; vz++) {
                     if (vz < 0 || vz > SHORE_CELLS)
                         continue;
                     for (S32 vx = x - SHORE_RADIUS; vx <= x + SHORE_RADIUS + 1; vx++) {
@@ -1049,6 +1049,9 @@ S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32
         v[i].mat[0] = (float)(color & 0xFF);
         v[i].mat[1] = 0.0f;
         v[i].mat[2] = 65535.0f;
+        if (water) {
+            v[i].mat[3] = (float)s_heights[gz * GRID_SIDE + gx];
+        }
         if (uv != NULL) {
             v[i].uv[0] = (float)uv[i * 2] / 256.0f;
             v[i].uv[1] = (float)uv[i * 2 + 1] / 256.0f;
@@ -1060,6 +1063,9 @@ S32 TerrainGpu_Tri(S32 xi, S32 zi, const U8 corners[3], const S32 lights[3], S32
         } else if (lava) {
             v[i].uv[2] = (float)(s_cubeX * 64 + xi + kCornerX[corners[i] & 3]);
             v[i].uv[3] = (float)(s_cubeZ * 64 + zi + kCornerZ[corners[i] & 3]);
+        } else if (mode == (float)GPUOBJ_MODE_CLUT && (color == 27 || color == 107)) {
+            v[i].uv[2] = (float)(s_cubeX * 64 + gx);
+            v[i].uv[3] = (float)(s_cubeZ * 64 + gz);
         }
     }
 

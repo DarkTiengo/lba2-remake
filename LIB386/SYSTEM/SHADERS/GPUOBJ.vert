@@ -22,6 +22,10 @@ layout(location = 6) out float v_waterCoast;
 
 #include "PLACE.glsl"
 
+const int FLAG_WATER_TERRAIN = 64;
+const int FLAG_CITADEL_BOAT_GLASS = 65536;
+const int FLAG_CITADEL_BOAT_INTERIOR = 131072;
+
 void main() {
     vec4 clip = a_clip;
     vec4 vpos = a_vpos;
@@ -85,11 +89,21 @@ void main() {
         clip.xy += a_uv.zw * (wind * (0.2 + 0.8 * gust + 0.15 * flutter));
     }
     gl_Position = vec4(clip.xy, sliceNear * clip.w + clip.z * sliceSize, clip.w);
+    int boatPaneFlags = int(a_vpos.w + 0.5);
+    if ((boatPaneFlags & 262144) != 0) {
+        /* Authored panes have real cabin geometry behind them. */
+    } else if ((boatPaneFlags & FLAG_CITADEL_BOAT_INTERIOR) != 0) {
+        /* The cabin backing is coplanar with each original coloured pane. */
+        gl_Position.z -= 0.0002 * clip.w;
+    } else if ((boatPaneFlags & FLAG_CITADEL_BOAT_GLASS) != 0) {
+        gl_Position.z -= 0.0003 * clip.w;
+    }
     v_normal = normal;
     v_light = light;
     v_vpos = vpos;
     v_mat = a_mat;
     v_uv = uv;
     v_slice = vec2(sliceNear, sliceSize);
-    v_waterCoast = (int(a_vpos.w + 0.5) & FLAG_WAVES) != 0 ? 1.0 : 0.0;
+    int flags = int(a_vpos.w + 0.5);
+    v_waterCoast = (flags & FLAG_WAVES) != 0 ? 1.0 : ((flags & FLAG_WATER_TERRAIN) != 0 ? a_mat.w : 0.0);
 }
