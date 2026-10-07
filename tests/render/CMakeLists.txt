@@ -19,7 +19,7 @@ function(add_render_primitive_test test_name)
         ${CMAKE_BINARY_DIR}
     )
     # AFF_OBJ.CPP's rotation/projection/camera externs come from the 3D library.
-    target_link_libraries(${test_name} PRIVATE 3D citadel_boat)
+    target_link_libraries(${test_name} PRIVATE 3D citadel_boat citadel_scooter)
     set_target_properties(${test_name} PROPERTIES CXX_STANDARD 11)
     add_test(NAME ${test_name} COMMAND ${test_name})
     register_host_test(${test_name})

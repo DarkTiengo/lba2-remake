@@ -3,14 +3,14 @@
 Editable Blender 5.2 sources (`.blend`), portable glTF models (`.glb`), and
 rendered previews (`-preview.png`) for the three selected B concepts:
 
-The latest boat is `boat-b-concept`; the buggy and scooter retain their
-`-refined` versions. Earlier files remain for before/after comparison.
+The latest boat and scooter use their `-concept` versions; the buggy retains
+its `-refined` version. Earlier files remain for before/after comparison.
 
 | Vehicle | Latest preview | Latest GLB | Editable source | GLB triangles (original → refined) |
 | --- | --- | --- | --- | ---: |
 | Yellow buggy | `buggy-b-refined-preview.png` | `buggy-b-refined.glb` | `buggy-b-refined.blend` | 22,918 → 71,710 |
 | Harbour boat | `boat-b-concept-preview.png` | `boat-b-concept.glb` | `boat-b-concept.blend` | 6,400 → 38,370 |
-| Blue scooter | `scooter-b-refined-preview.png` | `scooter-b-refined.glb` | `scooter-b-refined.blend` | 12,460 → 77,232 |
+| Blue scooter | `scooter-b-concept-preview.png` | `scooter-b-concept.glb` | `scooter-b-concept.blend` | 12,460 → 75,940 |
 
 The refined versions add shaped body panels, denser tires/wheels, suspension
 detail, glazing, and each vehicle's characteristic accessories. They are
@@ -33,7 +33,27 @@ The concept boat is baked into the game at build time by
 `gfx_texturedetail 2`, it replaces the Citadel harbour boat's GPU geometry
 (cube 43, actor 10, body 165; alternative decor 56). Rebuild after changing
 the GLB. Classic rendering and texture-detail modes 0–1 keep the retail model.
-The buggy and scooter files remain previews only.
+The buggy files remain previews only.
+
+The scooter concept is also baked at build time (`--vehicle scooter`). With
+the same GPU/pack settings it replaces the vehicle portions of Citadel actor
+bodies 148–150 (entity 100), including the post-storm island. Driver and
+passenger geometry remain original: only groups 2 (chassis) and 20 (steering)
+are replaced. Their interpolated matrices preserve steering, lean and routes.
+There is no added player-driving mechanic or change to collision or scripts.
+The mesh has 75,940 triangles and plain glTF-compatible paint, rubber, leather
+and metal materials. Revision 7 of the scooter project is the editable source.
+The finish script is
+[citadel_scooter_finish_b.py](../../../../../scripts/dev/citadel_scooter_finish_b.py),
+run after the common helpers on the refined scene. Its preview is a studio
+render, not a game screenshot.
+
+For a manual in-game check, visit the scooter driver in Citadel scene 42
+(actor 3, near the covered entrance), enable `gfx_texturedetail 2`, and compare
+with mode 0. Confirm the rider remains visible, the bike sits on the ground,
+and the original transport interaction still works. The scooter remains
+static in the exported GLB; runtime steering is bound in
+`LIB386/OBJECT/CITADEL_SCOOTER.CPP`.
 
 The runtime removes the entry's opaque backing, places the door and handle
 at the doorway, and swings them inward according to the interpolated retail

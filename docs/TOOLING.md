@@ -176,7 +176,7 @@ the host-only pass.
 | Tool | Needed for | Version owner | Install |
 |------|-----------|---------------|---------|
 | Blender | Execute the optional [concept-B boat scene builder](../scripts/dev/build_citadel_boat_concept_b.py) and edit its Blender source; not needed to build or play the game | `BLENDER_MIN_VERSION` in the scene builder | local Blender or the remote Blender scene worker |
-| Python 3 | Bake the optional authored boat GLB with [export_citadel_boat.py](../scripts/dev/export_citadel_boat.py) during compilation; standard library only | `find_package(Python3)` in [OBJECT/CMakeLists.txt](../LIB386/OBJECT/CMakeLists.txt) | distro package; covered by the Python probe |
+| Python 3 | Bake the optional authored boat and scooter GLBs with [export_citadel_boat.py](../scripts/dev/export_citadel_boat.py) during compilation; standard library only | `find_package(Python3)` in [OBJECT/CMakeLists.txt](../LIB386/OBJECT/CMakeLists.txt) | distro package; covered by the Python probe |
 
 The scene builder runs in Blender's bundled Python interpreter. Its `bpy` and `bmesh` imports are Blender APIs, not packages to install into the project's Python environment.
 

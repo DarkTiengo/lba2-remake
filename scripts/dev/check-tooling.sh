@@ -320,7 +320,7 @@ else
 fi
 
 if have python3; then
-    row ok "python3" "$(python3 --version 2>/dev/null | sed -n 's/Python //p') — format filter, save probes, corpus harness, optional boat bake"
+    row ok "python3" "$(python3 --version 2>/dev/null | sed -n 's/Python //p') — format filter, save probes, corpus harness, optional vehicle bake"
 else
     row gap "python3" "scripts/ci/filter-format-files.py gates the format check"
 fi

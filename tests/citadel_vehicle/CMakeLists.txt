@@ -14,3 +14,14 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/assets/modern/citadel/vehicles/prototypes/boat-
     add_test(NAME test_citadel_boat COMMAND test_citadel_boat)
     register_host_test(test_citadel_boat)
 endif()
+
+if(EXISTS "${PROJECT_SOURCE_DIR}/assets/modern/citadel/vehicles/prototypes/scooter-b-concept.glb")
+    add_executable(test_citadel_scooter test_citadel_scooter.cpp
+        ${PROJECT_SOURCE_DIR}/LIB386/OBJECT/CITADEL_SCOOTER.CPP)
+    target_include_directories(test_citadel_scooter PRIVATE
+        ${PROJECT_SOURCE_DIR}/LIB386/H ${PROJECT_BINARY_DIR}/LIB386/OBJECT)
+    add_dependencies(test_citadel_scooter citadel_scooter)
+    set_target_properties(test_citadel_scooter PROPERTIES CXX_STANDARD 11)
+    add_test(NAME test_citadel_scooter COMMAND test_citadel_scooter)
+    register_host_test(test_citadel_scooter)
+endif()

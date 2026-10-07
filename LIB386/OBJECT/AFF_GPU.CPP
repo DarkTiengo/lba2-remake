@@ -1,6 +1,7 @@
 #include <OBJECT/AFF_GPU.H>
 #include <OBJECT/CITADEL_VEHICLE.H>
 #include <OBJECT/CITADEL_BOAT.H>
+#include <OBJECT/CITADEL_SCOOTER.H>
 #include <OBJECT/CITADEL_SMOOTH.H>
 
 #include <OBJECT/AFF_OBJ.H>
@@ -62,6 +63,7 @@ extern S32 PosXWr, PosYWr, PosZWr;
 static S32 s_pending = FALSE;
 static S32 s_capturing = FALSE;
 static S32 s_replacement = FALSE;
+static S32 s_scooterReplacement = FALSE;
 static S32 s_perGroup = FALSE;
 static S32 s_nbPoints = 0;
 static T_OBJ_POINT s_rot[MAX_NB_POINTS];
@@ -757,6 +759,7 @@ void AffGpu_SaveRotated(S32 nbPoints, S32 perGroup) {
 S32 AffGpu_Begin(void) {
     s_capturing = FALSE;
     s_replacement = FALSE;
+    s_scooterReplacement = FALSE;
     if (!s_pending || lBody == NULL) {
         return FALSE;
     }
@@ -821,6 +824,8 @@ S32 AffGpu_Begin(void) {
     if (GpuObjCitadelBoat && s_draw != NULL) {
         s_replacement = CitadelBoat_Emit(s_draw, TabMat, s_perGroup && lBody->NbGroupes == 14, s_origin);
     }
+    if (s_perGroup && !s_replacement)
+        s_scooterReplacement = CitadelScooter_Emit(s_draw, lBody, TabMat, s_origin);
     GpuObj_SnapshotBegin(ScreenXMin - SNAPSHOT_MARGIN, ScreenYMin - SNAPSHOT_MARGIN,
                          ScreenXMax + SNAPSHOT_MARGIN + 1, ScreenYMax + SNAPSHOT_MARGIN + 1);
     s_capturing = TRUE;
@@ -832,6 +837,8 @@ void AffGpu_Entity(U32 type, void *poly) {
         return;
     }
     const U16 *w = (const U16 *)poly;
+    if (s_scooterReplacement && CitadelScooter_ReplacesEntity(lBody, type, w))
+        return;
 
     if (type >= 96) {
         if (type == 96) {

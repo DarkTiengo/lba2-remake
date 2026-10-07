@@ -119,7 +119,8 @@ for reproducibility; cited from the format and effects docs.
 | [dev/texture_pack.py](dev/texture_pack.py) | Export retail 3D texture pages as local 4x RGBA pack sources and validate a finished optional pack. | manual (GPU textures) |
 | [dev/build_citadel_metal_tiles.py](dev/build_citadel_metal_tiles.py) | Export original Citadel metal, bark and foliage artworks as repeatable tiles and stack the five in-game object layers. | manual (Citadel object materials) |
 | [dev/build_citadel_boat_concept_b.py](dev/build_citadel_boat_concept_b.py) | Build the original concept-B boat geometry in Blender, including twin hulls, cabin glazing and lifting gear; replaces the active draft scene. | manual (vehicle art; outside the game build) |
-| [dev/export_citadel_boat.py](dev/export_citadel_boat.py) | Bake the authored boat GLB into C++98 geometry, with a separate door/handle binding and transmissive panes. No retail data or third-party Python packages. | CMake when the optional boat GLB is present |
+| [dev/export_citadel_boat.py](dev/export_citadel_boat.py) | Bake authored boat/scooter GLBs into C++98 geometry, with door/handle or steering bindings. No retail data or third-party Python packages. | CMake when the optional GLB is present |
+| [dev/citadel_scooter_finish_b.py](dev/citadel_scooter_finish_b.py) | Finish the refined Scooter B Blender scene with crowned fender, clean paint, seat detailing and closed tire sidewalls; run after the common vehicle helpers. | manual (vehicle art) |
 
 ## LBA1 feasibility spikes (`dev/`)
 
