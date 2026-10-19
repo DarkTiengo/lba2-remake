@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake authored boat/scooter GLBs into C++98 vertex data (no retail data).
+"""Bake authored Citadel vehicle GLBs into C++98 vertex data (no retail data).
 
 The runtime poses the boat door or scooter steering from the actor's animation.
 Only embedded, uncompressed triangle primitives with constant PBR materials
@@ -89,6 +89,16 @@ def scooter_front(name):
                             'C front fender chrome'))
 
 
+def buggy_group(name):
+    for prefix, group in (('C wheel front -1 ', 5), ('C wheel front 1 ', 8),
+                          ('C wheel rear -1 ', 12), ('C wheel rear 1 ', 10)):
+        if name.startswith(prefix):
+            return group
+    if name.startswith(('C driver steering wheel', 'C steering wheel spoke')):
+        return 13
+    return 2
+
+
 def bake(path, vehicle='boat'):
     doc, binary = read_glb(path)
     vertices, indices, lookup = [], [], {}
@@ -104,6 +114,8 @@ def bake(path, vehicle='boat'):
             return
         moving = (name in ('entry teak door leaf', 'small entry handle')
                   if vehicle == 'boat' else scooter_front(name))
+        if vehicle == 'buggy':
+            moving = buggy_group(name)
         if moving:
             door_nodes += 1
         if 'skin' in node:
@@ -120,6 +132,9 @@ def bake(path, vehicle='boat'):
                 roughness = pbr.get('roughnessFactor', 1)
                 metallic = pbr.get('metallicFactor', 1)
                 glass = 'KHR_materials_transmission' in mat.get('extensions', {})
+                if vehicle == 'buggy':
+                    glass = glass or (mat.get('alphaMode') == 'BLEND' and
+                                      pbr.get('baseColorFactor', [1, 1, 1, 1])[3] < 1)
                 pos = accessor(doc, binary, primitive['attributes']['POSITION'])
                 normals = accessor(doc, binary, primitive['attributes']['NORMAL'])
                 order = accessor(doc, binary, primitive['indices'])
@@ -146,6 +161,12 @@ def bake(path, vehicle='boat'):
                     # glTF Y-up -> engine Y-up; forward faces +Z.
                     if vehicle == 'boat':
                         p = (p[2]*1100, (p[1]-.5)*1100, -p[0]*1100)
+                    elif vehicle == 'buggy':
+                        p = (p[2]*600, p[1]*480, -p[0]*380+40)
+                        # Inverse transpose for the authored fit to retail bounds.
+                        n = (n[0]/380, n[1]/480, n[2]/600)
+                        length = math.sqrt(sum(v*v for v in n))
+                        n = tuple(v/length for v in n)
                     else:
                         # Chassis group 2 rests at Y=416; steering group 20
                         # is offset (0,-250,250) from that chassis.
@@ -197,7 +218,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('input')
     parser.add_argument('output')
-    parser.add_argument('--vehicle', choices=('boat', 'scooter'), default='boat')
+    parser.add_argument('--vehicle', choices=('boat', 'scooter', 'buggy'), default='boat')
     args = parser.parse_args()
     vertices, indices = bake(args.input, args.vehicle)
     write_header(args.output, vertices, indices, args.vehicle)

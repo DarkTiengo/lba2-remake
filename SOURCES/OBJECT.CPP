@@ -24,6 +24,7 @@
 #include <OBJECT/CITADEL_VEHICLE.H>
 #include <OBJECT/CITADEL_BOAT.H>
 #include <OBJECT/CITADEL_SCOOTER.H>
+#include <OBJECT/CITADEL_BUGGY.H>
 #include <SYSTEM/WINDOW.H> /* Window_DeferPresent */
 #include "3DEXT/TERRAIN.H" /* Sky_Y */
 #include "SPRITE_GPU.H"  /* extras with a real depth */
@@ -5024,7 +5025,9 @@ S32 AffOneObject(T_SORT *pt) {
                                      GpuObjTextureDetail == GPUOBJ_TEXTURE_DETAIL_PACK &&
                                      (strcmp(IslandName, "citadel") == 0 || strcmp(IslandName, "citabau") == 0)
                                  ? ptrobj->Obj.Body.Num : -1);
+        CitadelBuggy_Select(GpuObjCitadelVehicle ? ptrobj->Obj.Body.Num : -1);
         aff = ObjectDisplay(&ptrobj->Obj);
+        CitadelBuggy_Select(-1);
         CitadelScooter_Select(-1);
         GpuObjCitadelVehicle = FALSE;
         GpuObjCitadelBoat = FALSE;

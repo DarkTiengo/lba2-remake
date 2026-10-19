@@ -2,6 +2,7 @@
 #include <OBJECT/CITADEL_VEHICLE.H>
 #include <OBJECT/CITADEL_BOAT.H>
 #include <OBJECT/CITADEL_SCOOTER.H>
+#include <OBJECT/CITADEL_BUGGY.H>
 #include <OBJECT/CITADEL_SMOOTH.H>
 
 #include <OBJECT/AFF_OBJ.H>
@@ -64,6 +65,7 @@ static S32 s_pending = FALSE;
 static S32 s_capturing = FALSE;
 static S32 s_replacement = FALSE;
 static S32 s_scooterReplacement = FALSE;
+static S32 s_buggyReplacement = FALSE;
 static S32 s_perGroup = FALSE;
 static S32 s_nbPoints = 0;
 static T_OBJ_POINT s_rot[MAX_NB_POINTS];
@@ -760,6 +762,7 @@ S32 AffGpu_Begin(void) {
     s_capturing = FALSE;
     s_replacement = FALSE;
     s_scooterReplacement = FALSE;
+    s_buggyReplacement = FALSE;
     if (!s_pending || lBody == NULL) {
         return FALSE;
     }
@@ -826,6 +829,11 @@ S32 AffGpu_Begin(void) {
     }
     if (s_perGroup && !s_replacement)
         s_scooterReplacement = CitadelScooter_Emit(s_draw, lBody, TabMat, s_origin);
+    if (GpuObjCitadelVehicle && !s_replacement && !s_scooterReplacement) {
+        s_buggyReplacement = CitadelBuggy_Emit(s_draw, lBody, TabMat, s_perGroup, s_origin);
+        if (!s_perGroup && s_buggyReplacement)
+            s_replacement = TRUE;
+    }
     GpuObj_SnapshotBegin(ScreenXMin - SNAPSHOT_MARGIN, ScreenYMin - SNAPSHOT_MARGIN,
                          ScreenXMax + SNAPSHOT_MARGIN + 1, ScreenYMax + SNAPSHOT_MARGIN + 1);
     s_capturing = TRUE;
@@ -838,6 +846,8 @@ void AffGpu_Entity(U32 type, void *poly) {
     }
     const U16 *w = (const U16 *)poly;
     if (s_scooterReplacement && CitadelScooter_ReplacesEntity(lBody, type, w))
+        return;
+    if (s_buggyReplacement && CitadelBuggy_ReplacesEntity(lBody, type, w))
         return;
 
     if (type >= 96) {
@@ -1668,7 +1678,7 @@ void AffGpu_End(void) {
     s_glowRgb[0] = s_glowRgb[1] = s_glowRgb[2] = 0.0f;
     if (s_draw != NULL) {
         s_draw->GlowListed = s_draw->HasGlow && GpuObjLampListed;
-        if (s_occPending) {
+        if (s_occPending && !s_buggyReplacement) {
             s_draw->OccFirst = s_occFirst;
             s_draw->OccCount = s_occCount;
             memcpy(s_draw->OccRows, s_occRows, sizeof(s_occRows));
@@ -2288,7 +2298,8 @@ void AffGpu_DecorOccluderEnd(void) {
 }
 
 S32 AffGpu_DecorDraw(S32 island, S32 index, void *obj, S32 x, S32 y, S32 z, S32 beta, S32 box[4]) {
-    if (GpuObjCitadelBoat && CitadelBoat_Available()) {
+    if ((GpuObjCitadelBoat && CitadelBoat_Available()) ||
+        (GpuObjCitadelVehicle && CitadelBuggy_Available())) {
         return -1; /* Replacement capture needs the body's placement matrices. */
     }
     if (!GpuObj_Active() || AffGpuSuspended || TypeProj != TYPE_3D) {

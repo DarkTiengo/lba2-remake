@@ -4,6 +4,17 @@ set_target_properties(test_citadel_vehicle PROPERTIES CXX_STANDARD 11)
 add_test(NAME test_citadel_vehicle COMMAND test_citadel_vehicle)
 register_host_test(test_citadel_vehicle)
 
+if(EXISTS "${PROJECT_SOURCE_DIR}/assets/modern/citadel/vehicles/prototypes/buggy-b-concept.glb")
+    add_executable(test_citadel_buggy test_citadel_buggy.cpp
+        ${PROJECT_SOURCE_DIR}/LIB386/OBJECT/CITADEL_BUGGY.CPP)
+    target_include_directories(test_citadel_buggy PRIVATE
+        ${PROJECT_SOURCE_DIR}/LIB386/H ${PROJECT_BINARY_DIR}/LIB386/OBJECT)
+    add_dependencies(test_citadel_buggy citadel_buggy)
+    set_target_properties(test_citadel_buggy PROPERTIES CXX_STANDARD 11)
+    add_test(NAME test_citadel_buggy COMMAND test_citadel_buggy)
+    register_host_test(test_citadel_buggy)
+endif()
+
 if(EXISTS "${PROJECT_SOURCE_DIR}/assets/modern/citadel/vehicles/prototypes/boat-b-concept.glb")
     add_executable(test_citadel_boat test_citadel_boat.cpp
         ${PROJECT_SOURCE_DIR}/LIB386/OBJECT/CITADEL_BOAT.CPP)

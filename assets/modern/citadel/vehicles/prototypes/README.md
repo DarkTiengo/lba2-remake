@@ -3,12 +3,12 @@
 Editable Blender 5.2 sources (`.blend`), portable glTF models (`.glb`), and
 rendered previews (`-preview.png`) for the three selected B concepts:
 
-The latest boat and scooter use their `-concept` versions; the buggy retains
-its `-refined` version. Earlier files remain for before/after comparison.
+The latest versions use the `-concept` filenames. Earlier files remain for
+before/after comparison.
 
 | Vehicle | Latest preview | Latest GLB | Editable source | GLB triangles (original → refined) |
 | --- | --- | --- | --- | ---: |
-| Yellow buggy | `buggy-b-refined-preview.png` | `buggy-b-refined.glb` | `buggy-b-refined.blend` | 22,918 → 71,710 |
+| Yellow buggy | `buggy-b-concept-preview.png` | `buggy-b-concept.glb` | `buggy-b-concept.blend` | 22,918 → 119,760 |
 | Harbour boat | `boat-b-concept-preview.png` | `boat-b-concept.glb` | `boat-b-concept.blend` | 6,400 → 38,370 |
 | Blue scooter | `scooter-b-concept-preview.png` | `scooter-b-concept.glb` | `scooter-b-concept.blend` | 12,460 → 75,940 |
 
@@ -33,7 +33,49 @@ The concept boat is baked into the game at build time by
 `gfx_texturedetail 2`, it replaces the Citadel harbour boat's GPU geometry
 (cube 43, actor 10, body 165; alternative decor 56). Rebuild after changing
 the GLB. Classic rendering and texture-detail modes 0–1 keep the retail model.
-The buggy files remain previews only.
+The buggy concept is also baked at build time (`--vehicle buggy`).
+
+The concept buggy is revision 10 of the editable buggy project. It has a
+compound-curved yellow bonnet and side fairings, red cockpit shoulders, a
+single transverse safety hoop, a bucket seat, curved alpha-blended glazing,
+headlamps fitted to the bonnet surface, closed tire sidewalls, staggered tread
+blocks, dished alloy rims and exposed suspension. Materials use constant
+glTF-compatible paint, rubber, leather and metal values; there are no external
+textures. Its 119,760 triangles include evaluated modifiers and curves.
+The preview is a studio render, not an in-game screenshot; its floor is not
+in the exported model. The authoring script
+[citadel_buggy_finish_b.py](../../../../../scripts/dev/citadel_buggy_finish_b.py)
+runs after the common helpers and replaces mesh/curve objects in the dedicated
+buggy draft. Do not run it in a scene containing unrelated artwork.
+
+With the GPU renderer and `gfx_texturedetail 2`, the buggy replaces selected
+Citadel vehicle geometry through
+[CITADEL_BUGGY.CPP](../../../../../LIB386/OBJECT/CITADEL_BUGGY.CPP).
+Bodies 14/15 and 22/23 contain the rider, body 219 is parked, and Citadel decor
+85 is static. Chassis group 2 supplies pitch/roll, front-wheel groups 5/8
+inherit steering from groups 4/7, and groups 5/8/10/12 supply wheel spin.
+The authored wheel centres are offset in chassis space to avoid orbiting
+when the tires rotate. Suspension pieces follow the chassis. The original
+steering wheel and hands (group 13) remain together in driven bodies;
+the authored steering wheel is used only on unoccupied models. Rider groups
+14/15 and armed-variant groups 16–19 are retained. Physics, collision,
+animation scripts, save data and classic rendering are unchanged.
+
+Known visual limitation: close moving views can show noisy traced shadows
+on the body and tires. Disabling `gfx_shadows` isolates this from the clean
+paint material; the integration does not change the player's shadow setting.
+The full quest boarding/exit sequence still needs a manual playthrough.
+
+To reproduce a driving check without changing a real save, launch the game
+with `--headless --no-autosave --user-dir <temporary-directory>` and load
+`tests/savegame/corpus/saves/steam_classic_2023/Race.LBA`. Use
+`--exec 'cube 42; gfx_autotune off; gfx_texturedetail 2; skipmodals on'`,
+`--exec-at 3 'teleport 7000 250 9000 1024'`,
+`--exec-at 8 'input up+left 50'` and
+`--tick 70 --fixed-dt 16 --dump-state <temporary-file> --exit`.
+This is a renderer fixture, not normal quest progression. For a manual
+playthrough, enable the same pack setting on Citadel and use the buggy's
+normal boarding/exit interaction. Compare with `gfx_texturedetail 0`.
 
 The scooter concept is also baked at build time (`--vehicle scooter`). With
 the same GPU/pack settings it replaces the vehicle portions of Citadel actor
